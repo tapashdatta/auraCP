@@ -12,7 +12,7 @@ This plan sequences the build. See [SCOPE.md](SCOPE.md), [ARCHITECTURE.md](ARCHI
 
 - **Minimal packages** — PHP 8.3+ only; install per site type on demand; no mail/Varnish/proftpd bloat.
 - **Node 24 LTS** is the one baseline runtime on every site.
-- **Feature + UX parity** with CloudPanel; **light-default UI with dark toggle**.
+- **Feature + UX parity** with established panels; **light-default UI with dark toggle**.
 - Target **Debian 13**.
 
 ---
@@ -21,13 +21,21 @@ This plan sequences the build. See [SCOPE.md](SCOPE.md), [ARCHITECTURE.md](ARCHI
 
 | # | Item | State |
 |---|---|---|
-| — | CloudPanel `.deb` analysis (architecture reference) | ✅ done |
+| — | Reference-panel analysis (architecture) | ✅ done |
 | — | Feature design extracted (screens, tabs, forms) | ✅ done |
 | — | Stack decisions (Go · Caddy/FrankenPHP · Svelte · SQLite) | ✅ done |
 | — | UI design prototype (`design/auracp-prototype.html`) | ✅ done |
 | — | Project docs (this set) | ✅ done |
-| P0a | Svelte UI app (light/dark, 3 core screens) | 🚧 in progress |
-| P0b | Go daemon scaffold + SQLite + auth | ⬜ next |
+| P0a | Svelte UI app (light/dark, 3 core screens) | ✅ done |
+| P0b | Go daemon + SQLite + API + embedded UI + CLI | ✅ done |
+| P0c | Panel auth (login + sessions + TOTP 2FA) | ✅ done |
+| P1  | Interactive installer (Debian+Ubuntu, x86+ARM64; optional packages incl. Redis/Typesense/Docker) | 🚧 written + dry-run validated; pending VM test |
+| P2–P5 | Provisioning engine (all site types, DB per-engine), security foundation, cron/logs/files, RBAC, API+create-flow wired | 🚧 built + compiles + cross-compiles + dry-run smoke-tested; pending VM test |
+| —   | Cross-compile linux/amd64 + linux/arm64 (static, no cgo) | ✅ verified |
+| P6 | Backups (local+rclone), admin users/RBAC w/ granular CRUD perms, instance/settings, config write-backs (cache/SSL/security/cloudflare), SSH-FTP users, SSL status, audit log — all wired UI↔API | ✅ built + smoke-tested (dry-run) |
+| P7 | Packaging: `.deb` (amd64+arm64) + systemd unit + installer `.deb` support; `make dist`/`make deb` | ✅ built + verified |
+| REMAINING | **Real-server validation on Debian/Ubuntu VM** — see [TESTING.md](TESTING.md) | ⬜ |
+| FUTURE | Web DB-admin UI (browse/query) — preferred direction **AdminerEvo** (single PHP file, MariaDB+Postgres+SQLite) or a native in-panel console; deferred until after VM test | ⬜ |
 
 ---
 
@@ -87,4 +95,4 @@ dashboard, ARM64 build, CLI + API parity, packaging (`.deb` + install script), d
 - Create each of the 6 site types (UI + CLI); `curl -I https://<domain>` → 200 with valid cert.
 - Provision a MariaDB **and** a PostgreSQL DB on one site.
 - Isolation: each backend runs as its own user; SFTP chroot-jailed.
-- Idle RAM clearly below a comparable CloudPanel install.
+- Idle RAM clearly below a comparable traditional-panel install.

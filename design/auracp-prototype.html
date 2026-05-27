@@ -381,26 +381,11 @@
   </div>
 </section>
 
-<!-- ============ SCREEN 2b: CREATE FORM (PHP) ============ -->
+<!-- ============ SCREEN 2b: CREATE FORM (type-specific, rendered by JS) ============ -->
 <section class="screen" id="screen-create">
   <div class="wrap form-wrap">
     <a class="back" data-go="new"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back</a>
-    <div class="ph"><div><h1>New PHP Site</h1><div class="sub">FrankenPHP · isolated site user · Node-ready</div></div></div>
-    <div class="card"><div class="section-b">
-      <div class="field"><label>Domain Name</label><input class="input" value="app.iskcon.london"></div>
-      <div class="two">
-        <div class="field"><label>PHP Version</label>
-          <select class="select"><option>PHP 8.5</option><option selected>PHP 8.4</option><option>PHP 8.3</option></select>
-        </div>
-        <div class="field"><label>Site User <span class="hint">main SSH user</span></label><input class="input" value="iskcon-app"></div>
-      </div>
-      <div class="field"><label>Site User Password</label>
-        <div class="input-row"><input class="input" value="x9F4-mQ2v-7Lp0-Rk8e"><button class="gen">Generate</button></div>
-      </div>
-      <div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--aura)" stroke-width="2" style="flex:none;margin-top:1px"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg><div><b>Node 22 LTS</b> is installed automatically on every site — no extra step to run a Node.js app here later.</div></div>
-      <div class="form-actions"><button class="btn btn-primary" data-go="detail">Create Site</button><button class="btn btn-ghost" data-go="new">Cancel</button></div>
-    </div></div>
-    <div class="footer-note">create form — only PHP 8.3+ offered (minimal-package policy)</div>
+    <div id="create-mount"></div>
   </div>
 </section>
 
@@ -482,7 +467,7 @@
           </tbody>
         </table>
       </div>
-      <div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--aura)" stroke-width="2" style="flex:none;margin-top:1px"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg><div><b>auraCP exclusive:</b> pick <b>MariaDB</b> or <b>PostgreSQL</b> per database — both run locally as separate engines. CloudPanel only supports MySQL/MariaDB.</div></div>
+      <div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--aura)" stroke-width="2" style="flex:none;margin-top:1px"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg><div><b>Per-database engine choice:</b> pick <b>MariaDB</b> or <b>PostgreSQL</b> for each database — both run locally as separate engines.</div></div>
     </div>
 
     <!-- cache -->
@@ -564,26 +549,94 @@
 </section>
 
 <script>
+  // ---- per-type create forms (each site type gets its own proper fields) ----
+  const PW='<div class="input-row"><input class="input" value="x9F4-mQ2v-7Lp0"><button class="gen">Generate</button></div>';
+  const PHPVER='<select class="select"><option>PHP 8.5</option><option selected>PHP 8.4</option><option>PHP 8.3</option></select>';
+  const FORMS={
+    wordpress:{title:'New WordPress Site',sub:'Managed WordPress · wp-cli · automatic database',foot:'WordPress = PHP site + wp-cli · a database is created automatically',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="iskcon.london"></div>
+      <div class="field"><label>Site Title</label><input class="input" style="font-family:var(--fs-ui)" value="ISKCON London"></div>
+      <div class="two">
+        <div class="field"><label>PHP Version</label>${PHPVER}</div>
+        <div class="field"><label>Site User <span class="hint">main SSH user</span></label><input class="input" value="iskcon-ldn"></div>
+      </div>
+      <div class="two">
+        <div class="field"><label>WP Admin Username</label><input class="input" value="admin"></div>
+        <div class="field"><label>WP Admin Email</label><input class="input" value="info@iskcon.london"></div>
+      </div>
+      <div class="field"><label>WP Admin Password</label>${PW}</div>
+      <div class="field"><label>Site User Password</label>${PW}</div>
+      <div class="kv" style="border-top:1px solid var(--line);margin-top:8px"><span class="k">Enable Multisite network</span><div class="toggle"></div></div>`},
+    php:{title:'New PHP Site',sub:'FrankenPHP worker mode · isolated site user',foot:'The Application sets the document root & vhost rules (e.g. Laravel → /public)',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="app.iskcon.london"></div>
+      <div class="two">
+        <div class="field"><label>Application <span class="hint">sets the vhost preset</span></label><select class="select" style="font-family:var(--fs-ui)"><option>Generic</option><option>Laravel</option><option>Symfony</option><option>WordPress</option><option>Magento 2</option><option>Shopware 6</option><option>Drupal</option><option>Joomla</option><option>TYPO3</option><option>Nextcloud</option></select></div>
+        <div class="field"><label>PHP Version</label>${PHPVER}</div>
+      </div>
+      <div class="field"><label>Site User <span class="hint">main SSH user</span></label><input class="input" value="iskcon-app"></div>
+      <div class="field"><label>Site User Password</label>${PW}</div>`},
+    nodejs:{title:'New Node.js Site',sub:'systemd-managed app behind Caddy',foot:'Runs as a systemd service · Caddy reverse-proxies the domain to the app port',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="api.iskcon.london"></div>
+      <div class="two">
+        <div class="field"><label>Node.js Version</label><select class="select"><option selected>Node 24 LTS</option><option>Node 22 LTS</option><option>Node 20 LTS</option></select></div>
+        <div class="field"><label>App Port <span class="hint">Caddy proxies here</span></label><input class="input" value="3000"></div>
+      </div>
+      <div class="field"><label>Startup File</label><input class="input" value="app.js"></div>
+      <div class="field"><label>Site User</label><input class="input" value="api-svc"></div>
+      <div class="field"><label>Site User Password</label>${PW}</div>`},
+    python:{title:'New Python Site',sub:'gunicorn/uvicorn via systemd',foot:'Served by gunicorn/uvicorn via systemd · Caddy proxies to the app port',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="dash.iskcon.london"></div>
+      <div class="two">
+        <div class="field"><label>Python Version</label><select class="select"><option selected>Python 3.12</option><option>Python 3.11</option></select></div>
+        <div class="field"><label>App Port</label><input class="input" value="8000"></div>
+      </div>
+      <div class="field"><label>App Module <span class="hint">WSGI/ASGI entrypoint</span></label><input class="input" value="main:app"></div>
+      <div class="field"><label>Site User</label><input class="input" value="dash-py"></div>
+      <div class="field"><label>Site User Password</label>${PW}</div>`},
+    static:{title:'New Static HTML Site',sub:'Edge-cached file server · zero runtime',foot:'No runtime installed — pure file server, instant loads',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="docs.iskcon.london"></div>
+      <div class="field"><label>Site User</label><input class="input" value="docs"></div>
+      <div class="field"><label>Site User Password</label>${PW}</div>`},
+    reverseproxy:{title:'New Reverse Proxy',sub:'TLS termination + caching in front of any upstream',foot:'Caddy terminates TLS and proxies the domain to the upstream URL',body:`
+      <div class="field"><label>Domain Name</label><input class="input" value="stream.iskcon.london"></div>
+      <div class="field"><label>Reverse Proxy URL <span class="hint">upstream</span></label><input class="input" value="http://127.0.0.1:8088"></div>
+      <div class="field"><label>Site User</label><input class="input" value="stream-px"></div>
+      <div class="field"><label>Site User Password</label>${PW}</div>`},
+  };
+  function renderCreate(type){
+    const f=FORMS[type]||FORMS.php;
+    document.getElementById('create-mount').innerHTML=`
+      <div class="ph"><div><h1>${f.title}</h1><div class="sub">${f.sub}</div></div></div>
+      <div class="card"><div class="section-b">${f.body}
+        <div class="form-actions"><button class="btn btn-primary" data-go="detail">Create Site</button><button class="btn btn-ghost" data-go="new">Cancel</button></div>
+      </div></div>
+      <div class="footer-note">${f.foot}</div>`;
+  }
   function show(id){
     document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
     const map={sites:'screen-sites',new:'screen-new',create:'screen-create',detail:'screen-detail'};
     document.getElementById(map[id]).classList.add('active');
-    document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.go==='sites'&&(id==='sites')));
+    document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.go==='sites'&&id==='sites'));
     window.scrollTo({top:0,behavior:'instant'});
   }
-  document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();show(el.dataset.go)}));
-  // detail tabs
-  document.querySelectorAll('#detail-tabs .tab').forEach(t=>t.addEventListener('click',()=>{
-    document.querySelectorAll('#detail-tabs .tab').forEach(x=>x.classList.remove('active'));
-    t.classList.add('active');
-    const name=t.dataset.tab;
-    document.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
-  }));
-  // toggles + chips demo interactivity
-  document.querySelectorAll('.toggle').forEach(t=>t.addEventListener('click',()=>t.classList.toggle('on')));
-  document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',function(){
-    const sib=this.parentElement.querySelectorAll('.chip');sib.forEach(s=>s.classList.remove('on'));this.classList.add('on');
-  }));
+  // delegated clicks (works with dynamically-rendered forms)
+  document.addEventListener('click',e=>{
+    const card=e.target.closest('[data-type]');
+    if(card){renderCreate(card.dataset.type);show('create');return;}
+    const go=e.target.closest('[data-go]');
+    if(go){e.preventDefault();show(go.dataset.go);return;}
+    const tab=e.target.closest('#detail-tabs .tab');
+    if(tab){
+      document.querySelectorAll('#detail-tabs .tab').forEach(x=>x.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===tab.dataset.tab));
+      return;
+    }
+    const tog=e.target.closest('.toggle');
+    if(tog){tog.classList.toggle('on');return;}
+    const chip=e.target.closest('.chip');
+    if(chip){[...chip.parentElement.querySelectorAll('.chip')].forEach(s=>s.classList.remove('on'));chip.classList.add('on');return;}
+  });
 </script>
 </body>
 </html>

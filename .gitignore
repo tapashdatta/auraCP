@@ -1,0 +1,19 @@
+# Go build output
+/bin/
+/dist/
+
+# Node deps and Vite output (the embedded copy in internal/webui/dist IS committed,
+# so the Go binary builds without npm; web/dist is just the intermediate)
+web/node_modules/
+web/dist/
+
+# Local runtime data & secrets (never commit these)
+*.db
+*.db-wal
+*.db-shm
+secret.key
+auracp.db*
+
+# OS / editor cruft
+.DS_Store
+*.swp

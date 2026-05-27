@@ -36,13 +36,28 @@ auraCP/
 │   └── src/
 ├── templates/          # Caddyfile fragments + systemd unit templates
 ├── migrations/         # SQLite schema migrations
-├── docs/               # SCOPE / ARCHITECTURE / PLAN / DEVELOPMENT (this set)
+├── docs/               # SCOPE / ARCHITECTURE / PLAN / DEVELOPMENT
 ├── design/             # UI design prototype (auracp-prototype.html)
-└── install.sh          # bootstrap installer (CloudPanel's, kept as reference until P1)
+├── installer/install.sh  # auraCP's own interactive installer (Debian 13)
+└── install.sh          # third-party reference installer (not part of auraCP)
 ```
 
-> Note: `install.sh` is currently CloudPanel's original installer, kept **for reference**. It will be
-> replaced in P1 by auraCP's own minimal installer.
+### Installer
+
+`installer/install.sh` provisions a Debian 13 host. **Required** packages (auracpd, Caddy) always
+install; the admin chooses **optional** components — MariaDB and/or PostgreSQL, Node.js, PHP/FrankenPHP,
+Python, Redis, security hardening:
+
+```bash
+sudo ./installer/install.sh            # interactive (whiptail, or text fallback)
+sudo ./installer/install.sh --dry-run  # print the plan, change nothing
+sudo ./installer/install.sh --yes --db=both --node=yes --php=yes --php-version=8.4 --security=yes
+```
+
+Selection is also accepted via env vars (`AURACP_MARIADB`, `AURACP_POSTGRES`, `AURACP_NODE`, …).
+The installer expects `bin/auracpd` beside the repo (built locally) or, later, downloads a release.
+
+> `install.sh` at the repo root is a third-party reference installer kept only for comparison — it is **not** auraCP's installer.
 
 ---
 
@@ -124,7 +139,7 @@ Target packaging (P7): a Debian `.deb` + a one-line install script, x86-64 and A
 
 ## 8. Useful references
 
-- CloudPanel architecture analysis & extracted feature design: see the working plan at
+- Reference-panel architecture analysis & extracted feature design: see the working plan at
   `~/.claude/plans/does-this-file-help-humming-valiant.md`.
 - UI prototype: [`design/auracp-prototype.html`](../design/auracp-prototype.html).
 - Caddy + FrankenPHP + Souin docs; `xcaddy` for custom builds with `caddy-dns/cloudflare`.

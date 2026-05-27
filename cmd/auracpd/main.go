@@ -1,0 +1,73 @@
+// Command auracpd is the auraCP control-plane daemon: it serves the admin UI
+// and JSON API, and provisions sites, databases, and certs.
+package main
+
+import (
+	"flag"
+	"log"
+	"net/http"
+	"runtime"
+	"time"
+
+	"github.com/auracp/auracp/internal/api"
+	"github.com/auracp/auracp/internal/backup"
+	"github.com/auracp/auracp/internal/cron"
+	"github.com/auracp/auracp/internal/db"
+	"github.com/auracp/auracp/internal/osuser"
+	"github.com/auracp/auracp/internal/secret"
+	"github.com/auracp/auracp/internal/site"
+	"github.com/auracp/auracp/internal/store"
+	"github.com/auracp/auracp/internal/system"
+	"github.com/auracp/auracp/internal/webserver"
+	"github.com/auracp/auracp/internal/webui"
+)
+
+func main() {
+	addr := flag.String("addr", ":8443", "listen address")
+	dbPath := flag.String("db", "auracp.db", "path to the SQLite state database")
+	etcDir := flag.String("etc", "/etc/auracp", "config dir (holds the secret key)")
+	provision := flag.Bool("provision", runtime.GOOS == "linux",
+		"actually provision the OS (users/services/caddy); off = record-only (dev)")
+	flag.Parse()
+
+	st, err := store.Open(*dbPath)
+	if err != nil {
+		log.Fatalf("store: %v", err)
+	}
+	defer st.Close()
+
+	sec, err := secret.Open(*etcDir)
+	if err != nil {
+		log.Fatalf("secret: %v", err)
+	}
+
+	runner := system.New()
+	runner.DryRun = !*provision
+	if !*provision {
+		log.Printf("provisioning DISABLED (record-only mode); OS commands are logged, not run")
+	}
+
+	mux := http.NewServeMux()
+	api.Register(mux, st, api.Deps{
+		Sites:   site.New(runner, st),
+		DBs:     db.New(runner, st, sec),
+		Cron:    cron.New(runner, st),
+		Backups: backup.New(runner, st),
+		Web:     webserver.New(runner),
+		OS:      osuser.New(runner),
+		Secret:  sec,
+		Runner:  runner,
+	}) // /api/*
+	mux.Handle("/", webui.Handler())      // embedded SPA (catch-all)
+
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           api.Secure(mux), // security headers + CSRF + rate-limit
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+
+	log.Printf("auracpd listening on %s (db: %s)", *addr, *dbPath)
+	if err := srv.ListenAndServe(); err != nil {
+		log.Fatalf("server: %v", err)
+	}
+}

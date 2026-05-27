@@ -8,16 +8,16 @@
 ## 1. Vision
 
 auraCP is a **lightweight, self-hosted server control panel** — a modern alternative to
-[CloudPanel](https://www.cloudpanel.io). It replicates CloudPanel's feature set and UX while running
+heavyweight control panels. It replicates their feature set and UX while running
 on a smaller, modern stack, taking **as few server resources as possible**, and adding two
-capabilities CloudPanel lacks: **PostgreSQL per site** and **Node.js (v24 LTS) preinstalled on every
+capabilities such panels typically lack: **PostgreSQL per site** and **Node.js (v24 LTS) preinstalled on every
 site**. No email server is included.
 
 ### Design principles
 
 1. **Minimal footprint.** Install nothing that isn't used. The control plane is a single Go binary;
    the data plane installs packages on demand. (See §6.)
-2. **Feature parity with CloudPanel.** Same screens, same per-site tabs, same workflows.
+2. **Feature parity with established panels.** Same screens, same per-site tabs, same workflows.
 3. **Modern + elegant.** Enterprise-grade UI, light theme by default with a dark toggle.
 4. **Secure by default.** Per-site Linux user isolation, automatic HTTPS, fail2ban, firewall.
 
@@ -30,7 +30,7 @@ site**. No email server is included.
 | OS | **Debian 13** (Trixie) primary; Debian 12 / Ubuntu 24.04 best-effort later |
 | Arch | x86-64 and ARM64 |
 | Panel port | `8443` (HTTPS) |
-| Min resources | 1 vCPU / 1 GB RAM / 10 GB disk target (CloudPanel needs ~2 GB+) |
+| Min resources | 1 vCPU / 1 GB RAM / 10 GB disk target (typical panels need ~2 GB+) |
 
 ---
 
@@ -41,7 +41,7 @@ WordPress · PHP · Node.js · Static HTML · Python · Reverse Proxy.
 (WordPress is internally a PHP site provisioned with `wp-cli`.)
 
 ### 3.2 Per-site management tabs
-Mirror CloudPanel exactly:
+A consistent per-site layout:
 
 | Tab | Function |
 |---|---|
@@ -85,9 +85,9 @@ rules) · Settings.
 
 ---
 
-## 5. Differentiators vs CloudPanel
+## 5. Differentiators
 
-| Area | CloudPanel | auraCP |
+| Area | Traditional panels | auraCP |
 |---|---|---|
 | Control plane | Symfony 6 (PHP, runs as root-equiv user) | **Go** single binary (~15–25 MB idle) |
 | Web server | nginx + Varnish + PHP-FPM | **Caddy + FrankenPHP + Souin** |
@@ -107,7 +107,7 @@ A standing constraint (see also the architecture doc):
 - **PHP:** only **8.3 and newer**. Never the legacy 7.x/8.0–8.2 range.
 - **Per site type, install only what's needed** — a Static site pulls no runtime; a Node site
   doesn't pull PHP; etc. (Node 24 is the one baseline runtime present everywhere.)
-- **No mail stack** (no postfix), **no Varnish/proftpd/memcached/uwsgi** bloat from the CloudPanel
+- **No mail stack** (no postfix), **no Varnish/proftpd/memcached/uwsgi** bloat from a maximal
   dependency set unless a feature genuinely requires it.
 - Every package added to the installer must be justified against an in-use feature.
 
@@ -119,4 +119,4 @@ A standing constraint (see also the architecture doc):
 - Create one site of each of the 6 types via UI and CLI; each serves over valid HTTPS.
 - Provision both a MariaDB and a PostgreSQL database on the same site.
 - Per-site isolation verified (each backend runs as its own Linux user; SFTP chroot-jailed).
-- Idle RAM materially below a comparable CloudPanel install.
+- Idle RAM materially below a comparable traditional-panel install.

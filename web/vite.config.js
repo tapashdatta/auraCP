@@ -8,4 +8,10 @@ export default defineConfig({
     target: 'es2022',
     cssCodeSplit: false,
   },
+  // Dev: proxy API calls to the auracpd daemon so HMR works against real data.
+  server: {
+    proxy: {
+      '/api': 'http://localhost:8443',
+    },
+  },
 })

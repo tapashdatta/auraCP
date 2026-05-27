@@ -65,9 +65,8 @@ Caddy is built once with `xcaddy` to include `caddy-dns/cloudflare` and the Soui
   users, write to `/etc/caddy`, install systemd units, and reload services.
 - **File operations on site content drop privileges** to the site's Linux user (fork + `setuid`,
   or `runuser -u <siteuser>`), so the file manager and deploy actions can't escape a site's home.
-- This is deliberately simpler and tighter than CloudPanel, which runs the panel as a `clp` user
-  granted `NOPASSWD: ALL` sudo (effectively root) and bridges through a `clpctlWrapper`. auraCP has
-  no PHP-as-user indirection.
+- This is deliberately simpler and tighter than panels that run the control plane as a dedicated
+  user with full passwordless sudo (effectively root). auraCP has no interpreter-as-user indirection.
 - A privileged **system executor** package wraps every shell-out with explicit, audited commands
   (no string interpolation of untrusted input into shells).
 
@@ -91,7 +90,7 @@ Each site maps to:
 | Python | per-site **systemd** unit (gunicorn/uvicorn) | `reverse_proxy` to `127.0.0.1:<port>` |
 | Reverse Proxy | external upstream | `reverse_proxy` to user URL |
 
-Backend ports are allocated **sequentially** (max existing + 1), mirroring CloudPanel's pool model.
+Backend ports are allocated **sequentially** (max existing + 1), mirroring the classic per-site pool model.
 **Node 24** is installed system-wide as the baseline; a site may pin a different version later.
 
 ---
@@ -112,7 +111,7 @@ All steps are idempotent and recorded in the audit log; failures roll back creat
 
 ## 6. Data model (SQLite)
 
-Derived from CloudPanel's Doctrine entities, trimmed and extended:
+A trimmed, extended relational model:
 
 - `panel_users` (email, password_hash, role, totp_secret)
 - `sites` (type, domain, site_user, root_path, php_version?, node_version, upstream?, status)
@@ -128,7 +127,7 @@ Derived from CloudPanel's Doctrine entities, trimmed and extended:
 - Monitoring (CPU/mem/disk/load): computed live; persist only if trends are needed.
 
 The `database_servers` + per-database `server_id` is what enables **per-database engine choice** —
-the differentiator over CloudPanel's single-engine instance.
+the differentiator over single-engine panels.
 
 ---
 
@@ -158,7 +157,7 @@ templates/      Caddyfile fragments + systemd unit templates
 ```
 
 `SiteManager` interface (`Create`/`Update`/`Delete`) has one implementation per site type — the
-clean triad pattern observed in CloudPanel, expressed in Go.
+clean per-type triad pattern, expressed in Go.
 
 ---
 

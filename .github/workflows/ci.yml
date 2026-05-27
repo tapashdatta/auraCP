@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    name: Build & vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Build UI
+        working-directory: web
+        run: |
+          npm ci || npm install
+          npm run build
+
+      - name: Embed UI
+        run: |
+          rm -rf internal/webui/dist
+          cp -R web/dist internal/webui/dist
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Cross-compile (amd64 + arm64, static)
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /tmp/auracpd-amd64 ./cmd/auracpd
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/auracpd-arm64 ./cmd/auracpd
+          file /tmp/auracpd-amd64 /tmp/auracpd-arm64
+
+  installer:
+    name: Installer lint & dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax check
+        run: bash -n installer/install.sh && bash -n packaging/build-deb.sh
+      - name: ShellCheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck -S warning installer/install.sh packaging/build-deb.sh || true
+      - name: Dry-run (default selection)
+        run: bash installer/install.sh --dry-run --db=both --node=yes --php=yes

@@ -1,0 +1,21 @@
+[Unit]
+Description=auraCP control panel
+Documentation=https://github.com/auracp/auracp
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/opt/auracp/bin/auracpd -addr :8443 -db /var/lib/auracp/auracp.db -etc /etc/auracp
+Restart=always
+RestartSec=3
+LimitNOFILE=1048576
+# allow binding :8443 without full root if later run as non-root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+# basic hardening (the daemon still needs broad access to provision the host)
+NoNewPrivileges=false
+ProtectHome=false
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,63 @@
+name: Release
+
+# Build installable artifacts. On a version tag (v*), publish a GitHub Release
+# with the .deb packages + static binaries. On manual run, upload as artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Resolve version
+        id: ver
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build .deb packages (amd64 + arm64)
+        run: make deb VERSION=${{ steps.ver.outputs.version || '0.1.0' }}
+
+      - name: List artifacts
+        run: ls -lh dist/*.deb dist/auracpd-linux-* dist/auracp-linux-*
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: auracp-packages
+          path: |
+            dist/*.deb
+            dist/auracpd-linux-*
+            dist/auracp-linux-*
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.deb
+            dist/auracpd-linux-amd64
+            dist/auracpd-linux-arm64
+          body: |
+            auraCP ${{ github.ref_name }}
+
+            Install on Debian/Ubuntu (amd64 or arm64):
+            ```
+            sudo apt install ./auracp_${{ steps.ver.outputs.version }}_amd64.deb
+            ```
+            Then provision the data plane with `installer/install.sh`. See docs/TESTING.md.
