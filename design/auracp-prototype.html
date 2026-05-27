@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>auraCP — design prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0a0c11;
+    --surface-0:#0d1016;
+    --surface-1:#11151d;
+    --surface-2:#161b25;
+    --surface-3:#1c222e;
+    --line:rgba(255,255,255,.07);
+    --line-2:rgba(255,255,255,.12);
+    --txt:#e6eaf2;
+    --txt-2:#9aa4b6;
+    --txt-3:#626c7e;
+    --aura:#38e3a3;
+    --aura-dim:#1d6e54;
+    --aura-glow:rgba(56,227,163,.18);
+    --warn:#f5b75a;
+    --down:#ff6063;
+    --info:#5bc0ff;
+    --radius:13px;
+    --radius-sm:9px;
+    --fs-display:"Bricolage Grotesque",sans-serif;
+    --fs-ui:"Hanken Grotesk",sans-serif;
+    --fs-mono:"JetBrains Mono",monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--ink);
+    color:var(--txt);
+    font-family:var(--fs-ui);
+    font-size:14px;
+    line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 80% -10%, rgba(56,227,163,.06), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(91,192,255,.05), transparent 55%),
+      radial-gradient(circle at 1px 1px, rgba(255,255,255,.035) 1px, transparent 0);
+    background-size:auto,auto,22px 22px;
+    background-attachment:fixed;
+  }
+  ::selection{background:var(--aura-glow);color:#fff}
+  a{color:inherit;text-decoration:none}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  .mono{font-family:var(--fs-mono);font-feature-settings:"tnum" 1}
+
+  /* ---------- top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:50;
+    display:flex;align-items:center;gap:26px;
+    height:58px;padding:0 26px;
+    background:rgba(10,12,17,.72);
+    backdrop-filter:blur(14px);
+    border-bottom:1px solid var(--line);
+  }
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--fs-display);font-weight:800;font-size:19px;letter-spacing:-.02em}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--aura);box-shadow:0 0 0 4px var(--aura-glow),0 0 14px 2px var(--aura);}
+  .brand b{color:var(--txt)}
+  .brand span{color:var(--txt-3);font-weight:600}
+  .nav{display:flex;align-items:center;gap:4px;margin-left:6px}
+  .nav a{
+    padding:7px 13px;border-radius:8px;color:var(--txt-2);font-weight:500;font-size:13.5px;
+    transition:.15s;position:relative;
+  }
+  .nav a:hover{color:var(--txt);background:var(--surface-1)}
+  .nav a.active{color:var(--txt);background:var(--surface-2)}
+  .nav a.active::after{content:"";position:absolute;left:13px;right:13px;bottom:-1px;height:2px;background:var(--aura);border-radius:2px;box-shadow:0 0 10px var(--aura)}
+  .topbar .spacer{flex:1}
+  .instance-pill{
+    display:flex;align-items:center;gap:9px;padding:6px 12px 6px 10px;
+    border:1px solid var(--line);border-radius:999px;background:var(--surface-1);
+    font-size:12.5px;color:var(--txt-2);
+  }
+  .instance-pill .mono{color:var(--txt);font-size:12px}
+  .topbar .search{
+    display:flex;align-items:center;gap:8px;padding:7px 12px;width:230px;
+    border:1px solid var(--line);border-radius:9px;background:var(--surface-0);color:var(--txt-3);
+  }
+  .topbar .search input{flex:1;background:none;border:none;outline:none;color:var(--txt);font-family:inherit;font-size:13px}
+  .topbar .search kbd{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+  .avatar{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;font-weight:700;font-size:12.5px;
+    background:linear-gradient(135deg,var(--aura-dim),#243042);color:var(--txt);border:1px solid var(--line-2)}
+
+  .wrap{max-width:1240px;margin:0 auto;padding:30px 26px 80px}
+
+  /* ---------- page header ---------- */
+  .ph{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;gap:20px}
+  .ph h1{font-family:var(--fs-display);font-weight:700;font-size:30px;letter-spacing:-.025em}
+  .ph .sub{color:var(--txt-3);font-size:13.5px;margin-top:3px}
+  .btn{
+    display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;font-weight:600;font-size:13.5px;
+    transition:.15s;border:1px solid transparent;white-space:nowrap;
+  }
+  .btn-primary{background:var(--aura);color:#04130d;box-shadow:0 0 0 1px rgba(56,227,163,.3),0 8px 24px -8px var(--aura)}
+  .btn-primary:hover{filter:brightness(1.08);transform:translateY(-1px)}
+  .btn-ghost{background:var(--surface-1);border-color:var(--line);color:var(--txt)}
+  .btn-ghost:hover{background:var(--surface-2);border-color:var(--line-2)}
+  .btn svg{width:15px;height:15px}
+
+  /* ---------- stat strip ---------- */
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
+  .stat{
+    border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(180deg,var(--surface-1),var(--surface-0));
+    padding:15px 17px;position:relative;overflow:hidden;
+  }
+  .stat .lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--txt-3);font-weight:600}
+  .stat .val{font-family:var(--fs-display);font-weight:700;font-size:25px;margin-top:7px;letter-spacing:-.02em}
+  .stat .val small{font-size:13px;color:var(--txt-3);font-weight:600;font-family:var(--fs-ui)}
+  .bar{height:5px;border-radius:3px;background:var(--surface-3);margin-top:11px;overflow:hidden}
+  .bar i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,var(--aura-dim),var(--aura))}
+  .stat.warn .bar i{background:linear-gradient(90deg,#7a5a23,var(--warn))}
+
+  /* ---------- table card ---------- */
+  .card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);overflow:hidden}
+  .toolbar{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid var(--line)}
+  .filter{display:flex;align-items:center;gap:8px;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--surface-1);color:var(--txt-3);width:260px}
+  .filter input{background:none;border:none;outline:none;color:var(--txt);font-family:inherit;font-size:13px;width:100%}
+  .chip{padding:5px 11px;border:1px solid var(--line);border-radius:999px;font-size:12.5px;color:var(--txt-2);background:var(--surface-1)}
+  .chip.on{color:var(--aura);border-color:var(--aura-dim);background:rgba(56,227,163,.07)}
+
+  table{width:100%;border-collapse:collapse}
+  thead th{
+    text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600;
+    padding:12px 16px;border-bottom:1px solid var(--line);background:var(--surface-0)
+  }
+  tbody td{padding:15px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tbody tr{transition:.12s}
+  tbody tr:hover{background:var(--surface-1)}
+  tbody tr:last-child td{border-bottom:none}
+  .domain{display:flex;align-items:center;gap:12px}
+  .domain .fav{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);flex:none}
+  .domain .nm{font-weight:600;font-size:14px}
+  .domain .nm .mono{display:block;font-size:11.5px;color:var(--txt-3);font-weight:500;margin-top:1px}
+  td .mono{color:var(--txt-2);font-size:12.5px}
+  .badge{display:inline-flex;align-items:center;gap:7px;padding:5px 11px 5px 9px;border-radius:8px;font-size:12.5px;font-weight:600;border:1px solid var(--line)}
+  .badge .ic{width:16px;height:16px;display:grid;place-items:center}
+  .b-wp{background:rgba(91,192,255,.08);color:#8fd0ff}
+  .b-php{background:rgba(140,130,255,.08);color:#b3acff}
+  .b-node{background:rgba(56,227,163,.08);color:var(--aura)}
+  .b-static{background:rgba(245,183,90,.08);color:var(--warn)}
+  .b-py{background:rgba(91,192,255,.08);color:#8fd0ff}
+  .b-proxy{background:rgba(255,255,255,.05);color:var(--txt-2)}
+  .status{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt-2)}
+  .sdot{width:7px;height:7px;border-radius:50%;flex:none}
+  .s-up{background:var(--aura);box-shadow:0 0 8px var(--aura)}
+  .s-warn{background:var(--warn);box-shadow:0 0 8px var(--warn)}
+  .s-down{background:var(--down);box-shadow:0 0 8px var(--down)}
+  .node-tag{font-size:10.5px;color:var(--aura);border:1px solid var(--aura-dim);border-radius:5px;padding:1px 6px;margin-left:8px;font-family:var(--fs-mono);background:rgba(56,227,163,.05)}
+  .manage{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1px solid var(--line);border-radius:8px;font-weight:600;font-size:12.5px;color:var(--txt);background:var(--surface-1);transition:.15s}
+  .manage:hover{border-color:var(--aura-dim);color:var(--aura);background:rgba(56,227,163,.06)}
+
+  /* ---------- screens ---------- */
+  .screen{display:none;animation:fade .4s ease both}
+  .screen.active{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+  @keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+
+  /* ---------- add site chooser ---------- */
+  .chooser-head{text-align:center;margin:18px 0 34px}
+  .chooser-head h1{font-family:var(--fs-display);font-weight:700;font-size:32px;letter-spacing:-.03em}
+  .chooser-head p{color:var(--txt-3);margin-top:8px}
+  .grid6{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;max-width:880px;margin:0 auto}
+  .site-card{
+    border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(180deg,var(--surface-1),var(--surface-0));
+    padding:24px 22px;cursor:pointer;transition:.18s;position:relative;overflow:hidden;animation:rise .5s both
+  }
+  .site-card::before{content:"";position:absolute;inset:0;background:radial-gradient(420px 140px at 50% -30%,var(--aura-glow),transparent 70%);opacity:0;transition:.25s}
+  .site-card:hover{transform:translateY(-3px);border-color:var(--line-2)}
+  .site-card:hover::before{opacity:1}
+  .site-card:hover .go{color:var(--aura)}
+  .site-card .ico{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);margin-bottom:16px}
+  .site-card h3{font-family:var(--fs-display);font-weight:700;font-size:18px;letter-spacing:-.01em}
+  .site-card p{color:var(--txt-3);font-size:12.5px;margin-top:6px;min-height:34px}
+  .site-card .go{margin-top:14px;font-size:12.5px;font-weight:600;color:var(--txt-3);display:flex;align-items:center;gap:6px;transition:.15s}
+
+  /* ---------- create form ---------- */
+  .form-wrap{max-width:680px;margin:0 auto}
+  .back{display:inline-flex;align-items:center;gap:7px;color:var(--txt-3);font-size:13px;font-weight:500;margin-bottom:18px}
+  .back:hover{color:var(--txt)}
+  .field{margin-bottom:18px}
+  .field label{display:block;font-weight:600;font-size:13px;margin-bottom:7px}
+  .field .hint{color:var(--txt-3);font-weight:400;font-size:12px;margin-left:6px}
+  .input,.select{
+    width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface-0);
+    color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;transition:.15s;
+  }
+  .input:focus,.select:focus{border-color:var(--aura-dim);box-shadow:0 0 0 3px var(--aura-glow)}
+  .input::placeholder{color:var(--txt-3)}
+  .input-row{display:flex;gap:10px}
+  .input-row .input{flex:1}
+  .gen{flex:none;padding:0 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface-1);color:var(--aura);font-weight:600;font-size:12.5px}
+  .gen:hover{background:rgba(56,227,163,.07)}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .select{font-family:var(--fs-ui);appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23626c7e' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 13px center}
+  .form-actions{display:flex;gap:10px;margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
+
+  /* ---------- site detail ---------- */
+  .site-head{display:flex;align-items:center;gap:16px;margin-bottom:6px}
+  .site-head .fav{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line)}
+  .site-head h1{font-family:var(--fs-display);font-weight:700;font-size:25px;letter-spacing:-.02em}
+  .site-meta{display:flex;flex-wrap:wrap;gap:18px;margin:14px 0 22px;padding:14px 18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0)}
+  .site-meta .m{display:flex;flex-direction:column;gap:3px}
+  .site-meta .m .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600}
+  .site-meta .m .v{font-family:var(--fs-mono);font-size:13px;color:var(--txt)}
+  .site-meta .sep{width:1px;background:var(--line)}
+
+  .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{padding:11px 14px;color:var(--txt-3);font-weight:500;font-size:13.5px;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:.15s}
+  .tab:hover{color:var(--txt-2)}
+  .tab.active{color:var(--txt);border-bottom-color:var(--aura)}
+  .tab .badge-num{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);margin-left:6px}
+
+  .panel{display:none;animation:fade .3s both}
+  .panel.active{display:block}
+  .section{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);margin-bottom:18px;overflow:hidden}
+  .section-h{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}
+  .section-h h3{font-size:15px;font-weight:600}
+  .section-h p{color:var(--txt-3);font-size:12.5px;margin-top:2px}
+  .section-b{padding:18px}
+  .kv{display:flex;justify-content:space-between;align-items:center;padding:13px 0;border-bottom:1px solid var(--line)}
+  .kv:last-child{border-bottom:none}
+  .kv .k{color:var(--txt-2);font-size:13px}
+  .kv .v{font-family:var(--fs-mono);font-size:13px;color:var(--txt)}
+  .toggle{width:40px;height:23px;border-radius:999px;background:var(--surface-3);position:relative;transition:.2s;flex:none;cursor:pointer}
+  .toggle.on{background:var(--aura-dim)}
+  .toggle::after{content:"";position:absolute;top:2.5px;left:2.5px;width:18px;height:18px;border-radius:50%;background:#cfd6e2;transition:.2s}
+  .toggle.on::after{left:19px;background:var(--aura)}
+
+  /* vhost / logs code */
+  .code{font-family:var(--fs-mono);font-size:12.5px;line-height:1.7;background:#070a0e;border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px 18px;color:#aeb8c8;overflow:auto;max-height:360px}
+  .code .c{color:var(--txt-3)}
+  .code .k{color:var(--aura)}
+  .code .s{color:var(--warn)}
+  .logline{display:flex;gap:14px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+  .logline .t{color:var(--txt-3);flex:none}
+  .logline .lv{flex:none;width:48px;font-weight:600}
+  .lv.ok{color:var(--aura)}.lv.warn{color:var(--warn)}.lv.err{color:var(--down)}
+
+  .empty{text-align:center;padding:38px;color:var(--txt-3)}
+  .pill-eng{display:inline-flex;align-items:center;gap:7px;padding:5px 10px;border-radius:7px;font-family:var(--fs-mono);font-size:12px;font-weight:500}
+  .eng-maria{background:rgba(245,183,90,.08);color:var(--warn);border:1px solid rgba(245,183,90,.2)}
+  .eng-pg{background:rgba(91,192,255,.08);color:var(--info);border:1px solid rgba(91,192,255,.2)}
+  .note{display:flex;gap:10px;padding:12px 14px;border:1px solid var(--aura-dim);border-radius:9px;background:rgba(56,227,163,.05);font-size:12.5px;color:var(--txt-2);margin-top:14px}
+  .note b{color:var(--aura)}
+  .footer-note{text-align:center;color:var(--txt-3);font-size:12px;margin-top:40px;font-family:var(--fs-mono)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span><b>aura</b><span>CP</span></div>
+  <nav class="nav">
+    <a data-go="sites" class="active">Sites</a>
+    <a>Users</a>
+    <a>Backups</a>
+    <a>Security</a>
+    <a>Instance</a>
+    <a>Settings</a>
+  </nav>
+  <div class="spacer"></div>
+  <div class="instance-pill"><span class="sdot s-up"></span>debian-13 · <span class="mono">5.78.21.140</span></div>
+  <div class="search">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+    <input placeholder="Search sites…"><kbd>⌘K</kbd>
+  </div>
+  <div class="avatar">IL</div>
+</div>
+
+<!-- ============ SCREEN 1: SITES MANAGER ============ -->
+<section class="screen active" id="screen-sites">
+  <div class="wrap">
+    <div class="ph">
+      <div>
+        <h1>Sites</h1>
+        <div class="sub">7 sites · all systems nominal</div>
+      </div>
+      <button class="btn btn-primary" data-go="new">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>
+        Add Site
+      </button>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><div class="lbl">CPU Load</div><div class="val">18<small>%</small></div><div class="bar"><i style="width:18%"></i></div></div>
+      <div class="stat"><div class="lbl">Memory</div><div class="val">2.1<small>/ 4 GB</small></div><div class="bar"><i style="width:53%"></i></div></div>
+      <div class="stat warn"><div class="lbl">Disk</div><div class="val">61<small>/ 80 GB</small></div><div class="bar"><i style="width:76%"></i></div></div>
+      <div class="stat"><div class="lbl">Load avg</div><div class="val mono" style="font-family:var(--fs-mono);font-size:20px">0.42 0.51 0.39</div><div class="bar"><i style="width:21%"></i></div></div>
+    </div>
+
+    <div class="card">
+      <div class="toolbar">
+        <div class="filter">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg>
+          <input placeholder="Filter by domain or user…">
+        </div>
+        <span class="chip on">All</span>
+        <span class="chip">PHP</span>
+        <span class="chip">Node.js</span>
+        <span class="chip">WordPress</span>
+        <span class="spacer" style="flex:1"></span>
+        <span style="color:var(--txt-3);font-size:12.5px" class="mono">7 sites</span>
+      </div>
+      <table>
+        <thead><tr><th>Domain</th><th>Site User</th><th>App</th><th>Status</th><th style="text-align:right">Manage</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><div class="domain"><div class="fav">🌐</div><div class="nm">iskcon.london<span class="mono">/home/iskcon-ldn/htdocs</span></div></div></td>
+            <td><span class="mono">iskcon-ldn</span></td>
+            <td><span class="badge b-wp"><span class="ic">◆</span>WordPress</span><span class="node-tag">node 22</span></td>
+            <td><span class="status"><span class="sdot s-up"></span>Online</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+          <tr>
+            <td><div class="domain"><div class="fav">⬡</div><div class="nm">api.iskcon.london<span class="mono">/home/api-svc/htdocs</span></div></div></td>
+            <td><span class="mono">api-svc</span></td>
+            <td><span class="badge b-node"><span class="ic">▲</span>Node.js</span></td>
+            <td><span class="status"><span class="sdot s-up"></span>Online</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+          <tr>
+            <td><div class="domain"><div class="fav">⬢</div><div class="nm">shop.iskcon.london<span class="mono">/home/shop/htdocs</span></div></div></td>
+            <td><span class="mono">shop</span></td>
+            <td><span class="badge b-php"><span class="ic">php</span>PHP 8.4</span><span class="node-tag">node 22</span></td>
+            <td><span class="status"><span class="sdot s-warn"></span>Cache rebuild</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+          <tr>
+            <td><div class="domain"><div class="fav">◷</div><div class="nm">dash.iskcon.london<span class="mono">/home/dash-py/htdocs</span></div></div></td>
+            <td><span class="mono">dash-py</span></td>
+            <td><span class="badge b-py"><span class="ic">py</span>Python 3.12</span></td>
+            <td><span class="status"><span class="sdot s-up"></span>Online</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+          <tr>
+            <td><div class="domain"><div class="fav">▤</div><div class="nm">docs.iskcon.london<span class="mono">/home/docs/htdocs</span></div></div></td>
+            <td><span class="mono">docs</span></td>
+            <td><span class="badge b-static"><span class="ic">▤</span>Static</span></td>
+            <td><span class="status"><span class="sdot s-up"></span>Online</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+          <tr>
+            <td><div class="domain"><div class="fav">⇄</div><div class="nm">stream.iskcon.london<span class="mono">→ 127.0.0.1:8088</span></div></div></td>
+            <td><span class="mono">stream-px</span></td>
+            <td><span class="badge b-proxy"><span class="ic">⇄</span>Reverse Proxy</span></td>
+            <td><span class="status"><span class="sdot s-down"></span>Upstream down</span></td>
+            <td style="text-align:right"><a class="manage" data-go="detail">Manage <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg></a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="footer-note">auraCP design prototype · screen 1 of 3 — click “Add Site” or any “Manage”</div>
+  </div>
+</section>
+
+<!-- ============ SCREEN 2: ADD SITE ============ -->
+<section class="screen" id="screen-new">
+  <div class="wrap">
+    <a class="back" data-go="sites"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</a>
+    <div class="chooser-head">
+      <h1>What kind of site would you like to create?</h1>
+      <p>Every site ships Node-ready by default · free SSL · Cloudflare integration</p>
+    </div>
+    <div class="grid6">
+      <div class="site-card" data-type="wordpress" style="animation-delay:.03s"><div class="ico">◆</div><h3>WordPress</h3><p>Managed WP with wp-cli, auto database & one-click SSL.</p><div class="go">Create →</div></div>
+      <div class="site-card" data-type="php" style="animation-delay:.06s"><div class="ico">php</div><h3>PHP</h3><p>FrankenPHP worker mode. PHP 8.3+, per-site isolation.</p><div class="go">Create →</div></div>
+      <div class="site-card" data-type="nodejs" style="animation-delay:.09s"><div class="ico">▲</div><h3>Node.js</h3><p>systemd-managed app behind Caddy reverse proxy.</p><div class="go">Create →</div></div>
+      <div class="site-card" data-type="static" style="animation-delay:.12s"><div class="ico">▤</div><h3>Static HTML</h3><p>Edge-cached file server. Zero runtime, instant loads.</p><div class="go">Create →</div></div>
+      <div class="site-card" data-type="python" style="animation-delay:.15s"><div class="ico">py</div><h3>Python</h3><p>uvicorn/gunicorn via systemd. Python 3.12 ready.</p><div class="go">Create →</div></div>
+      <div class="site-card" data-type="reverseproxy" style="animation-delay:.18s"><div class="ico">⇄</div><h3>Reverse Proxy</h3><p>Proxy any upstream with TLS termination & caching.</p><div class="go">Create →</div></div>
+    </div>
+    <div class="footer-note">screen 2 of 3 — click any card to see the create form</div>
+  </div>
+</section>
+
+<!-- ============ SCREEN 2b: CREATE FORM (PHP) ============ -->
+<section class="screen" id="screen-create">
+  <div class="wrap form-wrap">
+    <a class="back" data-go="new"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back</a>
+    <div class="ph"><div><h1>New PHP Site</h1><div class="sub">FrankenPHP · isolated site user · Node-ready</div></div></div>
+    <div class="card"><div class="section-b">
+      <div class="field"><label>Domain Name</label><input class="input" value="app.iskcon.london"></div>
+      <div class="two">
+        <div class="field"><label>PHP Version</label>
+          <select class="select"><option>PHP 8.5</option><option selected>PHP 8.4</option><option>PHP 8.3</option></select>
+        </div>
+        <div class="field"><label>Site User <span class="hint">main SSH user</span></label><input class="input" value="iskcon-app"></div>
+      </div>
+      <div class="field"><label>Site User Password</label>
+        <div class="input-row"><input class="input" value="x9F4-mQ2v-7Lp0-Rk8e"><button class="gen">Generate</button></div>
+      </div>
+      <div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--aura)" stroke-width="2" style="flex:none;margin-top:1px"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg><div><b>Node 22 LTS</b> is installed automatically on every site — no extra step to run a Node.js app here later.</div></div>
+      <div class="form-actions"><button class="btn btn-primary" data-go="detail">Create Site</button><button class="btn btn-ghost" data-go="new">Cancel</button></div>
+    </div></div>
+    <div class="footer-note">create form — only PHP 8.3+ offered (minimal-package policy)</div>
+  </div>
+</section>
+
+<!-- ============ SCREEN 3: SITE DETAIL ============ -->
+<section class="screen" id="screen-detail">
+  <div class="wrap">
+    <a class="back" data-go="sites"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</a>
+    <div class="site-head">
+      <div class="fav">◆</div>
+      <div>
+        <h1>iskcon.london</h1>
+        <div class="status" style="margin-top:4px"><span class="sdot s-up"></span>Online · valid certificate · HTTP/3</div>
+      </div>
+    </div>
+    <div class="site-meta">
+      <div class="m"><span class="k">App</span><span class="v">WordPress · PHP 8.4</span></div>
+      <div class="sep"></div>
+      <div class="m"><span class="k">Site User</span><span class="v">iskcon-ldn</span></div>
+      <div class="sep"></div>
+      <div class="m"><span class="k">Node</span><span class="v">v22.11 LTS</span></div>
+      <div class="sep"></div>
+      <div class="m"><span class="k">Root</span><span class="v">/home/iskcon-ldn/htdocs</span></div>
+      <div class="sep"></div>
+      <div class="m"><span class="k">PHP-FPM</span><span class="v">:9071</span></div>
+    </div>
+
+    <div class="tabs" id="detail-tabs">
+      <div class="tab active" data-tab="settings">Settings</div>
+      <div class="tab" data-tab="vhost">Vhost</div>
+      <div class="tab" data-tab="databases">Databases<span class="badge-num">2</span></div>
+      <div class="tab" data-tab="cache">Cache</div>
+      <div class="tab" data-tab="ssl">SSL/TLS</div>
+      <div class="tab" data-tab="security">Security</div>
+      <div class="tab" data-tab="sshftp">SSH/FTP</div>
+      <div class="tab" data-tab="files">File Manager</div>
+      <div class="tab" data-tab="cron">Cron Jobs</div>
+      <div class="tab" data-tab="logs">Logs</div>
+    </div>
+
+    <!-- settings -->
+    <div class="panel active" data-panel="settings">
+      <div class="section"><div class="section-h"><div><h3>General</h3><p>Core configuration for this site</p></div></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">Domain name</span><span class="v">iskcon.london</span></div>
+        <div class="kv"><span class="k">Application</span><span class="v">WordPress (PHP 8.4)</span></div>
+        <div class="kv"><span class="k">Document root</span><span class="v">/home/iskcon-ldn/htdocs/iskcon.london</span></div>
+        <div class="kv"><span class="k">Force HTTPS redirect</span><div class="toggle on"></div></div>
+        <div class="kv"><span class="k">HTTP/3 (QUIC)</span><div class="toggle on"></div></div>
+      </div></div>
+      <div class="section"><div class="section-h"><div><h3>PHP Settings</h3><p>Per-site FrankenPHP pool</p></div></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">PHP version</span><span class="v">8.4</span></div>
+        <div class="kv"><span class="k">memory_limit</span><span class="v">512M</span></div>
+        <div class="kv"><span class="k">max_execution_time</span><span class="v">120</span></div>
+        <div class="kv"><span class="k">Worker mode</span><div class="toggle on"></div></div>
+      </div></div>
+    </div>
+
+    <!-- vhost -->
+    <div class="panel" data-panel="vhost">
+      <div class="section"><div class="section-h"><div><h3>Caddyfile</h3><p>Editable vhost template · reloads on save</p></div><button class="btn btn-ghost" style="padding:7px 13px">Save & Reload</button></div><div class="section-b">
+        <div class="code"><span class="k">iskcon.london</span> {<br>
+&nbsp;&nbsp;<span class="c"># auto HTTPS via Let's Encrypt / Cloudflare DNS</span><br>
+&nbsp;&nbsp;root * <span class="s">/home/iskcon-ldn/htdocs/iskcon.london</span><br>
+&nbsp;&nbsp;<span class="k">encode</span> zstd br gzip<br>
+&nbsp;&nbsp;<span class="k">php_server</span> {<br>&nbsp;&nbsp;&nbsp;&nbsp;frankenphp { worker ./public/index.php }<br>&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;<span class="k">cache</span> { <span class="c">// souin full-page cache</span><br>&nbsp;&nbsp;&nbsp;&nbsp;ttl 600s<br>&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;<span class="k">log</span> { output file /home/iskcon-ldn/logs/access.log }<br>
+}</div>
+      </div></div>
+    </div>
+
+    <!-- databases -->
+    <div class="panel" data-panel="databases">
+      <div class="section"><div class="section-h"><div><h3>Databases</h3><p>Choose engine per database — MariaDB or PostgreSQL</p></div><button class="btn btn-primary" style="padding:8px 14px">+ Add Database</button></div>
+        <table>
+          <thead><tr><th>Database</th><th>Engine</th><th>User</th><th>Size</th><th style="text-align:right">Actions</th></tr></thead>
+          <tbody>
+            <tr><td><span class="mono">iskcon_wp</span></td><td><span class="pill-eng eng-maria">⬡ MariaDB 11.8</span></td><td><span class="mono" style="color:var(--txt-2)">wp_user</span></td><td><span class="mono" style="color:var(--txt-2)">248 MB</span></td><td style="text-align:right"><a class="manage">Manage</a></td></tr>
+            <tr><td><span class="mono">iskcon_analytics</span></td><td><span class="pill-eng eng-pg">⬢ PostgreSQL 17</span></td><td><span class="mono" style="color:var(--txt-2)">analytics</span></td><td><span class="mono" style="color:var(--txt-2)">82 MB</span></td><td style="text-align:right"><a class="manage">Manage</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--aura)" stroke-width="2" style="flex:none;margin-top:1px"><path d="M12 2L2 7l10 5 10-5-10-5z"/></svg><div><b>auraCP exclusive:</b> pick <b>MariaDB</b> or <b>PostgreSQL</b> per database — both run locally as separate engines. CloudPanel only supports MySQL/MariaDB.</div></div>
+    </div>
+
+    <!-- cache -->
+    <div class="panel" data-panel="cache">
+      <div class="section"><div class="section-h"><div><h3>Cache</h3><p>Souin full-page cache (in-Caddy, replaces Varnish)</p></div></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">Full-page cache</span><div class="toggle on"></div></div>
+        <div class="kv"><span class="k">Default TTL</span><span class="v">600s</span></div>
+        <div class="kv"><span class="k">Cache-Status header</span><span class="v">HIT · 94.2% ratio</span></div>
+        <div class="kv"><span class="k">Purge on deploy</span><div class="toggle on"></div></div>
+      </div><div class="section-b" style="border-top:1px solid var(--line)"><button class="btn btn-ghost">Purge cache now</button></div></div>
+    </div>
+
+    <!-- ssl -->
+    <div class="panel" data-panel="ssl">
+      <div class="section"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Auto-managed by Caddy · Let's Encrypt</p></div><span class="status"><span class="sdot s-up"></span>Active</span></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">Issuer</span><span class="v">Let's Encrypt (R12)</span></div>
+        <div class="kv"><span class="k">Domains</span><span class="v">iskcon.london, www.iskcon.london</span></div>
+        <div class="kv"><span class="k">Expires</span><span class="v">2026-08-19 · auto-renews</span></div>
+        <div class="kv"><span class="k">Challenge</span><span class="v">Cloudflare DNS-01 (wildcard)</span></div>
+      </div></div>
+    </div>
+
+    <!-- security -->
+    <div class="panel" data-panel="security">
+      <div class="section"><div class="section-h"><div><h3>Security</h3><p>Basic auth, bot & IP blocking</p></div></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">Basic authentication</span><div class="toggle"></div></div>
+        <div class="kv"><span class="k">Block bad bots</span><div class="toggle on"></div></div>
+        <div class="kv"><span class="k">fail2ban (SSH/FTP)</span><div class="toggle on"></div></div>
+        <div class="kv"><span class="k">Blocked IPs</span><span class="v">3 entries</span></div>
+      </div></div>
+    </div>
+
+    <!-- sshftp -->
+    <div class="panel" data-panel="sshftp">
+      <div class="section"><div class="section-h"><div><h3>SSH / FTP Users</h3><p>Chroot-jailed to the site home</p></div><button class="btn btn-primary" style="padding:8px 14px">+ Add User</button></div>
+        <table><thead><tr><th>User</th><th>Type</th><th>Home</th><th style="text-align:right"></th></tr></thead><tbody>
+          <tr><td><span class="mono">iskcon-ldn</span></td><td><span class="badge b-node" style="background:rgba(56,227,163,.06)">SSH + SFTP</span></td><td><span class="mono" style="color:var(--txt-2)">/home/iskcon-ldn</span></td><td style="text-align:right"><a class="manage">Edit</a></td></tr>
+          <tr><td><span class="mono">editor-ftp</span></td><td><span class="badge b-proxy">SFTP only</span></td><td><span class="mono" style="color:var(--txt-2)">/home/iskcon-ldn/htdocs</span></td><td style="text-align:right"><a class="manage">Edit</a></td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <!-- files -->
+    <div class="panel" data-panel="files">
+      <div class="section"><div class="section-h"><div><h3>File Manager</h3><p class="mono" style="font-family:var(--fs-mono)">/home/iskcon-ldn/htdocs/iskcon.london</p></div></div><div class="section-b" style="padding:0">
+        <div class="kv" style="padding:13px 18px"><span class="k">📁 wp-admin</span><span class="v" style="color:var(--txt-3)">drwxr-xr-x · 4.0K</span></div>
+        <div class="kv" style="padding:13px 18px"><span class="k">📁 wp-content</span><span class="v" style="color:var(--txt-3)">drwxr-xr-x · 4.0K</span></div>
+        <div class="kv" style="padding:13px 18px"><span class="k">📄 wp-config.php</span><span class="v" style="color:var(--txt-3)">-rw-r----- · 3.2K</span></div>
+        <div class="kv" style="padding:13px 18px"><span class="k">📄 index.php</span><span class="v" style="color:var(--txt-3)">-rw-r--r-- · 405B</span></div>
+      </div></div>
+    </div>
+
+    <!-- cron -->
+    <div class="panel" data-panel="cron">
+      <div class="section"><div class="section-h"><div><h3>Cron Jobs</h3><p>Runs as the site user</p></div><button class="btn btn-primary" style="padding:8px 14px">+ Add Cron Job</button></div>
+        <table><thead><tr><th>Schedule</th><th>Command</th><th>Status</th><th style="text-align:right"></th></tr></thead><tbody>
+          <tr><td><span class="mono" style="color:var(--aura)">*/5 * * * *</span></td><td><span class="mono" style="color:var(--txt-2)">php /htdocs/wp-cron.php</span></td><td><div class="toggle on"></div></td><td style="text-align:right"><a class="manage">Edit</a></td></tr>
+          <tr><td><span class="mono" style="color:var(--aura)">0 3 * * *</span></td><td><span class="mono" style="color:var(--txt-2)">wp media regenerate --yes</span></td><td><div class="toggle on"></div></td><td style="text-align:right"><a class="manage">Edit</a></td></tr>
+        </tbody></table>
+      </div>
+    </div>
+
+    <!-- logs -->
+    <div class="panel" data-panel="logs">
+      <div class="section"><div class="section-h"><div><h3>Logs</h3><p>Live tail · access · error · php</p></div><div style="display:flex;gap:8px"><span class="chip on">Access</span><span class="chip">Error</span><span class="chip">PHP</span></div></div><div class="section-b">
+        <div class="code" style="max-height:300px">
+          <div class="logline"><span class="t">12:04:51</span><span class="lv ok">200</span><span>GET / · HIT · 41ms · 2a01:4f8::1</span></div>
+          <div class="logline"><span class="t">12:04:53</span><span class="lv ok">200</span><span>GET /wp-content/themes/main.css · HIT · 3ms</span></div>
+          <div class="logline"><span class="t">12:04:55</span><span class="lv warn">301</span><span>GET /about → /about/ · 1ms</span></div>
+          <div class="logline"><span class="t">12:05:02</span><span class="lv ok">200</span><span>POST /wp-login.php · MISS · 188ms</span></div>
+          <div class="logline"><span class="t">12:05:09</span><span class="lv err">404</span><span>GET /old-page · 2ms · 66.249.66.1</span></div>
+          <div class="logline" style="border:none"><span class="t">12:05:14</span><span class="lv ok">200</span><span>GET /sitemap.xml · HIT · 5ms</span></div>
+        </div>
+      </div></div>
+    </div>
+
+    <div class="footer-note">screen 3 of 3 — click the tabs above</div>
+  </div>
+</section>
+
+<script>
+  function show(id){
+    document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+    const map={sites:'screen-sites',new:'screen-new',create:'screen-create',detail:'screen-detail'};
+    document.getElementById(map[id]).classList.add('active');
+    document.querySelectorAll('.nav a').forEach(a=>a.classList.toggle('active',a.dataset.go==='sites'&&(id==='sites')));
+    window.scrollTo({top:0,behavior:'instant'});
+  }
+  document.querySelectorAll('[data-go]').forEach(el=>el.addEventListener('click',e=>{e.preventDefault();show(el.dataset.go)}));
+  // detail tabs
+  document.querySelectorAll('#detail-tabs .tab').forEach(t=>t.addEventListener('click',()=>{
+    document.querySelectorAll('#detail-tabs .tab').forEach(x=>x.classList.remove('active'));
+    t.classList.add('active');
+    const name=t.dataset.tab;
+    document.querySelectorAll('[data-panel]').forEach(p=>p.classList.toggle('active',p.dataset.panel===name));
+  }));
+  // toggles + chips demo interactivity
+  document.querySelectorAll('.toggle').forEach(t=>t.addEventListener('click',()=>t.classList.toggle('on')));
+  document.querySelectorAll('.chip').forEach(c=>c.addEventListener('click',function(){
+    const sib=this.parentElement.querySelectorAll('.chip');sib.forEach(s=>s.classList.remove('on'));this.classList.add('on');
+  }));
+</script>
+</body>
+</html>
