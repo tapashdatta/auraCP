@@ -377,9 +377,12 @@ install_security() {
 
 install_auracpd() { # required — the control plane
   msg "Installing auracpd…"
-  local repo deb
+  local repo deb=""
   repo="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
-  deb="$(ls "$repo"/dist/auracp_*_"${CADDY_ARCH}".deb 2>/dev/null | head -1)"
+  # Find a prebuilt .deb without `ls` (which exits non-zero on no-match under set -e).
+  for f in "$repo"/dist/auracp_*_"${CADDY_ARCH}".deb; do
+    [ -f "$f" ] && { deb="$f"; break; }
+  done
 
   # Preferred: install the prebuilt .deb (handles binary + systemd unit + enable).
   if [ -n "$deb" ]; then
