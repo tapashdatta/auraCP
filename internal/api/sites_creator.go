@@ -39,22 +39,18 @@ import (
 	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/site/creator"
 	"github.com/auracp/auracp/internal/store"
-	"github.com/auracp/auracp/internal/webserver"
 	"github.com/auracp/auracp/internal/wpinstall"
 )
 
-// createSiteViaNewPipeline mirrors site.Manager.Create but goes through
-// internal/site/creator. Returns the persisted store.Site or an error.
+// createSiteViaNewPipeline builds a creator.Spec from the API input
+// and runs the full create pipeline. Returns the persisted store.Site
+// or an error.
 //
-// The legacy spec is taken as input for shape-compat with the existing
-// handler — only the relevant fields are read. Once the legacy path is
-// retired (v0.2.49), this signature will change to take a creator.Spec
-// directly and the API handler will build that instead.
-func (s *Server) createSiteViaNewPipeline(ctx context.Context, in createSiteInput, legacy site.Spec) (store.Site, error) {
-	// 1. Build creator.Spec from the API input. Every site type field
-	// is mapped here so the new pipeline never has to look at the
-	// legacy site.Spec — they're two distinct shapes that happen to
-	// share most fields.
+// v0.2.52: legacy site.Spec is gone; the WP DB creds the handler
+// generated (createSiteInput.WPDBName/User/Pass — `json:"-"` fields)
+// flow straight into creator.Spec.
+func (s *Server) createSiteViaNewPipeline(ctx context.Context, in createSiteInput) (store.Site, error) {
+	// 1. Build creator.Spec from the API input.
 	cspec := &creator.Spec{
 		Type:         in.Type,
 		Domain:       in.Domain,
@@ -66,14 +62,14 @@ func (s *Server) createSiteViaNewPipeline(ctx context.Context, in createSiteInpu
 		UsePM2:       in.PM2,
 		Module:       in.Module,
 		Upstream:     in.Upstream,
-		WPInstall:    legacy.WPInstall,
-		WPDBName:     legacy.WPDBName,
-		WPDBUser:     legacy.WPDBUser,
-		WPDBPass:     legacy.WPDBPass,
-		WPTitle:      legacy.WPTitle,
-		WPAdminUser:  legacy.WPAdminUser,
-		WPAdminPass:  legacy.WPAdminPass,
-		WPAdminEmail: legacy.WPAdminEmail,
+		WPInstall:    in.WPInstall,
+		WPDBName:     in.WPDBName,
+		WPDBUser:     in.WPDBUser,
+		WPDBPass:     in.WPDBPass,
+		WPTitle:      in.WPTitle,
+		WPAdminUser:  in.WPAdminUser,
+		WPAdminPass:  in.WPAdminPass,
+		WPAdminEmail: in.WPAdminEmail,
 	}
 
 	// 2. Run the pipeline. Preflight + ordered steps + smoke probe.
@@ -168,42 +164,24 @@ func (s *Server) createSiteViaNewPipeline(ctx context.Context, in createSiteInpu
 // we re-render the vhost so the `ssl_certificate` directives are filled
 // in (the initial render had them empty — HTTP-only fallback).
 //
-// Same pattern as site.Manager.Create. Extracted here so the new
-// pipeline doesn't depend on the legacy site package's goroutine.
+// v0.2.52: now uses creator.RunReapply (which reads store state +
+// detects cert files on disk) instead of the legacy webserver.Apply.
+// No more dual-renderer surface; the new pipeline owns every vhost
+// write across the entire site lifecycle.
 func (s *Server) issueCertAndReapply(rec store.Site) {
 	bg := context.Background()
 	if err := s.acme.EnsureCert(bg, rec.Domain); err != nil {
 		log.Printf("site %s: initial cert issuance failed: %v", rec.Domain, err)
 		return
 	}
-	// Re-render the vhost with the new cert paths. We go through the
-	// LEGACY webserver.Apply for now — once internal/site/creator has
-	// a Reapply() entry point that mirrors RunCreate without the user
-	// creation step, this drops the legacy dependency. Tracked as part
-	// of the v0.2.49 cleanup.
-	cert, _ := s.store.Certificate(rec.Domain)
-	cfg, _ := s.store.SiteConfig(rec.Domain)
-	wsSpec := webserver.Spec{
-		Type:      rec.Type,
-		Domain:    rec.Domain,
-		User:      rec.SiteUser,
-		Root:      rec.RootPath,
-		Upstream:  rec.Upstream,
-		PHPVer:    rec.PHPVersion,
-		Cache:     cfg["cache"] == "true",
-		CacheTTL:  cfg["cache_ttl"],
-		BlockBots: cfg["block_bots"] == "true",
-		Override:  cfg["vhost_override"],
+	deps := &creator.Deps{
+		R:     s.runner,
+		Php:   s.php,
+		Rt:    runtime.New(s.runner),
+		Node:  s.node,
+		Store: s.store,
 	}
-	if cfg["basic_auth"] == "true" {
-		wsSpec.BasicAuthUser = cfg["basic_auth_user"]
-		wsSpec.BasicAuthHash = cfg["basic_auth_hash"]
-	}
-	if cert.CertPath.Valid {
-		wsSpec.CertPath = cert.CertPath.String
-		wsSpec.KeyPath = cert.KeyPath.String
-	}
-	if err := s.web.Apply(bg, wsSpec); err != nil {
+	if err := creator.RunReapply(bg, rec.Domain, deps); err != nil {
 		log.Printf("site %s: vhost re-render after cert: %v", rec.Domain, err)
 	}
 }
@@ -257,6 +235,22 @@ func (s *Server) deleteSiteViaNewPipeline(ctx context.Context, domain string) er
 	}, domain)
 }
 
+// reapplyRuntime is the API-layer helper that builds the creator.Deps
+// once and dispatches to creator.RunReapplyRuntime. Avoids repeating
+// the Deps boilerplate at every call site (4 of them across
+// noderuntime.go + phpruntime.go).
+//
+// v0.2.52: replaces every s.sites.ReapplyRuntime call.
+func (s *Server) reapplyRuntime(ctx context.Context, domain string) error {
+	return creator.RunReapplyRuntime(ctx, domain, &creator.Deps{
+		R:     s.runner,
+		Php:   s.php,
+		Rt:    runtime.New(s.runner),
+		Node:  s.node,
+		Store: s.store,
+	})
+}
+
 // creatorAppLabel returns the UI label for a freshly-created site.
 // Mirrors site.appLabel — duplicated here so this file doesn't import
 // the legacy site package's private helper.
@@ -281,6 +275,11 @@ func creatorAppLabel(siteType, phpVer string) string {
 // createSiteInput is the request body shape declared inside the
 // createSite handler. Lifted here as a named type so this file can
 // reference it cleanly.
+//
+// v0.2.52: the WP DB credentials computed by the createSite handler
+// (DBName/DBUser/DBPass) live on this struct as panel-internal fields
+// (`json:"-"`) so the handler can hand the whole input straight to
+// createSiteViaNewPipeline without the now-deleted site.Spec carrier.
 type createSiteInput struct {
 	Type        string `json:"type"`
 	Domain      string `json:"domain"`
@@ -298,4 +297,10 @@ type createSiteInput struct {
 	WPAdminUser  string `json:"wpAdminUser"`
 	WPAdminPass  string `json:"wpAdminPass"`
 	WPAdminEmail string `json:"wpAdminEmail"`
+	// Panel-internal — populated by createSite from auto-generated DB
+	// creds before the pipeline runs. Never deserialized from the API
+	// request body (`json:"-"`).
+	WPDBName string `json:"-"`
+	WPDBUser string `json:"-"`
+	WPDBPass string `json:"-"`
 }

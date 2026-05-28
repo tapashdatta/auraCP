@@ -22,7 +22,6 @@ import (
 	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
-	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/updater"
@@ -32,7 +31,8 @@ import (
 
 type Server struct {
 	store        *store.Store
-	sites        *site.Manager
+	// v0.2.52: site.Manager is gone. Every former m.sites.X call now
+	// goes through internal/site/creator (Create/Delete/Reapply/ReapplyRuntime).
 	dbs          *db.Manager
 	cron         *cron.Manager
 	backups      *backup.Manager
@@ -49,7 +49,6 @@ type Server struct {
 
 // Deps bundles the managers the API needs.
 type Deps struct {
-	Sites        *site.Manager
 	DBs          *db.Manager
 	Cron         *cron.Manager
 	Backups      *backup.Manager
@@ -66,7 +65,7 @@ type Deps struct {
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, s *store.Store, d Deps) {
-	srv := &Server{store: s, sites: d.Sites, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
+	srv := &Server{store: s, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
 		web: d.Web, osu: d.OS, node: d.Node, php: d.PHP, acme: d.ACME, updater: d.Updater,
 		secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
 
@@ -251,16 +250,9 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	spec := site.Spec{
-		Type: in.Type, Domain: in.Domain, User: in.SiteUser, Password: in.Password,
-		PHPVer: in.PHPVersion, NodeVer: in.NodeVersion, UsePM2: in.PM2,
-		StartFile: in.StartFile, Module: in.Module,
-		Upstream: in.Upstream,
-	}
-
-	// v0.2.34: WordPress auto-install pre-flight. We provision the DB here
-	// (so its creds land in the store regardless of whether wp-cli succeeds
-	// later) and pass them into site.Create which runs the wp-cli steps.
+	// v0.2.34: WordPress auto-install pre-flight. Provision the DB here
+	// (so its creds land in the store regardless of whether wp-cli
+	// succeeds later); the pipeline consumes them via createSiteInput.
 	if in.Type == "wordpress" && in.WPInstall {
 		if !wpinstall.Available() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -303,32 +295,16 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		if in.WPTitle == "" {
 			in.WPTitle = in.Domain
 		}
-		spec.WPInstall = true
-		spec.WPDBName = dbName
-		spec.WPDBUser = dbUser
-		spec.WPDBPass = dbPass
-		spec.WPTitle = in.WPTitle
-		spec.WPAdminUser = in.WPAdminUser
-		spec.WPAdminPass = in.WPAdminPass
-		spec.WPAdminEmail = in.WPAdminEmail
+		in.WPDBName = dbName
+		in.WPDBUser = dbUser
+		in.WPDBPass = dbPass
 	}
 
-	// v0.2.48 feature gate: route through the new creator.RunCreate
-	// pipeline when AURACP_USE_NEW_CREATOR=1. All 5 site types are
-	// ported (php / wordpress / nodejs / python / static / reverseproxy).
-	// Flipping the env var off is a clean fallback — the legacy
-	// site.Manager.Create is ABI-compatible and unchanged.
-	//
-	// The legacy `s.sites.Create` call disappears in v0.2.49 once we've
-	// burned in the new path. Until then this branch is the single
-	// revert hook.
-	var rec store.Site
-	var err error
-	if os.Getenv("AURACP_USE_NEW_CREATOR") == "1" {
-		rec, err = s.createSiteViaNewPipeline(r.Context(), in, spec)
-	} else {
-		rec, err = s.sites.Create(r.Context(), spec)
-	}
+	// v0.2.52: single pipeline. The env-flag dual path is gone; the
+	// legacy site.Manager.Create + Spec carrier are gone too. The
+	// createSiteInput goes straight into createSiteViaNewPipeline,
+	// which builds a creator.Spec internally.
+	rec, err := s.createSiteViaNewPipeline(r.Context(), in)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -343,15 +319,15 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		"app": rec.App, "root": rec.RootPath, "status": rec.Status,
 		"statusText": rec.StatusText,
 	}
-	if spec.WPInstall {
+	if in.WPInstall {
 		resp["wpInstall"] = map[string]any{
-			"adminUser":  spec.WPAdminUser,
-			"adminPass":  spec.WPAdminPass,
-			"adminEmail": spec.WPAdminEmail,
-			"loginUrl":   "https://" + spec.Domain + "/wp-admin/",
-			"dbName":     spec.WPDBName,
-			"dbUser":     spec.WPDBUser,
-			"dbPass":     spec.WPDBPass,
+			"adminUser":  in.WPAdminUser,
+			"adminPass":  in.WPAdminPass,
+			"adminEmail": in.WPAdminEmail,
+			"loginUrl":   "https://" + in.Domain + "/wp-admin/",
+			"dbName":     in.WPDBName,
+			"dbUser":     in.WPDBUser,
+			"dbPass":     in.WPDBPass,
 		}
 	}
 	writeJSON(w, http.StatusCreated, resp)
@@ -359,16 +335,10 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
-	// v0.2.48 feature gate: same env var as createSite. New path runs
-	// the cross-PHP-version pool sweep + log every step structurally
-	// so post-mortems don't need filesystem archaeology.
-	var err error
-	if os.Getenv("AURACP_USE_NEW_CREATOR") == "1" {
-		err = s.deleteSiteViaNewPipeline(r.Context(), domain)
-	} else {
-		err = s.sites.Delete(r.Context(), domain)
-	}
-	if err != nil {
+	// v0.2.52: env-flag dual path retired. Always the new pipeline
+	// (cross-PHP-version pool sweep, comprehensive teardown via
+	// site.Teardown, structured per-step slog).
+	if err := s.deleteSiteViaNewPipeline(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

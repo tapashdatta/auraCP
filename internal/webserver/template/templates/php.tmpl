@@ -7,6 +7,9 @@
 # HTTPS once a cert is issued (the redirect lives in {{settings}} or is
 # left to the operator — sites work plaintext on :80 while the first
 # ACME issuance is in flight).
+
+{{bot_map}}
+
 server {
     listen 80;
     listen [::]:80;
@@ -41,6 +44,10 @@ server {
     server_tokens off;
     client_max_body_size 64m;
 
+    {{bot_check}}
+    {{basic_auth}}
+    {{cache_skip}}
+
     # Deny dotfiles except the ACME challenge.
     location ~ /\.(?!well-known) { deny all; }
 
@@ -60,5 +67,6 @@ server {
         fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_param HTTPS $https if_not_empty;
         fastcgi_read_timeout 120s;
+        {{fastcgi_cache}}
     }
 }

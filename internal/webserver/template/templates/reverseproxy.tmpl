@@ -1,5 +1,8 @@
 # auraCP-managed reverse-proxy site — every request goes to the
 # operator-supplied upstream URL.  No docroot beyond the ACME path.
+
+{{bot_map}}
+
 server {
     listen 80;
     listen [::]:80;
@@ -28,12 +31,17 @@ server {
     server_tokens off;
     client_max_body_size 64m;
 
+    {{bot_check}}
+    {{basic_auth}}
+    {{cache_skip}}
+
     location ~ /\.(?!well-known) { deny all; }
 
     {{settings}}
 
     location / {
         {{reverse_proxy_url}}
+        {{proxy_cache}}
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

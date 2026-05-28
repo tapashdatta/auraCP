@@ -81,7 +81,7 @@ func (s *Server) setSitePM2(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.sites.ReapplyRuntime(r.Context(), domain); err != nil {
+	if err := s.reapplyRuntime(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -120,7 +120,7 @@ func (s *Server) setSiteNodeVersion(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if err := s.sites.ReapplyRuntime(r.Context(), domain); err != nil {
+	if err := s.reapplyRuntime(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

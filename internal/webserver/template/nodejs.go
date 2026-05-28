@@ -9,20 +9,25 @@ func Nodejs() *Template {
 	return &Template{
 		Type: "nodejs",
 		Processors: []processor.Func{
+			processor.BotMap,
 			processor.ServerName,
 			processor.Root,
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,
 			processor.NginxErrorLog,
+			processor.BotCheck,
+			processor.BasicAuth,
+			processor.CacheSkip,
 			processor.AppPort,
+			processor.ProxyCache, // inside location / { proxy_pass ... }
 			processor.Settings,
 		},
 	}
 }
 
 func Python() *Template {
-	t := Nodejs()
+	t := Nodejs() // Python shares the Node processor chain — same place-holders
 	t.Type = "python"
 	return t
 }

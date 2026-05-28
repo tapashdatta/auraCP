@@ -1,5 +1,8 @@
 # auraCP-managed static-HTML site — nginx serves the docroot directly.
 # No backend, no FPM, no upstream.
+
+{{bot_map}}
+
 server {
     listen 80;
     listen [::]:80;
@@ -29,6 +32,9 @@ server {
     add_header X-Content-Type-Options nosniff always;
     server_tokens off;
     client_max_body_size 64m;
+
+    {{bot_check}}
+    {{basic_auth}}
 
     location ~ /\.(?!well-known) { deny all; }
 

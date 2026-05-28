@@ -95,7 +95,7 @@ func (s *Server) setSitePHPVersion(w http.ResponseWriter, r *http.Request) {
 	}
 	// Rewriting the pool config + reloading the right fpm service happens via
 	// sites.ReapplyRuntime → phpruntime.WritePool.
-	if err := s.sites.ReapplyRuntime(r.Context(), domain); err != nil {
+	if err := s.reapplyRuntime(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -126,7 +126,7 @@ func (s *Server) setPHPSettings(w http.ResponseWriter, r *http.Request) {
 			_ = s.store.SetPHPSetting(domain, k, v)
 		}
 	}
-	if err := s.sites.ReapplyRuntime(r.Context(), domain); err != nil {
+	if err := s.reapplyRuntime(r.Context(), domain); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

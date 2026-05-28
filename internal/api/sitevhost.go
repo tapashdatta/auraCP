@@ -6,7 +6,6 @@ import (
 	"os"
 
 	"github.com/auracp/auracp/internal/paths"
-	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
 )
 
@@ -127,4 +126,3 @@ func startsWith(s, prefix string) bool {
 // Ensure store has SetSiteRoot — declared once in queries.go but referenced
 // here for compile-time clarity.
 var _ = func(_ *store.Store) {}
-var _ = site.Spec{}

@@ -22,7 +22,6 @@ import (
 	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
-	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/updater"
@@ -156,11 +155,11 @@ func main() {
 	mux := http.NewServeMux()
 	dbs := db.New(runner, st, sec)
 	api.Register(mux, st, api.Deps{
-		// v0.2.51: site.New now takes the db.Manager so the
-		// comprehensive teardown (site.Teardown) can drop every DB
-		// associated with a site on delete. Two-phase construction
-		// (dbs first, then sites) keeps the wiring straight.
-		Sites:        site.New(runner, st, node, php, ac, web, dbs),
+		// v0.2.52: site.Manager.New is gone — every site-lifecycle
+		// operation runs through internal/site/creator. cmd/auracpd's
+		// job is to construct the leaf managers (db, php, node, acme,
+		// web, runner) and pass them through Deps; the creator package
+		// composes them per-request.
 		DBs:          dbs,
 		Cron:         cron.New(runner, st),
 		Backups:      backup.New(runner, st),

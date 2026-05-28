@@ -1,5 +1,8 @@
 # auraCP-managed Node.js site — nginx reverse-proxies to the per-site
 # systemd unit on a loopback port. WebSocket upgrades handled.
+
+{{bot_map}}
+
 server {
     listen 80;
     listen [::]:80;
@@ -29,12 +32,17 @@ server {
     server_tokens off;
     client_max_body_size 64m;
 
+    {{bot_check}}
+    {{basic_auth}}
+    {{cache_skip}}
+
     location ~ /\.(?!well-known) { deny all; }
 
     {{settings}}
 
     location / {
         proxy_pass http://127.0.0.1:{{app_port}}/;
+        {{proxy_cache}}
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

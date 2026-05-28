@@ -3,6 +3,9 @@
 # the standard WP rewrite (try_files ... /index.php?$args). Same single-
 # server-block design, same FPM Unix socket, same {{settings}} escape
 # hatch for the operator.
+
+{{bot_map}}
+
 server {
     listen 80;
     listen [::]:80;
@@ -35,6 +38,10 @@ server {
     server_tokens off;
     client_max_body_size 64m;
 
+    {{bot_check}}
+    {{basic_auth}}
+    {{cache_skip}}
+
     location ~ /\.(?!well-known) { deny all; }
 
     # WP-specific hardening.
@@ -66,5 +73,6 @@ server {
         fastcgi_param PATH_INFO $fastcgi_path_info;
         fastcgi_param HTTPS $https if_not_empty;
         fastcgi_read_timeout 300s;
+        {{fastcgi_cache}}
     }
 }

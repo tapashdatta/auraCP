@@ -9,56 +9,47 @@ import (
 	"time"
 
 	"github.com/auracp/auracp/internal/auth"
+	"github.com/auracp/auracp/internal/runtime"
+	"github.com/auracp/auracp/internal/site/creator"
 	"github.com/auracp/auracp/internal/store"
-	"github.com/auracp/auracp/internal/webserver"
 )
 
 const cfTokenKey = "cloudflare_token_enc"
 
 // reapplyWeb re-renders a site's nginx vhost from its stored flags and reloads.
 //
-// v0.2.45: also reads the certificates table and passes CertPath / KeyPath
-// into the Spec. The vhost template only emits a `listen 443 ssl` block
-// when those fields are set. Without this, every save in Settings (cache,
-// security, basic-auth toggle) silently dropped the HTTPS server block,
-// even when a valid cert had already been issued.
+// v0.2.52: migrated to creator.RunReapply, which routes the render
+// through the same Template + Processor chain as RunCreate. Settings
+// edits now use the structurally drift-impossible path; previously a
+// site that had been created cleanly could still drift on the very
+// next Save in Settings because this handler used the legacy
+// webserver.Manager.Apply renderer.
+//
+// Cloudflare token (cfTokenKey) is still loaded here — it's a hint
+// the ACME layer consumes for DNS-01 issuance, NOT a thing the
+// renderer emits into nginx config. Reading it here keeps the
+// settings-save semantics identical to pre-v0.2.52.
 func (s *Server) reapplyWeb(ctx context.Context, domain string) error {
-	st, err := s.store.SiteByDomain(domain)
-	if err != nil {
-		return err
-	}
-	cfg, err := s.store.SiteConfig(domain)
-	if err != nil {
-		return err
-	}
-	spec := webserver.Spec{
-		Type: st.Type, Domain: domain, User: st.SiteUser, Root: st.RootPath, Upstream: st.Upstream,
-		PHPVer: st.PHPVersion,
-		Cache: cfg["cache"] == "true", CacheTTL: cfg["cache_ttl"],
-		BlockBots: cfg["block_bots"] == "true",
-		Override:  cfg["vhost_override"],   // verbatim vhost from the in-panel editor
-	}
-	if cfg["basic_auth"] == "true" {
-		spec.BasicAuthUser = cfg["basic_auth_user"]
-		spec.BasicAuthHash = cfg["basic_auth_hash"]
-	}
+	// Touch the CF-token store so any "cloudflare_dns" toggle change
+	// is committed before we proceed (downstream ACME picks it up).
+	cfg, _ := s.store.SiteConfig(domain)
 	if cfg["cloudflare_dns"] == "true" {
 		if enc, ok := s.store.GetSetting(cfTokenKey); ok {
-			if tok, derr := s.secret.Decrypt(enc); derr == nil {
-				spec.CloudflareTok = tok
+			// Decrypt validation — surfaces a clean error if the
+			// stored token can't be decrypted (corruption, key rotation).
+			if _, derr := s.secret.Decrypt(enc); derr != nil {
+				return fmt.Errorf("cloudflare token unreadable: %w", derr)
 			}
 		}
 	}
-	// v0.2.45: include the cert paths so the HTTPS server block is emitted.
-	if cert, ok := s.store.Certificate(domain); ok {
-		if cert.CertPath.Valid {
-			spec.CertPath = cert.CertPath.String
-		}
-		if cert.KeyPath.Valid {
-			spec.KeyPath = cert.KeyPath.String
-		}
+	deps := &creator.Deps{
+		R:     s.runner,
+		Php:   s.php,
+		Rt:    runtime.New(s.runner),
+		Node:  s.node,
+		Store: s.store,
 	}
-	return s.web.Apply(ctx, spec)
+	return creator.RunReapply(ctx, domain, deps)
 }
 
 // GET /api/sites/{domain}/config — flags only (no secrets).

@@ -17,14 +17,19 @@ func Php() *Template {
 	return &Template{
 		Type: "php",
 		Processors: []processor.Func{
+			processor.BotMap, // before server{} block
 			processor.ServerName,
 			processor.Root,
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,
 			processor.NginxErrorLog,
+			processor.BotCheck,    // inside server{} block
+			processor.BasicAuth,   // inside server{} block
+			processor.CacheSkip,   // inside server{} block (drives bypass var)
 			processor.PhpFpmSocket,
-			processor.Settings, // last — see file header
+			processor.FastcgiCache, // inside location ~ \.php$
+			processor.Settings,     // last — see file header
 		},
 	}
 }

@@ -68,6 +68,17 @@ type Spec struct {
 	WPAdminUser  string
 	WPAdminPass  string
 	WPAdminEmail string
+
+	// ─── Feature toggles (v0.2.52: feature parity with legacy renderer) ───
+	// Populated by RunReapply from store.SiteConfig rows when an
+	// operator saves Settings. On initial RunCreate these are all
+	// zero / false — the freshly-created site has feature toggles
+	// off until the operator turns them on in the panel.
+	Cache         bool   // emit fastcgi_cache (PHP) / proxy_cache (Node/Python) directives
+	CacheTTL      string // e.g. "600s"; defaults rendered upstream if empty
+	BlockBots     bool   // emit a User-Agent deny-list at the top of the vhost
+	BasicAuthUser string // shown verbatim in the rendered htpasswd file
+	BasicAuthHash string // bcrypt-hashed password; written to htpasswd by RunReapply
 }
 
 // RenderContext builds the processor.SiteContext that the renderer needs.
@@ -78,14 +89,19 @@ type Spec struct {
 // files.
 func (s *Spec) RenderContext(certPath, keyPath string) *processor.SiteContext {
 	ctx := &processor.SiteContext{
-		Type:     s.Type,
-		Domain:   s.Domain,
-		User:     s.User,
-		DocRoot:  paths.DocRoot(s.User, s.Domain),
-		LogDir:   paths.LogDir(s.User),
-		CertPath: certPath,
-		KeyPath:  keyPath,
-		Settings: s.Settings,
+		Type:          s.Type,
+		Domain:        s.Domain,
+		User:          s.User,
+		DocRoot:       paths.DocRoot(s.User, s.Domain),
+		LogDir:        paths.LogDir(s.User),
+		CertPath:      certPath,
+		KeyPath:       keyPath,
+		Settings:      s.Settings,
+		Cache:         s.Cache,
+		CacheTTL:      s.CacheTTL,
+		BlockBots:     s.BlockBots,
+		BasicAuthUser: s.BasicAuthUser,
+		BasicAuthFile: paths.HTPasswdFile(s.Domain),
 	}
 	switch s.Type {
 	case "php", "wordpress":
