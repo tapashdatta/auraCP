@@ -25,28 +25,30 @@ type Server struct {
 	dbs     *db.Manager
 	cron    *cron.Manager
 	backups *backup.Manager
-	web     *webserver.Manager
-	osu     *osuser.Manager
-	secret  *secret.Box
-	runner  *system.Runner
+	web          *webserver.Manager
+	osu          *osuser.Manager
+	secret       *secret.Box
+	runner       *system.Runner
+	panelBackend string
 }
 
 // Deps bundles the managers the API needs.
 type Deps struct {
-	Sites   *site.Manager
-	DBs     *db.Manager
-	Cron    *cron.Manager
-	Backups *backup.Manager
-	Web     *webserver.Manager
-	OS      *osuser.Manager
-	Secret  *secret.Box
-	Runner  *system.Runner
+	Sites        *site.Manager
+	DBs          *db.Manager
+	Cron         *cron.Manager
+	Backups      *backup.Manager
+	Web          *webserver.Manager
+	OS           *osuser.Manager
+	Secret       *secret.Box
+	Runner       *system.Runner
+	PanelBackend string
 }
 
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	srv := &Server{store: s, sites: d.Sites, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
-		web: d.Web, osu: d.OS, secret: d.Secret, runner: d.Runner}
+		web: d.Web, osu: d.OS, secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
 
 	// public
 	mux.HandleFunc("GET /api/health", srv.health)
@@ -99,6 +101,8 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("PUT /api/settings", srv.requirePerm("settings", "update", srv.putSettings))
 	mux.Handle("GET /api/cloudflare", srv.requirePerm("settings", "read", srv.getCloudflare))
 	mux.Handle("POST /api/cloudflare", srv.requirePerm("settings", "update", srv.setCloudflare))
+	mux.Handle("GET /api/settings/panel-domain", srv.requirePerm("settings", "read", srv.getPanelDomain))
+	mux.Handle("POST /api/settings/panel-domain", srv.requirePerm("settings", "update", srv.setPanelDomain))
 	mux.Handle("GET /api/backups/remote", srv.requirePerm("settings", "read", srv.getRemoteBackup))
 	mux.Handle("POST /api/backups/remote", srv.requirePerm("settings", "update", srv.setRemoteBackup))
 	mux.Handle("GET /api/audit", srv.requireAdmin(srv.auditLog))

@@ -17,6 +17,40 @@ func (s *Server) siteSSL(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ssl.Of(r.PathValue("domain")))
 }
 
+const panelDomainKey = "panel_domain"
+
+// GET /api/settings/panel-domain
+func (s *Server) getPanelDomain(w http.ResponseWriter, r *http.Request) {
+	d, _ := s.store.GetSetting(panelDomainKey)
+	writeJSON(w, http.StatusOK, map[string]string{"domain": d})
+}
+
+// POST /api/settings/panel-domain  {domain}  (empty domain → revert to IP:port)
+func (s *Server) setPanelDomain(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Domain string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Domain == "" {
+		_ = s.store.SetSetting(panelDomainKey, "")
+		if err := s.web.RemovePanelProxy(r.Context()); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			return
+		}
+		s.audit(r, "panel.domain.clear", "")
+		writeJSON(w, http.StatusOK, map[string]string{"domain": ""})
+		return
+	}
+	if err := s.web.ApplyPanelProxy(r.Context(), in.Domain, s.panelBackend); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	_ = s.store.SetSetting(panelDomainKey, in.Domain)
+	s.audit(r, "panel.domain.set", in.Domain)
+	writeJSON(w, http.StatusOK, map[string]string{"domain": in.Domain})
+}
+
 // GET /api/backups/remote — current remote config (no secrets).
 func (s *Server) getRemoteBackup(w http.ResponseWriter, r *http.Request) {
 	_, configured := s.store.GetSetting(remoteBackupKey)

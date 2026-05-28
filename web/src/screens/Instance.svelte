@@ -7,6 +7,8 @@
   let services = $state({})
   let cf = $state({ configured: false, token: '' })
   let cfMsg = $state('')
+  let panel = $state({ domain: '', input: '' })
+  let panelMsg = $state('')
   let remote = $state({ configured: false, type: '', kind: 's3', params: '', target: '' })
   let remoteMsg = $state('')
   let audit = $state([])
@@ -22,8 +24,19 @@
     if (rb.ok) { const d = await rb.json(); remote.configured = d.configured; remote.type = d.type || '' }
     const a = await apiFetch('/api/audit')
     if (a.ok) audit = await a.json()
+    const pd = await apiFetch('/api/settings/panel-domain')
+    if (pd.ok) { panel.domain = (await pd.json()).domain || ''; panel.input = panel.domain }
   }
   onMount(load)
+
+  async function savePanelDomain() {
+    panelMsg = 'Applying… (Caddy will obtain the certificate)'
+    const r = await apiFetch('/api/settings/panel-domain', { method: 'POST', body: JSON.stringify({ domain: panel.input.trim() }) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { panelMsg = d.error || 'Failed'; return }
+    panel.domain = d.domain
+    panelMsg = d.domain ? `Panel now fronted at https://${d.domain}` : 'Reverted to IP access.'
+  }
 
   async function saveCf() {
     const r = await apiFetch('/api/cloudflare', { method: 'POST', body: JSON.stringify({ token: cf.token }) })
@@ -79,6 +92,17 @@
         <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}></div>
       <button class="btn btn-primary" onclick={saveCf} disabled={!cf.token}>Save Token</button>
       {#if cfMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{cfMsg}</span>{/if}
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Access the panel at a domain (Caddy gets a real SSL cert; no port needed)</p></div>
+    <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
+    <div class="section-b">
+      <div class="field"><label>Domain / subdomain <span class="hint">point its DNS A record to this server first</span></label>
+        <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com"></div>
+      <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
+      {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
+      {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
     </div>
   </div>
 

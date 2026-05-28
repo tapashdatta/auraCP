@@ -109,6 +109,42 @@ func (m *Manager) Remove(ctx context.Context, domain string) error {
 	return m.Reload(ctx)
 }
 
+// ApplyPanelProxy fronts the control panel under a domain: Caddy obtains a real
+// Let's Encrypt cert for <domain> on :443 and reverse-proxies to the local
+// auracpd. Writing this (with Caddy running + DNS pointed here) triggers
+// automatic certificate issuance.
+func (m *Manager) ApplyPanelProxy(ctx context.Context, domain, backend string) error {
+	if err := validate.Domain(domain); err != nil {
+		return err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s {\n\tencode zstd br gzip\n", domain)
+	if strings.HasPrefix(backend, "https://") {
+		// loopback to auracpd's self-signed TLS — skip-verify is safe on 127.0.0.1
+		fmt.Fprintf(&b, "\treverse_proxy %s {\n\t\ttransport http {\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n", backend)
+	} else {
+		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend)
+	}
+	b.WriteString("}\n")
+	if !m.R.DryRun {
+		if err := os.MkdirAll(paths.CaddySitesDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(paths.PanelCaddyFile(), []byte(b.String()), 0o644); err != nil {
+			return err
+		}
+	}
+	return m.Reload(ctx)
+}
+
+// RemovePanelProxy stops fronting the panel under a domain (back to IP:port).
+func (m *Manager) RemovePanelProxy(ctx context.Context) error {
+	if !m.R.DryRun {
+		_ = os.Remove(paths.PanelCaddyFile())
+	}
+	return m.Reload(ctx)
+}
+
 // Reload validates the config, then asks Caddy to reload it gracefully.
 func (m *Manager) Reload(ctx context.Context) error {
 	if _, err := m.R.Run(ctx, "caddy", "validate", "--config", "/etc/caddy/Caddyfile"); err != nil {

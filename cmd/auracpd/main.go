@@ -3,8 +3,10 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"net"
 	"net/http"
 	"runtime"
 	"time"
@@ -29,6 +31,7 @@ func main() {
 	provision := flag.Bool("provision", runtime.GOOS == "linux",
 		"actually provision the OS (users/services/caddy); off = record-only (dev)")
 	useTLS := flag.Bool("tls", true, "serve HTTPS with a self-signed cert (panel.crt/key in -etc); off = plain HTTP")
+	panelDomain := flag.String("panel-domain", "", "front the panel under this domain via Caddy (real Let's Encrypt cert on :443)")
 	flag.Parse()
 
 	st, err := store.Open(*dbPath)
@@ -48,16 +51,44 @@ func main() {
 		log.Printf("provisioning DISABLED (record-only mode); OS commands are logged, not run")
 	}
 
+	// Loopback URL Caddy proxies to when the panel is fronted under a domain.
+	scheme := "https"
+	if !*useTLS {
+		scheme = "http"
+	}
+	_, port, err := net.SplitHostPort(*addr)
+	if err != nil || port == "" {
+		port = "8443"
+	}
+	panelBackend := scheme + "://127.0.0.1:" + port
+
+	web := webserver.New(runner)
+
+	// Reconcile the panel domain: persist the flag (if given), then (re)apply the
+	// Caddy front for whatever domain is configured — this triggers Caddy's
+	// automatic Let's Encrypt issuance once DNS points here.
+	if *panelDomain != "" {
+		_ = st.SetSetting("panel_domain", *panelDomain)
+	}
+	if d, ok := st.GetSetting("panel_domain"); ok && d != "" {
+		if err := web.ApplyPanelProxy(context.Background(), d, panelBackend); err != nil {
+			log.Printf("panel domain %q: %v", d, err)
+		} else {
+			log.Printf("panel fronted at https://%s (Caddy will obtain its certificate)", d)
+		}
+	}
+
 	mux := http.NewServeMux()
 	api.Register(mux, st, api.Deps{
-		Sites:   site.New(runner, st),
-		DBs:     db.New(runner, st, sec),
-		Cron:    cron.New(runner, st),
-		Backups: backup.New(runner, st),
-		Web:     webserver.New(runner),
-		OS:      osuser.New(runner),
-		Secret:  sec,
-		Runner:  runner,
+		Sites:        site.New(runner, st),
+		DBs:          db.New(runner, st, sec),
+		Cron:         cron.New(runner, st),
+		Backups:      backup.New(runner, st),
+		Web:          web,
+		OS:           osuser.New(runner),
+		Secret:       sec,
+		Runner:       runner,
+		PanelBackend: panelBackend,
 	}) // /api/*
 	mux.Handle("/", webui.Handler()) // embedded SPA (catch-all)
 

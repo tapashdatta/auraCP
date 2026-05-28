@@ -16,6 +16,7 @@
 #   --php-version=8.3|8.4|8.5         --python=yes|no     --redis=yes|no
 #   --typesense=yes|no                --docker=yes|no
 #   --security=yes|no                 --port=8443
+#   --panel-domain=panel.example.com  (front the panel; Caddy issues its SSL cert)
 #
 # Or via env: AURACP_MARIADB, AURACP_POSTGRES, AURACP_NODE, AURACP_PHP,
 #   AURACP_PHP_VERSION, AURACP_PYTHON, AURACP_REDIS, AURACP_SECURITY, AURACP_PORT
@@ -27,6 +28,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 AURACP_VERSION="0.1.0"
 PANEL_PORT="${AURACP_PORT:-8443}"
+PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
 
 ASSUME_YES=0
@@ -138,6 +140,7 @@ parse_args() {
       --dry-run) DRY_RUN=1 ;;
       --non-interactive) INTERACTIVE=0 ;;
       --port=*) PANEL_PORT="${arg#*=}" ;;
+      --panel-domain=*) PANEL_DOMAIN="${arg#*=}" ;;
       --db=*)
         sawSelection=1
         case "${arg#*=}" in
@@ -178,6 +181,9 @@ select_components() {
     select_whiptail
   else
     select_readline
+  fi
+  if [ -z "$PANEL_DOMAIN" ]; then
+    read -r -p "  Panel domain (optional; blank = access via IP:${PANEL_PORT}): " PANEL_DOMAIN < /dev/tty || true
   fi
 }
 
@@ -263,8 +269,13 @@ print_plan() {
   printf '  %-22s %s\n' "Typesense" "$(mark "$OPT_TYPESENSE")"
   printf '  %-22s %s\n' "Docker" "$(mark "$OPT_DOCKER")"
   printf '  %-22s %s\n' "UFW + fail2ban" "$(mark "$OPT_SECURITY")"
+  printf '  %-22s %s\n' "Panel domain" "${PANEL_DOMAIN:-<none — IP access>}"
   printf '%s\n' "${C_DIM}────────────────────────────────────────────${C_RESET}"
-  printf '  panel: %s\n\n' "https://<server-ip>:${PANEL_PORT}"
+  if [ -n "$PANEL_DOMAIN" ]; then
+    printf '  panel: %s\n\n' "https://${PANEL_DOMAIN}"
+  else
+    printf '  panel: %s\n\n' "https://<server-ip>:${PANEL_PORT}"
+  fi
 }
 mark() { yesno "$1" && echo "${C_GRN}install${C_RESET}" || echo "${C_DIM}skip${C_RESET}"; }
 
@@ -439,13 +450,37 @@ EOF
   systemctl enable --now "${name}"
 }
 
+# setup_panel_domain runs LAST — after Caddy and everything else is ready — so
+# Caddy can immediately obtain the Let's Encrypt certificate for the panel domain.
+setup_panel_domain() {
+  [ -n "$PANEL_DOMAIN" ] || return 0
+  msg "Configuring panel domain ${PANEL_DOMAIN} (Caddy will issue its Let's Encrypt cert)…"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '%s\n' "${C_DIM}[dry-run]${C_RESET} systemd drop-in adds -panel-domain=${PANEL_DOMAIN}; restart auracpd"
+    return
+  fi
+  mkdir -p /etc/systemd/system/auracpd.service.d
+  cat > /etc/systemd/system/auracpd.service.d/panel-domain.conf <<EOF
+[Service]
+ExecStart=
+ExecStart=${PREFIX}/bin/auracpd -addr :${PANEL_PORT} -db ${DATA_DIR}/auracp.db -etc ${ETC_DIR} -panel-domain ${PANEL_DOMAIN}
+EOF
+  systemctl daemon-reload
+  systemctl restart auracpd
+  ok "Panel domain set. Point a DNS A record for ${PANEL_DOMAIN} at this server; Caddy issues the cert automatically."
+}
+
 finalize() {
   echo
   ok "auraCP installation complete."
   echo
-  printf '%s\n' "  Open ${C_B}https://<server-ip>:${PANEL_PORT}${C_RESET} and create your admin account (first-run setup)."
-  printf '%s\n' "  ${C_DIM}Self-signed certificate — accept the browser warning, or replace${C_RESET}"
-  printf '%s\n' "  ${C_DIM}/etc/auracp/panel.{crt,key} with your own.${C_RESET}"
+  if [ -n "$PANEL_DOMAIN" ]; then
+    printf '%s\n' "  Open ${C_B}https://${PANEL_DOMAIN}${C_RESET} and create your admin account (first-run setup)."
+    printf '%s\n' "  ${C_DIM}Caddy issues a real Let's Encrypt cert once ${PANEL_DOMAIN} resolves to this server.${C_RESET}"
+  else
+    printf '%s\n' "  Open ${C_B}https://<server-ip>:${PANEL_PORT}${C_RESET} and create your admin account (first-run setup)."
+    printf '%s\n' "  ${C_DIM}Self-signed cert — accept the browser warning, or set a Panel Domain in Settings.${C_RESET}"
+  fi
   echo
 }
 
@@ -473,6 +508,7 @@ main() {
   yesno "$OPT_DOCKER"   && install_docker
   yesno "$OPT_SECURITY" && install_security
   install_auracpd
+  setup_panel_domain
   finalize
 }
 
