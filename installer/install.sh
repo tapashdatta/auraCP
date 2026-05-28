@@ -14,6 +14,8 @@
 # Selection flags (override defaults; imply --non-interactive when given):
 #   --db=mariadb|postgres|both|none   --node=yes|no      --php=yes|no
 #   --php-version=8.3|8.4|8.5         --python=yes|no     --redis=yes|no
+#   --mariadb-version=10.11|11.4|11.8 --postgres-version=15|16|17
+#   --node-version=20|22|24
 #   --typesense=yes|no                --docker=yes|no
 #   --security=yes|no                 --port=8443
 #   --panel-domain=panel.example.com  (front the panel; Caddy issues its SSL cert)
@@ -26,7 +28,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.4"
+AURACP_VERSION="0.1.5"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -48,11 +50,17 @@ OPT_DOCKER="${AURACP_DOCKER:-no}"
 OPT_SECURITY="${AURACP_SECURITY:-yes}"  # UFW firewall + fail2ban
 TYPESENSE_VERSION="${AURACP_TYPESENSE_VERSION:-27.1}"
 
-# paths
+# Per-engine version defaults — overridable via flags / env / TUI.
+MARIADB_VERSION="${AURACP_MARIADB_VERSION:-11.8}"     # 11.8 | 11.4 | 10.11  (LTS)
+POSTGRES_VERSION="${AURACP_POSTGRES_VERSION:-17}"     # 17 | 16 | 15
+
+# paths + detected OS (filled in by preflight)
 PREFIX="/opt/auracp"
 DATA_DIR="/var/lib/auracp"
 ETC_DIR="/etc/auracp"
 CADDY_ARCH=""
+OS_ID=""           # debian | ubuntu
+OS_CODENAME=""     # trixie | bookworm | noble | jammy …
 
 # ──────────────────────────────────────────────────────────────────────────
 # ui helpers
@@ -96,6 +104,7 @@ preflight() {
     . /etc/os-release
     os_id="${ID:-}"; os_ver="${VERSION_ID:-}"; codename="${VERSION_CODENAME:-}"
   fi
+  OS_ID="$os_id"; OS_CODENAME="$codename"
   case "$os_id" in
     debian)
       case "$os_ver" in
@@ -167,6 +176,9 @@ parse_args() {
       --node=*)        sawSelection=1; OPT_NODE="${arg#*=}" ;;
       --php=*)         sawSelection=1; OPT_PHP="${arg#*=}" ;;
       --php-version=*) PHP_VERSION="${arg#*=}" ;;
+      --mariadb-version=*)  MARIADB_VERSION="${arg#*=}" ;;
+      --postgres-version=*) POSTGRES_VERSION="${arg#*=}" ;;
+      --node-version=*)     NODE_MAJOR="${arg#*=}" ;;
       --python=*)      sawSelection=1; OPT_PYTHON="${arg#*=}" ;;
       --redis=*)       sawSelection=1; OPT_REDIS="${arg#*=}" ;;
       --typesense=*)   sawSelection=1; OPT_TYPESENSE="${arg#*=}" ;;
@@ -176,7 +188,10 @@ parse_args() {
       *) die "Unknown option: $arg (try --help)" ;;
     esac
   done
-  case "$PHP_VERSION" in 8.3|8.4|8.5) ;; *) die "--php-version must be 8.3, 8.4 or 8.5 (8.3+ only)";; esac
+  case "$PHP_VERSION"     in 8.3|8.4|8.5) ;;     *) die "--php-version must be 8.3 / 8.4 / 8.5";; esac
+  case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
+  case "$POSTGRES_VERSION" in 15|16|17) ;;       *) die "--postgres-version must be 15 / 16 / 17";; esac
+  case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
   [ "$sawSelection" -eq 1 ] && INTERACTIVE=0
   return 0
 }
@@ -244,6 +259,35 @@ select_whiptail() {
       8.3 "PHP 8.3" "$(req "$PHP_VERSION" 8.3)" \
       3>&1 1>&2 2>&3 < /dev/tty) || PHP_VERSION=8.4
   fi
+  if yesno "$OPT_MARIADB"; then
+    MARIADB_VERSION=$(whiptail --title "MariaDB version" --radiolist \
+      "Pick a MariaDB LTS to install (from mariadb.org repo):" 12 60 3 \
+      11.8  "11.8 LTS (current)"  "$(req "$MARIADB_VERSION" 11.8)" \
+      11.4  "11.4 LTS"            "$(req "$MARIADB_VERSION" 11.4)" \
+      10.11 "10.11 LTS (oldest supported)" "$(req "$MARIADB_VERSION" 10.11)" \
+      3>&1 1>&2 2>&3 < /dev/tty) || MARIADB_VERSION=11.8
+  fi
+  if yesno "$OPT_POSTGRES"; then
+    POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
+      "Pick a PostgreSQL major (from apt.postgresql.org):" 12 60 3 \
+      17 "PostgreSQL 17 (current)" "$(req "$POSTGRES_VERSION" 17)" \
+      16 "PostgreSQL 16"           "$(req "$POSTGRES_VERSION" 16)" \
+      15 "PostgreSQL 15"           "$(req "$POSTGRES_VERSION" 15)" \
+      3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION=17
+  fi
+  if yesno "$OPT_NODE"; then
+    NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
+      "Pick the system-wide Node.js LTS (from NodeSource):" 12 60 3 \
+      24 "Node 24 LTS (recommended)" "$(req "$NODE_MAJOR" 24)" \
+      22 "Node 22 LTS"               "$(req "$NODE_MAJOR" 22)" \
+      20 "Node 20 LTS"               "$(req "$NODE_MAJOR" 20)" \
+      3>&1 1>&2 2>&3 < /dev/tty) || NODE_MAJOR=24
+  fi
+  if [ -z "$PANEL_DOMAIN" ]; then
+    PANEL_DOMAIN=$(whiptail --title "Panel domain (optional)" --inputbox \
+      "Setting a domain lets Caddy issue a real Let's Encrypt cert for the panel.\nPoint its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}." \
+      12 70 "$PANEL_DOMAIN" 3>&1 1>&2 2>&3 < /dev/tty) || PANEL_DOMAIN=""
+  fi
 }
 
 # plain-text fallback when whiptail isn't available
@@ -257,11 +301,26 @@ select_readline() {
     read -r -p "  PHP version [8.3/8.4/8.5] (${PHP_VERSION}): " v < /dev/tty || true
     case "${v:-$PHP_VERSION}" in 8.3|8.4|8.5) PHP_VERSION="${v:-$PHP_VERSION}";; esac
   fi
+  if yesno "$OPT_MARIADB"; then
+    read -r -p "  MariaDB LTS [11.8/11.4/10.11] (${MARIADB_VERSION}): " v < /dev/tty || true
+    case "${v:-$MARIADB_VERSION}" in 10.11|11.4|11.8) MARIADB_VERSION="${v:-$MARIADB_VERSION}";; esac
+  fi
+  if yesno "$OPT_POSTGRES"; then
+    read -r -p "  PostgreSQL major [17/16/15] (${POSTGRES_VERSION}): " v < /dev/tty || true
+    case "${v:-$POSTGRES_VERSION}" in 15|16|17) POSTGRES_VERSION="${v:-$POSTGRES_VERSION}";; esac
+  fi
+  if yesno "$OPT_NODE"; then
+    read -r -p "  Node.js LTS [24/22/20] (${NODE_MAJOR}): " v < /dev/tty || true
+    case "${v:-$NODE_MAJOR}" in 20|22|24) NODE_MAJOR="${v:-$NODE_MAJOR}";; esac
+  fi
   OPT_PYTHON=$(ask "Install Python 3?" "$OPT_PYTHON")
   OPT_REDIS=$(ask "Install Redis?" "$OPT_REDIS")
   OPT_TYPESENSE=$(ask "Install Typesense search server?" "$OPT_TYPESENSE")
   OPT_DOCKER=$(ask "Install Docker engine?" "$OPT_DOCKER")
   OPT_SECURITY=$(ask "Enable security hardening (UFW + fail2ban)?" "$OPT_SECURITY")
+  if [ -z "$PANEL_DOMAIN" ]; then
+    read -r -p "  Panel domain (optional; blank = IP:${PANEL_PORT}): " PANEL_DOMAIN < /dev/tty || true
+  fi
 }
 
 ask() { # prompt default → echoes yes/no
@@ -282,9 +341,12 @@ print_plan() {
   printf '%s\n' "${C_DIM}────────────────────────────────────────────${C_RESET}"
   printf '  %-22s %s\n' "auracpd + CLI" "${C_GRN}required${C_RESET}"
   printf '  %-22s %s\n' "Caddy (HTTP/3, SSL)" "${C_GRN}required${C_RESET}"
-  printf '  %-22s %s\n' "MariaDB" "$(mark "$OPT_MARIADB")"
-  printf '  %-22s %s\n' "PostgreSQL" "$(mark "$OPT_POSTGRES")"
-  printf '  %-22s %s\n' "Node.js ${NODE_MAJOR} LTS" "$(mark "$OPT_NODE")"
+  m="$(mark "$OPT_MARIADB")";  yesno "$OPT_MARIADB"  && m="$m ${C_DIM}(${MARIADB_VERSION})${C_RESET}"
+  printf '  %-22s %s\n' "MariaDB" "$m"
+  m="$(mark "$OPT_POSTGRES")"; yesno "$OPT_POSTGRES" && m="$m ${C_DIM}(${POSTGRES_VERSION})${C_RESET}"
+  printf '  %-22s %s\n' "PostgreSQL" "$m"
+  m="$(mark "$OPT_NODE")";     yesno "$OPT_NODE"     && m="$m ${C_DIM}(${NODE_MAJOR})${C_RESET}"
+  printf '  %-22s %s\n' "Node.js" "$m"
   m="$(mark "$OPT_PHP")"; yesno "$OPT_PHP" && m="$m ${C_DIM}(${PHP_VERSION})${C_RESET}"
   printf '  %-22s %s\n' "PHP / FrankenPHP" "$m"
   printf '  %-22s %s\n' "Python 3" "$(mark "$OPT_PYTHON")"
@@ -339,21 +401,32 @@ install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
 }
 
 install_mariadb() {
-  msg "Installing MariaDB…"
+  msg "Installing MariaDB ${MARIADB_VERSION} (from mariadb.org)…"
+  local distro="${OS_ID:-debian}"
+  run "install -d -m 0755 /usr/share/keyrings"
+  run "curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc -o /usr/share/keyrings/mariadb.asc"
+  echo "deb [signed-by=/usr/share/keyrings/mariadb.asc] https://mirror.mariadb.org/repo/${MARIADB_VERSION}/${distro} ${OS_CODENAME} main" \
+    | run "tee /etc/apt/sources.list.d/mariadb.list >/dev/null"
+  run "apt-get update -y"
   run "apt-get install -y mariadb-server"
   run "systemctl enable --now mariadb"
-  ok "MariaDB ready (engine available for per-database selection)."
+  ok "MariaDB ${MARIADB_VERSION} ready."
 }
 
 install_postgres() {
-  msg "Installing PostgreSQL…"
-  run "apt-get install -y postgresql"
+  msg "Installing PostgreSQL ${POSTGRES_VERSION} (from apt.postgresql.org)…"
+  run "install -d -m 0755 /usr/share/keyrings"
+  run "curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg"
+  echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${OS_CODENAME}-pgdg main" \
+    | run "tee /etc/apt/sources.list.d/pgdg.list >/dev/null"
+  run "apt-get update -y"
+  run "apt-get install -y postgresql-${POSTGRES_VERSION}"
   run "systemctl enable --now postgresql"
-  ok "PostgreSQL ready (engine available for per-database selection)."
+  ok "PostgreSQL ${POSTGRES_VERSION} ready."
 }
 
 install_node() {
-  msg "Installing Node.js ${NODE_MAJOR} LTS (system-wide)…"
+  msg "Installing Node.js ${NODE_MAJOR} LTS (system-wide, from NodeSource)…"
   run "curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o /tmp/nodesource_setup.sh"
   run "bash /tmp/nodesource_setup.sh"
   run "apt-get install -y nodejs"
