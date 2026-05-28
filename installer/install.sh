@@ -28,7 +28,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.13"
+AURACP_VERSION="0.1.14"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -395,6 +395,9 @@ install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
   run "chmod +x /usr/bin/caddy"
   run "id caddy >/dev/null 2>&1 || useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy"
   run "mkdir -p /etc/caddy/sites /var/lib/caddy"
+  # /var/lib/caddy is Caddy's state dir (autosaved config, ACME cache); it must
+  # be writable by the caddy service user or you get "permission denied" spam.
+  run "chown -R caddy:caddy /var/lib/caddy"
   run "[ -f /etc/caddy/Caddyfile ] || printf 'import sites/*\\n' > /etc/caddy/Caddyfile"
   install_unit caddy "Caddy web server" "/usr/bin/caddy run --config /etc/caddy/Caddyfile" caddy
   ok "Caddy ready."

@@ -50,7 +50,11 @@ func (m *Manager) Render(s Spec) (string, error) {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s {\n", s.Domain)
-	b.WriteString("\tencode zstd br gzip\n")
+	// zstd + gzip cover every modern client. We deliberately do NOT emit `br`:
+	// the stock Caddy build (caddyserver.com/api/download) doesn't ship the
+	// Brotli encoder, and adding the dunglas/caddy-cbrotli plugin requires cgo —
+	// not worth the extra ~3% bytes-on-the-wire for the panel/site mix.
+	b.WriteString("\tencode zstd gzip\n")
 
 	if s.CloudflareTok != "" {
 		// Wildcard / DNS-01 issuance via the Cloudflare DNS module.
@@ -125,7 +129,7 @@ func (m *Manager) ApplyPanelProxy(ctx context.Context, domain, backend string) e
 		return err
 	}
 	var b strings.Builder
-	fmt.Fprintf(&b, "%s {\n\tencode zstd br gzip\n", domain)
+	fmt.Fprintf(&b, "%s {\n\tencode zstd gzip\n", domain)
 	if strings.HasPrefix(backend, "https://") {
 		// loopback to auracpd's self-signed TLS — skip-verify is safe on 127.0.0.1
 		fmt.Fprintf(&b, "\treverse_proxy %s {\n\t\ttransport http {\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n", backend)
