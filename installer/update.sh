@@ -77,8 +77,63 @@ curl -fL --progress-bar -o "$TMP" "$URL" \
 
 msg "Installing…"
 export DEBIAN_FRONTEND=noninteractive
+
+# Cache the previously-installed .deb so a verified-broken upgrade can roll
+# back without curl'ing GitHub again (no network needed for the rescue path).
+PREV_DEB="/var/cache/auracp/auracp_${CURRENT}_${ARCH}.deb"
+mkdir -p /var/cache/auracp
+if [ -f "/var/cache/apt/archives/auracp_${CURRENT}_${ARCH}.deb" ]; then
+  cp -f "/var/cache/apt/archives/auracp_${CURRENT}_${ARCH}.deb" "$PREV_DEB" 2>/dev/null || true
+fi
+
 dpkg -i "$TMP" \
   || { apt-get install -fy && dpkg -i "$TMP"; } \
   || die "dpkg install failed."
 
-ok "Upgraded to ${LATEST_VER}. auracpd has been restarted by the package postinst."
+# Verify the new daemon is actually up before reporting success. Belt-and-
+# suspenders for the case where the package postinst's `systemctl restart`
+# raced something (dpkg prerm timing out → SIGKILL → leaving the unit in a
+# 'stopped + Restart=always-not-triggered-because-clean-stop' limbo). The
+# /api/health endpoint is unauth and returns 200 with {"status":"ok"} the
+# instant net/http is listening — perfect signal.
+msg "Verifying daemon health…"
+HEALTH_OK=0
+for i in $(seq 1 30); do
+  if curl -kfsS https://127.0.0.1:8443/api/health -o /dev/null --max-time 2 2>/dev/null; then
+    HEALTH_OK=1
+    ok "auracpd responding (took ${i}s)."
+    break
+  fi
+  sleep 1
+done
+
+if [ "$HEALTH_OK" -eq 0 ]; then
+  warn "auracpd is not responding 30s after install — attempting an explicit restart."
+  systemctl restart auracpd >/dev/null 2>&1 || true
+  sleep 5
+  if curl -kfsS https://127.0.0.1:8443/api/health -o /dev/null --max-time 5 2>/dev/null; then
+    ok "auracpd recovered after explicit restart."
+    HEALTH_OK=1
+  fi
+fi
+
+if [ "$HEALTH_OK" -eq 0 ]; then
+  if [ -f "$PREV_DEB" ]; then
+    warn "auracpd still down. Rolling back to ${CURRENT}…"
+    if dpkg -i "$PREV_DEB" >/dev/null 2>&1 && systemctl restart auracpd; then
+      sleep 3
+      if curl -kfsS https://127.0.0.1:8443/api/health -o /dev/null --max-time 5 2>/dev/null; then
+        die "Rollback to ${CURRENT} restored the panel. Check 'journalctl -u auracpd' for why ${LATEST_VER} failed."
+      fi
+    fi
+  fi
+  die "auracpd not responding after ${LATEST_VER} install. SSH and run:
+  systemctl status auracpd --no-pager
+  journalctl -u auracpd -n 100 --no-pager
+  systemctl restart auracpd
+If the daemon still won't start, re-install the previous .deb manually:
+  curl -fL -o /tmp/auracp.deb https://github.com/${REPO}/releases/download/v${CURRENT}/auracp_${CURRENT}_${ARCH}.deb
+  dpkg -i /tmp/auracp.deb && systemctl restart auracpd"
+fi
+
+ok "Upgraded to ${LATEST_VER} and verified responding on :8443."

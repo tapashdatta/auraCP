@@ -64,7 +64,25 @@ ln -sf /opt/auracp/installer/update.sh    /usr/local/bin/auracp-update
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
   systemctl enable auracpd >/dev/null 2>&1 || true
+  # The first 'restart' kicks off the new binary. If we end up in the
+  # documented systemd corner case where Restart=always doesn't trigger
+  # after a clean 'systemctl stop' (e.g. prerm's stop timing out and
+  # going to SIGKILL leaves the unit "deactivated"), this brings it back.
   systemctl restart auracpd || true
+  # Defensive: if for any reason the daemon isn't listening within ~10s,
+  # kick it one more time. Eats curl exit codes so the postinst never
+  # fails the dpkg install — the panel can be recovered by SSH.
+  i=0
+  while [ $i -lt 10 ]; do
+    if curl -kfsS https://127.0.0.1:8443/api/health -o /dev/null --max-time 1 2>/dev/null; then
+      break
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  if [ $i -ge 10 ]; then
+    systemctl restart auracpd || true
+  fi
   echo
   echo "auraCP panel installed and running on https://<server-ip>:8443"
   echo "Next step — provision the data plane (nginx, MariaDB/Postgres, PHP-FPM, Node, …):"
