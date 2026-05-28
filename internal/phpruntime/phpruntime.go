@@ -269,8 +269,30 @@ func (m *Manager) WritePool(ctx context.Context, version, domain, user string) e
 			return err
 		}
 	}
-	_, err = m.R.Run(ctx, "systemctl", "reload", "php"+version+"-fpm")
-	return err
+	// v0.2.37: probe the service state and pick the right action.
+	//
+	// Installed() only checks for the package's /etc/php/<v>/fpm/pool.d/
+	// directory — that's the "package is installed" signal. But the
+	// service might be stopped (never started, manually halted, or crashed
+	// on a bad upstream config). systemctl reload on an inactive service
+	// errors out with 'is not active, cannot reload' and the site creation
+	// fails for a reason that's nothing to do with the operator's input.
+	//
+	// Two-pronged: if active → reload (cheap, preserves opcache); if not →
+	// enable --now (starts it AND persists across reboots).
+	svc := "php" + version + "-fpm"
+	state, _ := m.R.Run(ctx, "systemctl", "is-active", svc)
+	if strings.TrimSpace(state) == "active" {
+		if _, err := m.R.Run(ctx, "systemctl", "reload", svc); err != nil {
+			return fmt.Errorf("php%s-fpm reload failed: %w", version, err)
+		}
+		return nil
+	}
+	if _, err := m.R.Run(ctx, "systemctl", "enable", "--now", svc); err != nil {
+		return fmt.Errorf("php%s-fpm could not be started: %w (check `systemctl status %s` and `journalctl -u %s -n 50` for the underlying cause)",
+			version, err, svc, svc)
+	}
+	return nil
 }
 
 // RemovePool deletes the per-site pool config and reloads the corresponding
@@ -283,7 +305,14 @@ func (m *Manager) RemovePool(ctx context.Context, domain string) error {
 			if !m.R.DryRun {
 				_ = os.Remove(f)
 			}
-			_, _ = m.R.Run(ctx, "systemctl", "reload", "php"+v+"-fpm")
+			// Only reload if the service is up; an inactive php<v>-fpm has
+			// nothing to reload and the systemctl exit code would otherwise
+			// noise up site-delete logs.
+			svc := "php" + v + "-fpm"
+			state, _ := m.R.Run(ctx, "systemctl", "is-active", svc)
+			if strings.TrimSpace(state) == "active" {
+				_, _ = m.R.Run(ctx, "systemctl", "reload", svc)
+			}
 		}
 	}
 	return nil
