@@ -123,7 +123,10 @@ func main() {
 	// ACME owns LE issuance + renewal; nginx reload happens after each issuance.
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ac := acme.New(st, *etcDir, web.Reload)
+	// v0.2.41: acme.Manager gets the secret box so it can decrypt the
+	// instance Cloudflare API token + fall back to DNS-01 when HTTP-01
+	// can't reach the domain (typically because it's CF-proxied).
+	ac := acme.New(st, *etcDir, web.Reload, sec)
 	ac.SetStaging(*acmeStaging)
 	ac.StartRenewalLoop(rootCtx)
 

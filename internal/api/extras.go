@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/ssl"
 )
 
@@ -60,13 +61,21 @@ func (s *Server) siteSSL(w http.ResponseWriter, r *http.Request) {
 // sites:update. The existing POST /api/certificates/{domain}/renew also
 // works but needs settings:update which is admin-only; this lets a Site
 // Manager retry a cert without granting them instance settings access.
+//
+// v0.2.41: if the site has cloudflare_dns=true (operator forced DNS-01),
+// pass ForceDNS01 so we skip HTTP-01 entirely. Otherwise the default
+// HTTP-01 → DNS-01 fallback path runs.
 func (s *Server) siteRenewCert(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
 	if s.acme == nil {
 		writeErr(w, http.StatusServiceUnavailable, errNoACMEManager)
 		return
 	}
-	if err := s.acme.IssueOnce(r.Context(), domain); err != nil {
+	opts := acme.IssueOpts{}
+	if cfg, err := s.store.SiteConfig(domain); err == nil && cfg["cloudflare_dns"] == "true" {
+		opts.ForceDNS01 = true
+	}
+	if err := s.acme.IssueOnce(r.Context(), domain, opts); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}

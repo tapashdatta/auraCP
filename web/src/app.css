@@ -625,6 +625,11 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 .note.ssl-fail{border:1px solid color-mix(in srgb, var(--down) 32%, transparent);background:var(--down-soft)}
 .note.ssl-fail b{color:var(--down)}
 
+/* v0.2.41: tiny inline spinner used in pill-cat chips during async validation
+   (currently: Cloudflare token verify). Sits next to the "Validating" text. */
+.cf-spin{display:inline-block;width:10px;height:10px;border:1.5px solid currentColor;border-top-color:transparent;border-radius:50%;animation:cf-spin .6s linear infinite}
+@keyframes cf-spin{to{transform:rotate(360deg)}}
+
 /* v0.2.18: live upload progress bar */
 .upload-prog{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-1)}
 .upload-prog-info{display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}

@@ -30,12 +30,29 @@ import (
 	"time"
 
 	legoacme "github.com/go-acme/lego/v4/certificate"
+	"github.com/go-acme/lego/v4/challenge"
 	"github.com/go-acme/lego/v4/lego"
+	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
 
 	"github.com/auracp/auracp/internal/paths"
+	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/store"
 )
+
+// IssueOpts configures a single issuance call. Zero value = default behaviour
+// (HTTP-01 first, automatic DNS-01 fallback if a Cloudflare token is
+// configured at the instance level + the HTTP-01 attempt failed). v0.2.41.
+type IssueOpts struct {
+	// ForceDNS01 skips HTTP-01 entirely. Useful for explicit operator intent
+	// (per-site cloudflare_dns toggle ON) and for wildcard certs which only
+	// LE can satisfy via DNS-01.
+	ForceDNS01 bool
+}
+
+// cfTokenSettingKey mirrors api.cfTokenKey but lives here so the renewal
+// loop (which doesn't import internal/api) can resolve the token too.
+const cfTokenSettingKey = "cloudflare_token_enc"
 
 // Manager is the single ACME orchestrator owned by auracpd.
 type Manager struct {
@@ -46,12 +63,33 @@ type Manager struct {
 	acct     *legoAccount
 	client   *lego.Client
 	reloader func(context.Context) error // called after a cert lands → nginx reload
+	secret   *secret.Box                 // v0.2.41: decrypt the CF token for DNS-01 fallback
 }
 
 // New builds the manager. The reloader callback is invoked after each
 // successful issuance/renewal so nginx picks up the new cert immediately.
-func New(st *store.Store, etcDir string, reloader func(context.Context) error) *Manager {
-	return &Manager{store: st, etcDir: etcDir, reloader: reloader}
+// The secret box is used to decrypt the operator's Cloudflare API token
+// when falling back from HTTP-01 to DNS-01 (v0.2.41).
+func New(st *store.Store, etcDir string, reloader func(context.Context) error, sec *secret.Box) *Manager {
+	return &Manager{store: st, etcDir: etcDir, reloader: reloader, secret: sec}
+}
+
+// cloudflareToken decrypts the instance-wide CF API token from the settings
+// table, or returns "" if none is configured. Centralised so both issue()
+// and the renewal loop pick up the same token.
+func (m *Manager) cloudflareToken() string {
+	if m.secret == nil {
+		return ""
+	}
+	enc, ok := m.store.GetSetting(cfTokenSettingKey)
+	if !ok || enc == "" {
+		return ""
+	}
+	tok, err := m.secret.Decrypt(enc)
+	if err != nil {
+		return ""
+	}
+	return tok
 }
 
 // SetStaging flips the ACME endpoint to LE staging — useful during install on
@@ -69,16 +107,24 @@ func (m *Manager) EnsureCert(ctx context.Context, domain string) error {
 			return nil // still fresh
 		}
 	}
-	return m.issue(ctx, domain)
+	return m.issue(ctx, domain, IssueOpts{})
 }
 
 // IssueOnce attempts to issue a cert exactly once, regardless of current
 // state. Used for the "force renew" admin path and the renewal loop.
-func (m *Manager) IssueOnce(ctx context.Context, domain string) error {
-	return m.issue(ctx, domain)
+// Default behaviour (zero IssueOpts): try HTTP-01 first; on failure, fall
+// back to DNS-01 via Cloudflare iff the operator has configured a CF API
+// token at the instance level. Pass ForceDNS01:true to skip HTTP-01 (e.g.
+// when the site is known to be CF-proxied or you want a wildcard cert).
+func (m *Manager) IssueOnce(ctx context.Context, domain string, opts ...IssueOpts) error {
+	var o IssueOpts
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	return m.issue(ctx, domain, o)
 }
 
-func (m *Manager) issue(ctx context.Context, domain string) error {
+func (m *Manager) issue(ctx context.Context, domain string, opts IssueOpts) error {
 	if err := m.ensureClient(); err != nil {
 		return err
 	}
@@ -98,14 +144,62 @@ func (m *Manager) issue(ctx context.Context, domain string) error {
 		Domains: []string{domain},
 		Bundle:  true,
 	}
-	res, err := m.client.Certificate.Obtain(req)
-	if err != nil {
-		prev.Status = "failed"
-		prev.LastError = err.Error()
-		_ = m.store.UpsertCertificate(prev)
-		return fmt.Errorf("obtain cert for %s: %w", domain, err)
+
+	cfTok := m.cloudflareToken()
+
+	// Step 1: HTTP-01, unless the operator explicitly demanded DNS-01.
+	var httpErr error
+	if !opts.ForceDNS01 {
+		if err := m.setHTTP01(); err != nil {
+			return err
+		}
+		res, err := m.client.Certificate.Obtain(req)
+		if err == nil {
+			return m.saveIssuedCert(ctx, domain, &prev, res, "http-01")
+		}
+		httpErr = err
+		log.Printf("acme: HTTP-01 failed for %s: %v", domain, err)
 	}
 
+	// Step 2: DNS-01 via Cloudflare — runs if (a) caller forced it, OR
+	// (b) HTTP-01 failed AND the operator has configured a CF token.
+	if opts.ForceDNS01 || cfTok != "" {
+		if cfTok == "" {
+			// Forced but no token — no way to perform DNS-01. Surface a
+			// clear error rather than letting lego return a cryptic one.
+			prev.Status = "failed"
+			prev.LastError = "DNS-01 requested but no Cloudflare token configured (Settings → Cloudflare)"
+			_ = m.store.UpsertCertificate(prev)
+			return fmt.Errorf("DNS-01 requested but no Cloudflare token configured")
+		}
+		if err := m.setDNS01Cloudflare(cfTok); err != nil {
+			prev.Status = "failed"
+			prev.LastError = errMsg("DNS-01 setup failed", err, httpErr)
+			_ = m.store.UpsertCertificate(prev)
+			return fmt.Errorf("DNS-01 setup: %w", err)
+		}
+		log.Printf("acme: retrying %s via DNS-01 (Cloudflare)", domain)
+		res, err := m.client.Certificate.Obtain(req)
+		if err == nil {
+			return m.saveIssuedCert(ctx, domain, &prev, res, "dns-01")
+		}
+		// Both attempts failed — record the more useful (later) error first.
+		prev.Status = "failed"
+		prev.LastError = errMsg("DNS-01", err, httpErr)
+		_ = m.store.UpsertCertificate(prev)
+		return fmt.Errorf("obtain cert for %s (DNS-01 fallback after HTTP-01): %w", domain, err)
+	}
+
+	// No CF token AND HTTP-01 failed — single-error path.
+	prev.Status = "failed"
+	prev.LastError = httpErr.Error()
+	_ = m.store.UpsertCertificate(prev)
+	return fmt.Errorf("obtain cert for %s (HTTP-01): %w", domain, httpErr)
+}
+
+// saveIssuedCert persists the cert to disk + updates the store row.
+// Shared by both the HTTP-01 and DNS-01 success paths.
+func (m *Manager) saveIssuedCert(ctx context.Context, domain string, prev *store.Certificate, res *legoacme.Resource, method string) error {
 	if err := os.MkdirAll(paths.SSLDir, 0o750); err != nil {
 		return err
 	}
@@ -115,7 +209,6 @@ func (m *Manager) issue(ctx context.Context, domain string) error {
 	if err := os.WriteFile(paths.KeyPath(domain), res.PrivateKey, 0o600); err != nil {
 		return err
 	}
-
 	exp, _ := parseLeafExpiry(res.Certificate)
 	prev.Status = "issued"
 	prev.LastError = ""
@@ -125,18 +218,50 @@ func (m *Manager) issue(ctx context.Context, domain string) error {
 	if !exp.IsZero() {
 		prev.ExpiresAt = sql.NullInt64{Int64: exp.Unix(), Valid: true}
 	}
-	if err := m.store.UpsertCertificate(prev); err != nil {
+	if err := m.store.UpsertCertificate(*prev); err != nil {
 		return err
 	}
-	log.Printf("acme: issued cert for %s (expires %s)", domain, exp.Format(time.RFC3339))
-
-	// Tell nginx about the new file so it actually serves it.
+	log.Printf("acme: issued cert for %s via %s (expires %s)", domain, method, exp.Format(time.RFC3339))
 	if m.reloader != nil {
 		if err := m.reloader(ctx); err != nil {
 			log.Printf("acme: reload after issuance failed: %v", err)
 		}
 	}
 	return nil
+}
+
+// setHTTP01 + setDNS01Cloudflare swap the client's active challenge solver.
+// lego clients accept Remove + Set in sequence; we don't rebuild the whole
+// client (the registration cache + account state would be wasted).
+func (m *Manager) setHTTP01() error {
+	m.client.Challenge.Remove(challenge.DNS01)
+	return m.client.Challenge.SetHTTP01Provider(newHTTPProvider(paths.ACMEChallengeDir))
+}
+
+func (m *Manager) setDNS01Cloudflare(token string) error {
+	m.client.Challenge.Remove(challenge.HTTP01)
+	cfg := cloudflare.NewDefaultConfig()
+	cfg.AuthToken = token
+	prov, err := cloudflare.NewDNSProviderConfig(cfg)
+	if err != nil {
+		return err
+	}
+	return m.client.Challenge.SetDNS01Provider(prov)
+}
+
+// errMsg formats one-or-two-error messages for the store's lastError column.
+// Always non-empty so the UI never renders a blank failure card.
+func errMsg(label string, primary error, fallbackContext error) string {
+	if primary == nil && fallbackContext == nil {
+		return ""
+	}
+	if primary != nil && fallbackContext != nil {
+		return label + ": " + primary.Error() + "; HTTP-01 (prior attempt): " + fallbackContext.Error()
+	}
+	if primary != nil {
+		return label + ": " + primary.Error()
+	}
+	return label + ": " + fallbackContext.Error()
 }
 
 // StartRenewalLoop kicks off the daily renewal scheduler. Each tick: pull all

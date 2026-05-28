@@ -3,11 +3,14 @@
   import { go } from '../lib/store.svelte.js'
   import { apiFetch } from '../lib/api.js'
   import { confirmDialog, alertDialog } from '../lib/dialog.svelte.js'
+  import { toastSuccess } from '../lib/toast.svelte.js'
 
   let info = $state(null)
   let services = $state({})
-  let cf = $state({ configured: false, token: '' })
-  let cfMsg = $state('')
+  // v0.2.41: CF card auto-saves. `status` is the persisted validation result
+  // from the last save; `validating` is true while a save is in flight.
+  let cf = $state({ configured: false, status: '', token: '', validating: false, error: '' })
+  let cfDebounce = null
   let panel = $state({ domain: '', input: '' })
   let panelMsg = $state('')
   let remote = $state({ configured: false, type: '', kind: 's3', params: '', target: '' })
@@ -26,7 +29,7 @@
     const s = await apiFetch('/api/instance/services')
     if (s.ok) services = await s.json()
     const c = await apiFetch('/api/cloudflare')
-    if (c.ok) cf.configured = (await c.json()).configured
+    if (c.ok) { const d = await c.json(); cf.configured = d.configured; cf.status = d.status || '' }
     const rb = await apiFetch('/api/backups/remote')
     if (rb.ok) { const d = await rb.json(); remote.configured = d.configured; remote.type = d.type || '' }
     const a = await apiFetch('/api/audit')
@@ -146,10 +149,33 @@
     panelMsg = d.domain ? `Panel now fronted at https://${d.domain}` : 'Reverted to IP access.'
   }
 
-  async function saveCf() {
-    const r = await apiFetch('/api/cloudflare', { method: 'POST', body: JSON.stringify({ token: cf.token }) })
-    cfMsg = r.ok ? 'Saved.' : 'Failed'
-    if (r.ok) { cf.token = ''; cf.configured = true }
+  // v0.2.41: auto-save the token as soon as the operator stops typing.
+  // The backend validates against Cloudflare's /user/tokens/verify before
+  // persisting; on invalid we surface the verbatim CF rejection so the
+  // operator knows what to fix without retrying through DNS-01 failure.
+  function onCfTokenInput() {
+    cf.error = ''
+    cf.validating = false
+    if (cfDebounce) { clearTimeout(cfDebounce); cfDebounce = null }
+    const tok = (cf.token || '').trim()
+    if (tok.length < 20) return  // CF tokens are ~40 chars; ignore until plausible
+    cfDebounce = setTimeout(() => saveCfNow(tok), 450)
+  }
+  async function saveCfNow(tok) {
+    cf.validating = true
+    cf.error = ''
+    const r = await apiFetch('/api/cloudflare', { method: 'POST', body: JSON.stringify({ token: tok }) })
+    const d = await r.json().catch(() => ({}))
+    cf.validating = false
+    if (!r.ok) {
+      cf.error = d.error || 'Could not save'
+      cf.status = 'invalid'
+      return
+    }
+    cf.configured = true
+    cf.status = 'valid'
+    cf.token = ''                    // never keep the cleartext in the input
+    toastSuccess('Cloudflare token validated and saved')
   }
 
   async function saveRemote() {
@@ -217,16 +243,37 @@
       </div>
     </div>
 
-    <!-- Cloudflare card -->
-    <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge</p></div>
-      <span class="status"><span class="sdot {cf.configured ? 's-up' : 's-down'}"></span>{cf.configured ? 'Configured' : 'Not set'}</span></div>
+    <!-- v0.2.41: Cloudflare card — auto-saves on paste, validates live
+         against Cloudflare's /user/tokens/verify, no Save button. Status
+         pill in the section header reflects the stored validation state. -->
+    <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge · auto-saves on paste</p></div>
+      {#if cf.validating}
+        <span class="pill-cat warn"><span class="cf-spin"></span> Validating</span>
+      {:else if cf.configured && cf.status === 'valid'}
+        <span class="pill-cat ok">✓ Valid token</span>
+      {:else if cf.status === 'invalid'}
+        <span class="pill-cat danger">✗ Invalid</span>
+      {:else if cf.configured}
+        <span class="pill-cat ok">Configured</span>
+      {:else}
+        <span class="pill-cat">Not set</span>
+      {/if}
+    </div>
       <div class="section-b">
         <div class="field"><label>
-          <span class="label-text">API Token <span class="hint">stored encrypted</span></span>
-          <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}>
+          <span class="label-text">API Token <span class="hint">stored encrypted · pasted tokens are checked against api.cloudflare.com</span></span>
+          <input class="input" type="password" bind:value={cf.token}
+                 oninput={onCfTokenInput}
+                 placeholder={cf.configured ? '•••••••• (paste a new one to replace)' : 'paste your Cloudflare API token'}
+                 autocomplete="off">
         </label></div>
-        <button class="btn btn-primary" onclick={saveCf} disabled={!cf.token}>Save Token</button>
-        {#if cfMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{cfMsg}</span>{/if}
+        {#if cf.error}
+          <div class="note ssl-fail" style="margin-top:10px"><div>{cf.error}</div></div>
+        {:else if cf.configured && cf.status === 'valid'}
+          <div class="hint" style="margin-left:0;margin-top:4px">Token verified with Cloudflare. Used for DNS-01 fallback when HTTP-01 can't reach the origin (orange-cloud proxied domains).</div>
+        {:else}
+          <div class="hint" style="margin-left:0;margin-top:4px">Create a token in Cloudflare → My Profile → API Tokens → "Edit zone DNS" permission for the zone(s) you want certs on.</div>
+        {/if}
       </div>
     </div>
 
