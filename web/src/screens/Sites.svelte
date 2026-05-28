@@ -132,8 +132,10 @@
       {/if}
     </div>
 
-    <!-- Recent activity — audit log preview -->
-    <div class="hero-card">
+    <!-- Recent activity — audit log preview. Hidden < 720 px so phones
+         show only Sites Hosted + Server Snapshot (operator dipping in to
+         check status, not scanning audit log). -->
+    <div class="hero-card hero-card-recent">
       <span class="lbl">Recent activity</span>
       {#if recent.length === 0}
         <div class="hint" style="margin-left:0">No events yet.</div>
@@ -201,11 +203,14 @@
   .hero-avatar{width:54px;height:54px;font-size:20px;border-radius:50%}
   .hero h1{font-family:var(--fs-display);font-weight:700;font-size:34px;letter-spacing:-.03em;line-height:1.1;margin-bottom:8px}
 
-  .hero-grid{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:26px}
-  .hero-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);padding:18px 20px;box-shadow:var(--shadow);min-width:0;display:flex;flex-direction:column;gap:12px}
-  .hero-card .lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--txt-3);font-weight:600}
-  .hero-card-metric{gap:6px}
-  .hero-card-metric .hero-num{margin:-4px 0 8px}
+  /* v0.2.29: hero cards stay 3-up from iPad onward (down from a 1100 px
+     breakpoint that dropped to 2-up). Achieved by trimming padding +
+     reducing the metric card's hero-num so all three fit at 720 px. */
+  .hero-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:22px}
+  .hero-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);padding:14px 16px;box-shadow:var(--shadow);min-width:0;display:flex;flex-direction:column;gap:10px}
+  .hero-card .lbl{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600}
+  .hero-card-metric{gap:4px}
+  .hero-card-metric .hero-num{margin:-2px 0 6px}
 
   /* Per-type site mix bar inside the hero metric card. */
   .mix{display:flex;flex-direction:column;gap:7px}
@@ -236,11 +241,15 @@
   .empty{text-align:center;padding:32px 16px;color:var(--txt-3)}
   .hint{color:var(--txt-3);font-size:12.5px}
 
-  @media (max-width:1100px){
+  /* v0.2.29: below 720 px (small tablet portrait + phones) hide Recent
+     Activity entirely — operators on a phone are dipping in to check sites,
+     not scanning the audit log. Sites Hosted + Server Snapshot stay; they're
+     the only two cards that earn the screen space at small widths. */
+  @media (max-width:720px){
     .hero-grid{grid-template-columns:1fr 1fr}
-    .hero-card-metric{grid-column:1 / -1}
+    .hero-card.hero-card-recent{display:none}
   }
-  @media (max-width:640px){
+  @media (max-width:480px){
     .hero{flex-direction:column;align-items:flex-start;gap:14px}
     .hero h1{font-size:26px}
     :global(.hero-num){font-size:64px !important}
