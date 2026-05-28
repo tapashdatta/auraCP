@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.8"
+AURACP_VERSION="0.2.9"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -44,7 +44,11 @@ INTERACTIVE=1                           # auto-disabled when selection flags are
 
 # optional components (yes/no); defaults chosen for a typical PHP+DB host
 OPT_PHP="${AURACP_PHP:-yes}"
-PHP_VERSION="${AURACP_PHP_VERSION:-8.4}"   # 8.3 | 8.4 | 8.5 from deb.sury.org
+# Space-separated list — install one or many PHP-FPM versions side-by-side from
+# deb.sury.org. Sites pin to whichever they need via the Create form. Adding
+# extra versions later is also possible from Settings → PHP Versions.
+PHP_VERSIONS="${AURACP_PHP_VERSIONS:-${AURACP_PHP_VERSION:-8.4}}"
+PHP_DEFAULT="${AURACP_PHP_DEFAULT:-}"     # which version becomes the panel default; first installed if empty
 OPT_NODE="${AURACP_NODE:-yes}"
 OPT_PYTHON="${AURACP_PYTHON:-no}"
 OPT_MARIADB="${AURACP_MARIADB:-yes}"
@@ -179,7 +183,9 @@ parse_args() {
         esac ;;
       --node=*)        sawSelection=1; OPT_NODE="${arg#*=}" ;;
       --php=*)         sawSelection=1; OPT_PHP="${arg#*=}" ;;
-      --php-version=*) PHP_VERSION="${arg#*=}" ;;
+      # Accept one version or a comma-separated list: --php-version=8.3,8.4,8.5
+      --php-version=*)  PHP_VERSIONS="$(echo "${arg#*=}" | tr ',' ' ')" ;;
+      --php-default=*)  PHP_DEFAULT="${arg#*=}" ;;
       --mariadb-version=*)  MARIADB_VERSION="${arg#*=}" ;;
       --postgres-version=*) POSTGRES_VERSION="${arg#*=}" ;;
       --node-version=*)     NODE_MAJOR="${arg#*=}" ;;
@@ -192,7 +198,10 @@ parse_args() {
       *) die "Unknown option: $arg (try --help)" ;;
     esac
   done
-  case "$PHP_VERSION"     in 8.3|8.4|8.5) ;;     *) die "--php-version must be 8.3 / 8.4 / 8.5";; esac
+  # Validate every entry in PHP_VERSIONS (the list may contain one or many).
+  for _v in $PHP_VERSIONS; do
+    case "$_v" in 8.3|8.4|8.5) ;; *) die "--php-version must list values from 8.3 / 8.4 / 8.5 (got $_v)";; esac
+  done
   case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
   case "$POSTGRES_VERSION" in 16|17|18) ;;       *) die "--postgres-version must be 16 / 17 / 18";; esac
   case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
@@ -291,7 +300,7 @@ select_whiptail() {
     MARIADB "MariaDB database engine"            "$(onoff "$OPT_MARIADB")" \
     POSTGRES "PostgreSQL database engine"        "$(onoff "$OPT_POSTGRES")" \
     NODE    "Node.js ${NODE_MAJOR} LTS runtime"  "$(onoff "$OPT_NODE")" \
-    PHP     "PHP ${PHP_VERSION}-FPM (deb.sury.org)" "$(onoff "$OPT_PHP")" \
+    PHP     "PHP-FPM (deb.sury.org; pick versions next)" "$(onoff "$OPT_PHP")" \
     PYTHON  "Python 3 (gunicorn/uvicorn)"        "$(onoff "$OPT_PYTHON")" \
     REDIS   "Redis (object cache)"               "$(onoff "$OPT_REDIS")" \
     TYPESENSE "Typesense search server"          "$(onoff "$OPT_TYPESENSE")" \
@@ -311,21 +320,33 @@ select_whiptail() {
   case "$chosen" in *SECURITY*) OPT_SECURITY=yes;; esac
 
   if yesno "$OPT_PHP"; then
-    local pver_list pver_args=() pver_count=0 v
+    local pver_list pver_args=() pver_count=0 v selected
     pver_list=$(php_available)
     if [ -z "$pver_list" ]; then
       whiptail --title "PHP unavailable" --msgbox \
         "deb.sury.org publishes no PHP repo for ${OS_ID} ${OS_CODENAME}.\nPHP will be skipped." 10 60 < /dev/tty || true
       OPT_PHP=no
     else
-      PHP_VERSION=$(snap_to_available "$PHP_VERSION" "$pver_list")
+      # Multi-select: install one or many side-by-side. Pre-checks whatever
+      # PHP_VERSIONS already contains (default 8.4) plus any value passed via
+      # --php-version= flag; user can tick/untick. Empty result keeps PHP off.
       for v in $pver_list; do
-        pver_args+=("$v" "PHP $v" "$(req "$PHP_VERSION" "$v")")
+        case " $PHP_VERSIONS " in *" $v "*) pver_args+=("$v" "PHP $v" ON) ;; *) pver_args+=("$v" "PHP $v" OFF) ;; esac
         pver_count=$((pver_count + 1))
       done
-      PHP_VERSION=$(whiptail --title "PHP version" --radiolist \
-        "Available from deb.sury.org (additional versions can be added later from the panel):" 12 64 "$pver_count" \
-        "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || PHP_VERSION="${pver_list%% *}"
+      selected=$(whiptail --title "PHP versions" --checklist \
+        "Pick one or more PHP-FPM versions to install side-by-side.\nSites pin per-site in the Create form; more can be added later from Settings → PHP Versions." \
+        14 70 "$pver_count" "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || selected=""
+      # whiptail returns "8.4" "8.5" (quoted, space-separated). Strip quotes.
+      PHP_VERSIONS=$(echo "$selected" | tr -d '"')
+      if [ -z "$PHP_VERSIONS" ]; then
+        OPT_PHP=no
+      else
+        # Pick a default if not pinned via flag — first selected (oldest tick).
+        if [ -z "$PHP_DEFAULT" ]; then
+          PHP_DEFAULT="${PHP_VERSIONS%% *}"
+        fi
+      fi
     fi
   fi
   if yesno "$OPT_MARIADB"; then
@@ -395,15 +416,21 @@ select_readline() {
   OPT_NODE=$(ask "Install Node.js ${NODE_MAJOR} LTS?" "$OPT_NODE")
   OPT_PHP=$(ask "Install PHP-FPM (deb.sury.org)?" "$OPT_PHP")
   if yesno "$OPT_PHP"; then
-    local pver_list
+    local pver_list v out=""
     pver_list=$(php_available)
     if [ -z "$pver_list" ]; then
       warn "deb.sury.org has no PHP repo for ${OS_ID} ${OS_CODENAME} — skipping PHP."
       OPT_PHP=no
     else
-      PHP_VERSION=$(snap_to_available "$PHP_VERSION" "$pver_list")
-      read -r -p "  PHP version [$(echo "$pver_list" | tr ' ' '/')] (${PHP_VERSION}): " v < /dev/tty || true
-      case " $pver_list " in *" ${v:-$PHP_VERSION} "*) PHP_VERSION="${v:-$PHP_VERSION}";; esac
+      read -r -p "  PHP versions to install (space-separated, from: $pver_list) [${PHP_VERSIONS}]: " v < /dev/tty || true
+      v="${v:-$PHP_VERSIONS}"
+      for _v in $v; do
+        case " $pver_list " in *" $_v "*) out="$out $_v" ;; *) warn "skipping unknown PHP version: $_v" ;; esac
+      done
+      PHP_VERSIONS="${out# }"
+      if [ -z "$PHP_VERSIONS" ]; then OPT_PHP=no; else
+        [ -z "$PHP_DEFAULT" ] && PHP_DEFAULT="${PHP_VERSIONS%% *}"
+      fi
     fi
   fi
   if yesno "$OPT_MARIADB"; then
@@ -468,7 +495,7 @@ print_plan() {
   printf '  %-22s %s\n' "PostgreSQL" "$m"
   m="$(mark "$OPT_NODE")";     yesno "$OPT_NODE"     && m="$m ${C_DIM}(${NODE_MAJOR})${C_RESET}"
   printf '  %-22s %s\n' "Node.js" "$m"
-  m="$(mark "$OPT_PHP")";      yesno "$OPT_PHP"      && m="$m ${C_DIM}(${PHP_VERSION})${C_RESET}"
+  m="$(mark "$OPT_PHP")";      yesno "$OPT_PHP"      && m="$m ${C_DIM}(${PHP_VERSIONS})${C_RESET}"
   printf '  %-22s %s\n' "PHP-FPM" "$m"
   printf '  %-22s %s\n' "Python 3" "$(mark "$OPT_PYTHON")"
   printf '  %-22s %s\n' "Redis" "$(mark "$OPT_REDIS")"
@@ -491,7 +518,7 @@ build_plan() {
   yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"  || mariadb_l="skip"
   yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})" || postgres_l="skip"
   yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"           || node_l="skip"
-  yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSION})"           || php_l="skip"
+  yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSIONS})"          || php_l="skip"
   yesno "$OPT_PYTHON"    && python_l="install"  || python_l="skip"
   yesno "$OPT_REDIS"     && redis_l="install"   || redis_l="skip"
   yesno "$OPT_TYPESENSE" && typesense_l="install" || typesense_l="skip"
@@ -623,8 +650,7 @@ EOF
 }
 
 install_php_fpm() {
-  msg "Installing PHP ${PHP_VERSION}-FPM (from deb.sury.org)…"
-  local distro="${OS_ID:-debian}"
+  msg "Installing PHP-FPM (versions: ${PHP_VERSIONS}; from deb.sury.org)…"
   # deb.sury.org publishes one signing key for the whole project (works on
   # Debian + Ubuntu); the per-distro path is /php/ for both.
   run "install -d -m 0755 /usr/share/keyrings"
@@ -632,25 +658,33 @@ install_php_fpm() {
   echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
     | run "tee /etc/apt/sources.list.d/sury-php.list >/dev/null"
   run "apt-get update -y"
-  local v="$PHP_VERSION"
+
   # NOTE: opcache is statically embedded in php<ver>-cli and php<ver>-fpm
   # since PHP 7.0 — there's no separate php<ver>-opcache package to list.
   # Core extensions every PHP site needs; DB / cache client libraries are
   # added conditionally so we don't install php8.5-mysql on a host that
-  # never selected MariaDB, etc.
-  local pkgs="php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl"
-  pkgs="$pkgs php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl"
-  yesno "$OPT_MARIADB"  && pkgs="$pkgs php${v}-mysql"
-  yesno "$OPT_POSTGRES" && pkgs="$pkgs php${v}-pgsql"
-  yesno "$OPT_REDIS"    && pkgs="$pkgs php${v}-redis"
-  run "apt-get install -y --no-install-recommends $pkgs"
-  # auraCP owns all PHP-FPM pools — disable the default `www` pool the package
-  # auto-creates so it doesn't conflict with per-site pools the panel writes.
-  if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then
-    mv -f "/etc/php/${v}/fpm/pool.d/www.conf" "/etc/php/${v}/fpm/pool.d/www.conf.disabled"
-  fi
-  run "systemctl enable --now php${v}-fpm"
-  ok "PHP ${v}-FPM ready (additional versions can be added later from the panel)."
+  # never selected MariaDB, etc. The same DB/cache toggles apply to every
+  # selected PHP version.
+  local v pkgs
+  for v in $PHP_VERSIONS; do
+    msg "  → PHP ${v}"
+    pkgs="php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl"
+    pkgs="$pkgs php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl"
+    yesno "$OPT_MARIADB"  && pkgs="$pkgs php${v}-mysql"
+    yesno "$OPT_POSTGRES" && pkgs="$pkgs php${v}-pgsql"
+    yesno "$OPT_REDIS"    && pkgs="$pkgs php${v}-redis"
+    run "apt-get install -y --no-install-recommends $pkgs"
+    # auraCP owns all PHP-FPM pools — disable the default `www` pool the
+    # package auto-creates so it doesn't conflict with per-site pools the
+    # panel writes.
+    if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then
+      mv -f "/etc/php/${v}/fpm/pool.d/www.conf" "/etc/php/${v}/fpm/pool.d/www.conf.disabled"
+    fi
+    run "systemctl enable --now php${v}-fpm"
+  done
+  # Default version — first one listed unless explicitly overridden.
+  [ -z "$PHP_DEFAULT" ] && PHP_DEFAULT="${PHP_VERSIONS%% *}"
+  ok "PHP-FPM ready: ${PHP_VERSIONS} (default ${PHP_DEFAULT})."
 }
 
 install_mariadb() {
@@ -785,16 +819,31 @@ install_security() {
 }
 
 install_auracpd() { # required — the control plane
-  msg "Installing auracpd…"
-
   # When this installer is shipped inside the .deb (auracp-install command),
-  # the panel package is already installed — just keep the service healthy.
+  # the panel package is already installed. Three sub-cases:
+  #   (1) installed at the same version → just ensure the service is running.
+  #   (2) installed at a NEWER version  → leave it alone, point at auracp-update.
+  #   (3) installed at an OLDER version → refuse, point at auracp-update.
   if [ "$DRY_RUN" -eq 0 ] && dpkg-query -W -f='${Status}' auracp 2>/dev/null | grep -q "install ok installed"; then
-    run "systemctl daemon-reload"
-    run "systemctl enable --now auracpd"
-    ok "Panel already installed (auracp package) — service ensured running."
-    return
+    local installed
+    installed=$(dpkg-query -W -f='${Version}' auracp 2>/dev/null || echo "")
+    if [ "$installed" = "$AURACP_VERSION" ]; then
+      msg "Panel already installed at v${installed} — ensuring service is running…"
+      run "systemctl daemon-reload"
+      run "systemctl enable --now auracpd"
+      ok "auracpd ready."
+      return
+    fi
+    if dpkg --compare-versions "$installed" gt "$AURACP_VERSION" 2>/dev/null; then
+      warn "Panel v${installed} is installed (newer than this installer's v${AURACP_VERSION})."
+      warn "Leaving the panel binary alone. Use 'sudo auracp-update' to check for updates."
+      return
+    fi
+    die "Panel v${installed} is installed; this installer ships v${AURACP_VERSION}.
+   Run 'sudo auracp-update' to fetch the latest release and upgrade in place,
+   or 'sudo dpkg -i ./auracp_${AURACP_VERSION}_*.deb' to install this bundle directly."
   fi
+  msg "Installing auracpd…"
 
   local repo deb=""
   repo="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"

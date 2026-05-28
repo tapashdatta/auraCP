@@ -15,6 +15,9 @@
   let nodes = $state([])
   let newNode = $state({ version: '', makeDefault: false })
   let nodeMsg = $state('')
+  let update = $state({ current: '', latestPlain: '', available: false, releaseUrl: '', checkedAt: '', error: '' })
+  let updateMsg = $state('')
+  let updateBusy = $state(false)
 
   async function load() {
     const r = await apiFetch('/api/instance')
@@ -31,8 +34,35 @@
     if (pd.ok) { panel.domain = (await pd.json()).domain || ''; panel.input = panel.domain }
     const nv = await apiFetch('/api/instance/node-versions')
     if (nv.ok) nodes = await nv.json()
+    const u = await apiFetch('/api/instance/update')
+    if (u.ok) update = await u.json()
   }
   onMount(load)
+
+  async function checkUpdate() {
+    updateMsg = 'Checking GitHub…'
+    const r = await apiFetch('/api/instance/update?refresh=1')
+    if (r.ok) { update = await r.json(); updateMsg = update.error ? update.error : '' }
+    else updateMsg = 'Check failed'
+  }
+
+  async function applyUpdate() {
+    if (!update.available || updateBusy) return
+    if (!confirm(`Upgrade auracpd from ${update.current} to ${update.latestPlain}? The panel will restart automatically.`)) return
+    updateBusy = true
+    updateMsg = `Upgrading to ${update.latestPlain}…`
+    await apiFetch('/api/instance/update', { method: 'POST' })
+    // Poll /api/health until the new daemon answers; then reload.
+    let tries = 0
+    const tick = setInterval(async () => {
+      tries++
+      try {
+        const h = await fetch('/api/health', { cache: 'no-store' })
+        if (h.ok) { clearInterval(tick); updateMsg = 'Upgraded. Reloading…'; setTimeout(() => location.reload(), 400); return }
+      } catch {}
+      if (tries > 60) { clearInterval(tick); updateMsg = 'Panel did not come back within 60 seconds. Check journalctl -u auracpd.'; updateBusy = false }
+    }, 1000)
+  }
 
   async function installNode() {
     nodeMsg = `Installing Node ${newNode.version}…`
@@ -103,101 +133,149 @@
     </div>
   {/if}
 
-  <div class="card" style="margin-bottom:18px"><div class="section-h"><div><h3>Services</h3><p>Managed system services</p></div></div>
-    <table><thead><tr><th>Service</th><th>Status</th></tr></thead><tbody>
-      {#each Object.entries(services) as [name, state]}
-        <tr><td><span class="mono">{name}</span></td><td><span class="status"><span class="sdot {stateClass(state)}"></span>{state || 'unknown'}</span></td></tr>
-      {/each}
-    </tbody></table>
-  </div>
-
-  <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge</p></div>
-    <span class="status"><span class="sdot {cf.configured ? 's-up' : 's-down'}"></span>{cf.configured ? 'Configured' : 'Not set'}</span></div>
-    <div class="section-b">
-      <div class="field"><label>
-        <span class="label-text">API Token <span class="hint">stored encrypted</span></span>
-        <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}>
-      </label></div>
-      <button class="btn btn-primary" onclick={saveCf} disabled={!cf.token}>Save Token</button>
-      {#if cfMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{cfMsg}</span>{/if}
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Front the panel on a domain; auracpd issues a Let's Encrypt certificate automatically.</p></div>
-    <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
-    <div class="section-b">
-      <div class="field"><label>
-        <span class="label-text">Domain / subdomain <span class="hint">point its DNS A record to this server first</span></span>
-        <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com">
-      </label></div>
-      <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
-      {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
-      {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Remote Backups</h3><p>rclone destination for off-site backup copies</p></div>
-    <span class="status"><span class="sdot {remote.configured ? 's-up' : 's-down'}"></span>{remote.configured ? remote.type || 'configured' : 'Not set'}</span></div>
-    <div class="section-b">
-      <div class="two">
-        <div class="field"><label>
-          <span class="label-text">Provider</span>
-          <select class="select ui" bind:value={remote.kind}>
-            <option value="s3">Amazon S3</option><option value="b2">Backblaze B2</option><option value="dropbox">Dropbox</option>
-            <option value="drive">Google Drive</option><option value="sftp">SFTP</option><option value="swift">OpenStack Swift</option>
-          </select>
-        </label></div>
-        <div class="field"><label>
-          <span class="label-text">Target <span class="hint">remote:path</span></span>
-          <input class="input" bind:value={remote.target} placeholder="auracp:my-bucket/backups">
-        </label></div>
-      </div>
-      <div class="field"><label>
-        <span class="label-text">Parameters <span class="hint">one "key value" per line (e.g. access_key_id AKIA…)</span></span>
-        <textarea class="input" rows="4" style="font-family:var(--fs-mono)" bind:value={remote.params}></textarea>
-      </label></div>
-      <button class="btn btn-primary" onclick={saveRemote} disabled={!remote.target}>Save Remote</button>
-      {#if remoteMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{remoteMsg}</span>{/if}
-    </div>
-  </div>
-
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Node.js Runtimes</h3>
-    <p>Installed under <span class="mono">/opt/auracp/node/&lt;version&gt;</span> · sites can pin to any of these</p></div></div>
-    {#if nodes.length === 0}<div class="empty">No managed Node runtimes yet. Install one below.</div>
-    {:else}
-      <table><thead><tr><th>Version</th><th>Default</th><th></th></tr></thead><tbody>
-        {#each nodes as n}
-          <tr><td><span class="mono">{n.version}</span></td>
-            <td><span class="status"><span class="sdot {n.isDefault ? 's-up' : 's-down'}"></span>{n.isDefault ? 'default' : '—'}</span></td>
-            <td style="text-align:right">
-              {#if !n.isDefault}<button type="button" class="manage" onclick={() => makeDefaultNode(n.version)}>Make default</button>{/if}
-              <button type="button" class="manage" onclick={() => removeNode(n.version)}>Remove</button>
-            </td></tr>
+  <!-- Two-column responsive grid for the management cards. Wide cards
+       (Services, Node runtimes, Recent activity) span both columns; the
+       form-heavy cards (Cloudflare, Panel domain, Updates) stack 1:1. -->
+  <div class="instance-grid">
+    <!-- Wide card: Services -->
+    <div class="card span-2"><div class="section-h"><div><h3>Services</h3><p>auraCP-managed system units</p></div></div>
+      <table><thead><tr><th>Service</th><th>Status</th></tr></thead><tbody>
+        {#each Object.entries(services) as [name, state]}
+          <tr><td><span class="mono">{name}</span></td><td><span class="status"><span class="sdot {stateClass(state)}"></span>{state || 'unknown'}</span></td></tr>
         {/each}
       </tbody></table>
-    {/if}
-    <div class="section-b" style="border-top:1px solid var(--line)">
-      <div class="two">
-        <div class="field"><label>
-          <span class="label-text">Install Node version <span class="hint">e.g. 22.11.0, 20.18.0, 18.20.4</span></span>
-          <input class="input" bind:value={newNode.version} placeholder="22.11.0">
-        </label></div>
-        <div class="field" style="display:flex;align-items:end"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" bind:checked={newNode.makeDefault}> Make this the default</label></div>
+    </div>
+
+    <!-- Updates card — current vs latest from GitHub Releases. -->
+    <div class="card"><div class="section-h"><div><h3>auraCP Updates</h3><p>Checks GitHub Releases hourly · in-place upgrade via dpkg</p></div>
+      {#if update.available}
+        <span class="pill-cat warn">Update available</span>
+      {:else if update.error}
+        <span class="pill-cat danger">Check failed</span>
+      {:else}
+        <span class="pill-cat ok">Up to date</span>
+      {/if}</div>
+      <div class="section-b">
+        <div class="kv"><span class="k">Installed</span><span class="v">{update.current || '—'}</span></div>
+        <div class="kv"><span class="k">Latest release</span><span class="v">{update.latestPlain || '—'}</span></div>
+        <div class="kv"><span class="k">Last checked</span><span class="v">{update.checkedAt ? new Date(update.checkedAt).toLocaleString() : 'never'}</span></div>
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+          <button class="btn btn-ghost" onclick={checkUpdate} disabled={updateBusy}>Check now</button>
+          {#if update.available}
+            <button class="btn btn-primary" onclick={applyUpdate} disabled={updateBusy}>Upgrade to {update.latestPlain}</button>
+          {/if}
+          {#if update.releaseUrl}
+            <a class="btn btn-ghost" href={update.releaseUrl} target="_blank" rel="noopener">Release notes</a>
+          {/if}
+        </div>
+        {#if updateMsg}<div class="note" style="margin-top:12px"><div>{updateMsg}</div></div>{/if}
       </div>
-      <button class="btn btn-primary" onclick={installNode} disabled={!newNode.version}>Install</button>
-      {#if nodeMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{nodeMsg}</span>{/if}
+    </div>
+
+    <!-- Cloudflare card -->
+    <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge</p></div>
+      <span class="status"><span class="sdot {cf.configured ? 's-up' : 's-down'}"></span>{cf.configured ? 'Configured' : 'Not set'}</span></div>
+      <div class="section-b">
+        <div class="field"><label>
+          <span class="label-text">API Token <span class="hint">stored encrypted</span></span>
+          <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}>
+        </label></div>
+        <button class="btn btn-primary" onclick={saveCf} disabled={!cf.token}>Save Token</button>
+        {#if cfMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{cfMsg}</span>{/if}
+      </div>
+    </div>
+
+    <!-- Panel domain card -->
+    <div class="card"><div class="section-h"><div><h3>Panel Domain</h3><p>Front the panel on a domain; auracpd issues a Let's Encrypt certificate automatically.</p></div>
+      <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
+      <div class="section-b">
+        <div class="field"><label>
+          <span class="label-text">Domain / subdomain <span class="hint">point its DNS A record to this server first</span></span>
+          <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com">
+        </label></div>
+        <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
+        {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
+        {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
+      </div>
+    </div>
+
+    <!-- Remote backups card — wider; spans two columns because the form has
+         provider+target side-by-side AND a multiline params textarea. -->
+    <div class="card span-2"><div class="section-h"><div><h3>Remote Backups</h3><p>rclone destination for off-site backup copies</p></div>
+      <span class="status"><span class="sdot {remote.configured ? 's-up' : 's-down'}"></span>{remote.configured ? remote.type || 'configured' : 'Not set'}</span></div>
+      <div class="section-b">
+        <div class="two">
+          <div class="field"><label>
+            <span class="label-text">Provider</span>
+            <select class="select ui" bind:value={remote.kind}>
+              <option value="s3">Amazon S3</option><option value="b2">Backblaze B2</option><option value="dropbox">Dropbox</option>
+              <option value="drive">Google Drive</option><option value="sftp">SFTP</option><option value="swift">OpenStack Swift</option>
+            </select>
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">Target <span class="hint">remote:path</span></span>
+            <input class="input" bind:value={remote.target} placeholder="auracp:my-bucket/backups">
+          </label></div>
+        </div>
+        <div class="field"><label>
+          <span class="label-text">Parameters <span class="hint">one "key value" per line (e.g. access_key_id AKIA…)</span></span>
+          <textarea class="input" rows="4" style="font-family:var(--fs-mono)" bind:value={remote.params}></textarea>
+        </label></div>
+        <button class="btn btn-primary" onclick={saveRemote} disabled={!remote.target}>Save Remote</button>
+        {#if remoteMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{remoteMsg}</span>{/if}
+      </div>
+    </div>
+
+    <!-- Node runtimes — wider; the version table + install form benefit from full width. -->
+    <div class="card span-2"><div class="section-h"><div><h3>Node.js Runtimes</h3>
+      <p>Installed under <span class="mono">/opt/auracp/node/&lt;version&gt;</span> · sites can pin to any of these</p></div></div>
+      {#if nodes.length === 0}<div class="empty">No managed Node runtimes yet. Install one below.</div>
+      {:else}
+        <table><thead><tr><th>Version</th><th>Default</th><th></th></tr></thead><tbody>
+          {#each nodes as n}
+            <tr><td><span class="mono">{n.version}</span></td>
+              <td><span class="status"><span class="sdot {n.isDefault ? 's-up' : 's-down'}"></span>{n.isDefault ? 'default' : '—'}</span></td>
+              <td style="text-align:right">
+                {#if !n.isDefault}<button type="button" class="manage" onclick={() => makeDefaultNode(n.version)}>Make default</button>{/if}
+                <button type="button" class="manage" onclick={() => removeNode(n.version)}>Remove</button>
+              </td></tr>
+          {/each}
+        </tbody></table>
+      {/if}
+      <div class="section-b" style="border-top:1px solid var(--line)">
+        <div class="two">
+          <div class="field"><label>
+            <span class="label-text">Install Node version <span class="hint">e.g. 22.11.0, 20.18.0, 18.20.4</span></span>
+            <input class="input" bind:value={newNode.version} placeholder="22.11.0">
+          </label></div>
+          <div class="field" style="display:flex;align-items:end"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" bind:checked={newNode.makeDefault}> Make this the default</label></div>
+        </div>
+        <button class="btn btn-primary" onclick={installNode} disabled={!newNode.version}>Install</button>
+        {#if nodeMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{nodeMsg}</span>{/if}
+      </div>
+    </div>
+
+    <!-- Recent activity — full width; tabular event log -->
+    <div class="card span-2"><div class="section-h"><div><h3>Recent Activity</h3><p>Audit log</p></div></div>
+      {#if audit.length === 0}<div class="empty">No activity recorded.</div>
+      {:else}
+        <table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead><tbody>
+          {#each audit as a}
+            <tr><td><span class="mono" style="color:var(--txt-3)">{a.ts}</span></td><td><span class="mono">{a.actor}</span></td>
+              <td><span class="mono" style="color:var(--aura-strong)">{a.action}</span></td><td><span class="mono" style="color:var(--txt-2)">{a.target}</span></td></tr>
+          {/each}
+        </tbody></table>
+      {/if}
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Recent Activity</h3><p>Audit log</p></div></div>
-    {#if audit.length === 0}<div class="empty">No activity recorded.</div>
-    {:else}
-      <table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead><tbody>
-        {#each audit as a}
-          <tr><td><span class="mono" style="color:var(--txt-3)">{a.ts}</span></td><td><span class="mono">{a.actor}</span></td>
-            <td><span class="mono" style="color:var(--aura-strong)">{a.action}</span></td><td><span class="mono" style="color:var(--txt-2)">{a.target}</span></td></tr>
-        {/each}
-      </tbody></table>
-    {/if}
-  </div>
+<style>
+  /* 2-column Instance dashboard. Wide cards opt into 1:1 / 2:1 via .span-2. */
+  .instance-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:18px}
+  .instance-grid .span-2{grid-column:1 / -1}
+  @media (max-width: 900px){
+    .instance-grid{grid-template-columns:1fr}
+    .instance-grid .span-2{grid-column:auto}
+  }
+</style>
 </div>

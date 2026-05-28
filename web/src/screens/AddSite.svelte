@@ -13,8 +13,8 @@
     <p>Node.js included · automatic HTTPS · Cloudflare DNS-01 supported</p>
   </div>
   <div class="grid6">
-    {#each siteTypes as t, i}
-      <button type="button" class="site-card" style="animation-delay:{i * 0.03}s" onclick={() => openCreate(t.type)} aria-label="Create {t.name} site">
+    {#each siteTypes as t}
+      <button type="button" class="site-card" onclick={() => openCreate(t.type)} aria-label="Create {t.name} site">
         <div class="ico brand">{@html brandIcons[t.type]}</div>
         <h3>{t.name}</h3>
         <p>{t.desc}</p>

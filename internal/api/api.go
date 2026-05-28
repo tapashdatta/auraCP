@@ -19,6 +19,7 @@ import (
 	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
+	"github.com/auracp/auracp/internal/updater"
 	"github.com/auracp/auracp/internal/webserver"
 )
 
@@ -33,6 +34,7 @@ type Server struct {
 	node         *noderuntime.Manager
 	php          *phpruntime.Manager
 	acme         *acme.Manager
+	updater      *updater.Manager
 	secret       *secret.Box
 	runner       *system.Runner
 	panelBackend string
@@ -49,6 +51,7 @@ type Deps struct {
 	Node         *noderuntime.Manager
 	PHP          *phpruntime.Manager
 	ACME         *acme.Manager
+	Updater      *updater.Manager
 	Secret       *secret.Box
 	Runner       *system.Runner
 	PanelBackend string
@@ -57,7 +60,7 @@ type Deps struct {
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	srv := &Server{store: s, sites: d.Sites, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
-		web: d.Web, osu: d.OS, node: d.Node, php: d.PHP, acme: d.ACME,
+		web: d.Web, osu: d.OS, node: d.Node, php: d.PHP, acme: d.ACME, updater: d.Updater,
 		secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
 
 	// public
@@ -137,6 +140,12 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	// Certificates listing (read-only; issuance happens automatically).
 	mux.Handle("GET /api/certificates", srv.requirePerm("settings", "read", srv.listCertificates))
 	mux.Handle("POST /api/certificates/{domain}/renew", srv.requirePerm("settings", "update", srv.renewCertificate))
+
+	// Self-update — GET is settings:read (so the topbar badge renders for any
+	// signed-in user); POST is settings:update so a curious viewer can't kick
+	// off an apt install via the JSON API.
+	mux.Handle("GET /api/instance/update", srv.requirePerm("settings", "read", srv.instanceUpdateStatus))
+	mux.Handle("POST /api/instance/update", srv.requirePerm("settings", "update", srv.instanceUpdateApply))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

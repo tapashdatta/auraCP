@@ -117,7 +117,13 @@
             <tbody>
               {#each RES as r}
                 <tr><td><span class="mono">{r}</span></td>
-                  {#each ACT as a}<td style="text-align:center"><label class="sr-only"><span>{r} {a}</span><input type="checkbox" aria-label="{r} {a}" bind:checked={perms[r][a]}></label></td>{/each}
+                  {#each ACT as a}
+                    <td style="text-align:center;vertical-align:middle">
+                      <button type="button" role="switch" aria-checked={!!perms[r][a]} aria-label="{r} {a}"
+                              class="toggle toggle-sm" class:on={!!perms[r][a]}
+                              onclick={() => perms[r][a] = !perms[r][a]}></button>
+                    </td>
+                  {/each}
                 </tr>
               {/each}
             </tbody>
@@ -136,7 +142,8 @@
 
 <style>
   .perm-grid td, .perm-grid th { padding: 9px 12px; }
-  .perm-grid input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--aura); cursor: pointer; }
+  .perm-grid td:not(:first-child) { text-align: center }
+  .perm-grid .toggle { margin: 0 auto }
   /* fieldset + legend replace the orphan <label> for the permissions matrix. */
   .perm-fieldset { border: 0; padding: 0; margin: 0 0 18px; }
   .perm-fieldset legend { font-weight: 600; font-size: 13px; margin: 6px 0 10px; padding: 0; }

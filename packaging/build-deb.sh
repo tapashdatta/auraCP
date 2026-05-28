@@ -32,6 +32,7 @@ install -m 0644 "$ROOT/packaging/auracpd.service" "$PKG/etc/systemd/system/aurac
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
+install -m 0755 "$ROOT/installer/update.sh"    "$PKG/opt/auracp/installer/update.sh"
 chmod 700 "$PKG/etc/auracp"
 
 INSTALLED_SIZE=$(du -sk "$PKG" | cut -f1)
@@ -47,8 +48,8 @@ Priority: optional
 Description: auraCP — lightweight server control panel
  A minimal, modern control panel for hosting WordPress, PHP, Node.js, Python,
  static and reverse-proxy sites. Single static binary with the admin UI embedded.
- The data plane (Caddy, FrankenPHP, databases) is installed separately by the
- auraCP installer.
+ The data plane (nginx, PHP-FPM, MariaDB / PostgreSQL, …) is installed
+ separately by sudo auracp-install. Future upgrades via sudo auracp-update.
 EOF
 
 cat > "$PKG/DEBIAN/postinst" <<'EOF'
@@ -56,19 +57,22 @@ cat > "$PKG/DEBIAN/postinst" <<'EOF'
 set -e
 mkdir -p /var/lib/auracp /etc/auracp
 chmod 700 /etc/auracp
-ln -sf /opt/auracp/bin/auracp           /usr/local/bin/auracp
-ln -sf /opt/auracp/installer/install.sh /usr/local/bin/auracp-install
+ln -sf /opt/auracp/bin/auracp             /usr/local/bin/auracp
+ln -sf /opt/auracp/installer/install.sh   /usr/local/bin/auracp-install
 ln -sf /opt/auracp/installer/uninstall.sh /usr/local/bin/auracp-uninstall
+ln -sf /opt/auracp/installer/update.sh    /usr/local/bin/auracp-update
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
   systemctl enable auracpd >/dev/null 2>&1 || true
   systemctl restart auracpd || true
   echo
   echo "auraCP panel installed and running on https://<server-ip>:8443"
-  echo "Next step (provision the data plane — Caddy, MariaDB/Postgres, PHP/Node, …):"
+  echo "Next step — provision the data plane (nginx, MariaDB/Postgres, PHP-FPM, Node, …):"
   echo "  sudo auracp-install"
-  echo "or non-interactively, e.g.:"
+  echo "Or non-interactively:"
   echo "  sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com"
+  echo
+  echo "Future upgrades:  sudo auracp-update"
 fi
 exit 0
 EOF
@@ -80,7 +84,7 @@ if [ -d /run/systemd/system ]; then
   systemctl stop auracpd || true
   systemctl disable auracpd >/dev/null 2>&1 || true
 fi
-rm -f /usr/local/bin/auracp /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall
+rm -f /usr/local/bin/auracp /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall /usr/local/bin/auracp-update
 exit 0
 EOF
 

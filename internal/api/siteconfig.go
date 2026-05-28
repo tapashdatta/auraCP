@@ -12,7 +12,7 @@ import (
 
 const cfTokenKey = "cloudflare_token_enc"
 
-// reapplyWeb re-renders a site's Caddy config from its stored flags and reloads.
+// reapplyWeb re-renders a site's nginx vhost from its stored flags and reloads.
 func (s *Server) reapplyWeb(ctx context.Context, domain string) error {
 	st, err := s.store.SiteByDomain(domain)
 	if err != nil {

@@ -23,10 +23,14 @@ and leaves the server's resources for the sites it hosts.
 - **Node.js 24 LTS** preinstalled on every site.
 - **Automatic HTTPS** (in-process **go-acme/lego** in auracpd) — HTTP-01 by default, **Cloudflare**
   DNS-01 for wildcards or proxied domains, daily renewal scheduler.
-- **PHP-FPM, one pool per site** with a per-site Unix socket and isolated UID; **multiple PHP
-  versions side-by-side** (8.3 / 8.4 / 8.5) from `deb.sury.org`, pin per site. PHP install
-  pulls only the DB / cache extensions for engines actually selected on the host (no
-  `php-mysql` when MariaDB wasn't picked, etc.).
+- **PHP-FPM, one pool per site** with a per-site Unix socket and isolated UID; **install one
+  or many PHP versions side-by-side** (8.3 / 8.4 / 8.5) from `deb.sury.org` — pick a set in
+  the installer TUI checklist, add more later from **Settings → PHP Versions**, pin per site
+  in the Create form. PHP install pulls only the DB/cache extensions for engines actually
+  selected on the host.
+- **Self-update from the panel** — `Settings → auraCP Updates` checks GitHub Releases (cached
+  1h), shows current vs latest, one-click upgrades in place via `auracp-update`. Topbar shows
+  an amber pill when a new version is available. Background check ticks every 12h.
 - **Node.js** runs as a per-site **systemd** unit by default; optional **PM2 wrapper**
   (`pm2-runtime` — no daemon) for apps that need cluster mode or ship `ecosystem.config.js`.
 - **nginx fastcgi_cache + proxy_cache** for full-page caching; **Redis** for object cache.
@@ -61,7 +65,7 @@ clone needed — the `.deb` bundles the installer and exposes it as the `auracp-
 # 1) download the package for your arch (plain curl — repo is public)
 ARCH=$(dpkg --print-architecture)        # → amd64 or arm64
 curl -fL -o auracp.deb \
-  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.8/auracp_0.2.8_${ARCH}.deb"
+  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.9/auracp_0.2.9_${ARCH}.deb"
 
 # 2) install the panel
 sudo dpkg -i ./auracp.deb
@@ -74,7 +78,7 @@ sudo auracp-install
 
 ```bash
 ARCH=$(dpkg --print-architecture) && \
-curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.8/auracp_0.2.8_${ARCH}.deb" && \
+curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.9/auracp_0.2.9_${ARCH}.deb" && \
 sudo dpkg -i /tmp/auracp.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
@@ -83,9 +87,15 @@ Then open the panel — `https://panel.example.com` if you set a domain, otherwi
 `https://<server-ip>:8443` (self-signed) — and **create your admin account** on the first-run setup screen.
 
 `auracp-install` locks the required packages (auracpd, nginx) and lets you choose optional ones:
-MariaDB, PostgreSQL, Node.js, PHP-FPM (multi-version), Python, Redis, Typesense, Docker, UFW +
-fail2ban. Run with `--dry-run` first to preview the plan. To remove everything:
+MariaDB, PostgreSQL, Node.js, PHP-FPM (multi-version checklist), Python, Redis, Typesense,
+Docker, UFW + fail2ban. Run with `--dry-run` first to preview the plan. To remove everything:
 `sudo auracp-uninstall` (returns the host to baseline — no orphan apt sources or service users).
+
+**Already installed?** Re-running `sudo auracp-install` is now safe — if the panel is already
+at the same version, the data-plane components install/update around it without touching the
+panel binary. To upgrade the panel itself, use **`sudo auracp-update`** (or the one-click
+button in *Settings → auraCP Updates*) — it fetches the latest GitHub release for your arch
+and applies via `dpkg -i`. The panel restarts itself and the UI reloads when it's back.
 
 **Upgrading from v0.1.x?** The data plane changed (Caddy → nginx, FrankenPHP → PHP-FPM); see
 [docs/UPGRADE-v0.2.md](docs/UPGRADE-v0.2.md) for the destructive upgrade path.

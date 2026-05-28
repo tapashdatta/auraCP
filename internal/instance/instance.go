@@ -95,8 +95,19 @@ func diskInfo(path string) (usedGB, totalGB int64) {
 }
 
 // Services returns active/inactive/unknown for the known managed services.
+//
+// v0.2.0 stack: auracpd + nginx + per-version PHP-FPM + databases + optional
+// caches and security. We probe a handful of php<ver>-fpm units (versions
+// auraCP knows how to install via deb.sury.org); only the ones actually
+// present surface — `systemctl is-active` on a missing unit cleanly returns
+// "inactive" so it's safe to ask about a unit that may not exist.
 func Services(ctx context.Context, r *system.Runner) map[string]string {
-	names := []string{"caddy", "auracpd", "mariadb", "postgresql", "redis-server", "docker", "typesense-server", "fail2ban"}
+	names := []string{
+		"auracpd", "nginx",
+		"php8.3-fpm", "php8.4-fpm", "php8.5-fpm",
+		"mariadb", "postgresql",
+		"redis-server", "docker", "typesense-server", "fail2ban",
+	}
 	out := map[string]string{}
 	for _, n := range names {
 		o, err := r.Run(ctx, "systemctl", "is-active", n)
@@ -104,7 +115,22 @@ func Services(ctx context.Context, r *system.Runner) map[string]string {
 		if err != nil && state == "" {
 			state = "unknown"
 		}
+		// Hide units that aren't installed at all — the UI doesn't need to
+		// show "php8.3-fpm: inactive" when 8.3 was never selected on this host.
+		// We keep core ones (auracpd / nginx) regardless so missing-required
+		// services are visible as red dots.
+		if state == "inactive" && isOptional(n) {
+			continue
+		}
 		out[n] = state
 	}
 	return out
+}
+
+func isOptional(unit string) bool {
+	switch unit {
+	case "auracpd", "nginx":
+		return false
+	}
+	return true
 }

@@ -23,9 +23,15 @@ import (
 	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
+	"github.com/auracp/auracp/internal/updater"
 	"github.com/auracp/auracp/internal/webserver"
 	"github.com/auracp/auracp/internal/webui"
 )
+
+// version is injected at build time via -ldflags "-X main.version=…" from the
+// Makefile. The updater package reports this back to the panel UI and uses it
+// to decide whether a newer GitHub release is worth flagging.
+var version = "dev"
 
 func main() {
 	addr := flag.String("addr", ":8443", "listen address")
@@ -72,6 +78,22 @@ func main() {
 	php := phpruntime.New(runner, st)
 	php.Reconcile()
 
+	// Self-update checker. The Manager owns a 1h cache; a goroutine refreshes
+	// every 12h so the UI never blocks on api.github.com. Honours the version
+	// injected by the Makefile's -ldflags -X main.version=…
+	upd := updater.New(version)
+	go func() {
+		// Initial fire-and-forget probe a few seconds after startup so the
+		// dashboard's update card has a value to show right away.
+		time.Sleep(5 * time.Second)
+		_ = upd.Refresh(context.Background())
+		t := time.NewTicker(12 * time.Hour)
+		defer t.Stop()
+		for range t.C {
+			_ = upd.Refresh(context.Background())
+		}
+	}()
+
 	// ACME owns LE issuance + renewal; nginx reload happens after each issuance.
 	rootCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -113,6 +135,7 @@ func main() {
 		Node:         node,
 		PHP:          php,
 		ACME:         ac,
+		Updater:      upd,
 		Secret:       sec,
 		Runner:       runner,
 		PanelBackend: panelBackend,

@@ -8,15 +8,25 @@
   let theme = $state(getTheme())
   let menu = $state(false)
   let host = $state('')
+  let updateAvailable = $state(false)
+  let updateLatest = $state('')
   function flip() { theme = toggleTheme() }
   const initials = $derived((session.user?.email || 'A')[0].toUpperCase())
   const isAdmin = $derived(session.user?.role === 'ROLE_ADMIN')
   async function doLogout() { menu = false; await logout() }
   function openAccount() { menu = false; go('account') }
+  function openUpdates() { go('instance') }   // Updates card lives on the Instance screen
 
   onMount(async () => {
     const r = await apiFetch('/api/instance')
     if (r.ok) { const d = await r.json(); host = d.hostname || d.os || '' }
+    // Cheap check (server caches 1h) so the badge appears on first paint.
+    const u = await apiFetch('/api/instance/update')
+    if (u.ok) {
+      const d = await u.json()
+      updateAvailable = !!d.available
+      updateLatest = d.latestPlain || ''
+    }
   })
 </script>
 
@@ -32,6 +42,13 @@
     <button type="button" class:active={ui.view === 'instance'} onclick={() => go('instance')}>Instance</button>
   </nav>
   <div class="spacer"></div>
+  {#if updateAvailable}
+    <button type="button" class="update-badge" onclick={openUpdates}
+            title="auraCP {updateLatest} is available — click to upgrade"
+            aria-label="Update available: auraCP {updateLatest}">
+      <span class="sdot s-warn"></span><span>Update {updateLatest}</span>
+    </button>
+  {/if}
   {#if host}<div class="instance-pill"><span class="sdot s-up"></span><span class="mono">{host}</span></div>{/if}
   <button class="icon-btn" onclick={flip} title="Toggle theme" aria-label="Toggle theme">
     {#if theme === 'dark'}

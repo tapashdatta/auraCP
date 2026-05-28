@@ -1,5 +1,6 @@
 // Package ssl reports a site's live TLS certificate status by reading the leaf
-// certificate served on :443. Caddy manages issuance/renewal; this just observes.
+// certificate served on :443. Issuance/renewal is owned by internal/acme
+// (lego); this package only observes what nginx is serving.
 package ssl
 
 import (
