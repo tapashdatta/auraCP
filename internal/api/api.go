@@ -365,6 +365,16 @@ func (s *Server) manageDatabase(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
 	engine := r.PathValue("engine")
 	name := r.PathValue("name")
+	// v0.2.26: pre-flight check — refuse if Adminer wasn't installed (rather
+	// than mint a token that 502s when the browser opens the URL). PHP-FPM
+	// being absent at install time is the usual cause; tell the operator how
+	// to fix it.
+	if _, err := os.Stat("/opt/auracp/adminer/index.php"); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "Adminer is not installed on this host. Re-run the installer with PHP enabled: sudo auracp-install --yes --php=yes",
+		})
+		return
+	}
 	dbs, err := s.store.DatabasesForSite(domain)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

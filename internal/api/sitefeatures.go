@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
@@ -11,6 +13,29 @@ import (
 	"github.com/auracp/auracp/internal/logs"
 	"github.com/auracp/auracp/internal/store"
 )
+
+// partFilename returns the raw filename parameter from a multipart part's
+// Content-Disposition header, WITHOUT running it through filepath.Base()
+// the way Go's Part.FileName() does. We need the leading "subdir/" segments
+// so the upload handler can recreate a dropped folder tree on disk.
+func partFilename(p *multipart.Part) string {
+	cd := p.Header.Get("Content-Disposition")
+	if cd == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		return ""
+	}
+	// RFC 5987 prefers filename* but practical browsers always send filename
+	// for File parts. The relPath is plain ASCII (we built it from JS
+	// entry.name which the browser already normalised), so plain filename
+	// is sufficient.
+	if fn := params["filename"]; fn != "" {
+		return fn
+	}
+	return ""
+}
 
 // GET /api/sites/{domain}/logs?kind=access&n=200
 func (s *Server) siteLogs(w http.ResponseWriter, r *http.Request) {
@@ -88,15 +113,17 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 			b, _ := io.ReadAll(io.LimitReader(part, 4096))
 			sub = string(b)
 		case "files":
-			name := part.FileName()
+			// v0.2.26: Go's Part.FileName() pipes the filename through
+			// filepath.Base(), which strips any leading "subdir/" — exactly
+			// what the folder-drop path relies on. Parse Content-Disposition
+			// ourselves so the relative path survives.
+			name := partFilename(part)
 			if name == "" {
 				_ = part.Close()
 				continue
 			}
-			// v0.2.23: filename may contain forward-slashes when the browser
-			// drops a folder (the recursive walk uses relPath = "sub/file.ext").
-			// SaveAt handles both the flat case (no slashes → basename → Save)
-			// and the nested case (creates intermediate dirs first).
+			// SaveAt handles both flat (no slashes → basename → Save) and
+			// nested (creates intermediate dirs first).
 			if err := files.SaveAt(st.SiteUser, domain, sub, name, part); err != nil {
 				errs = append(errs, name+": "+err.Error())
 			} else {

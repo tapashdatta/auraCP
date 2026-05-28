@@ -89,6 +89,23 @@
   // can restart (everything we manage *except* auracpd itself). Disable the
   // button mid-flight; refresh just that row once systemctl returns.
   let restarting = $state({})    // {service: true} while in-flight
+  let auditExpanded = $state(false)   // v0.2.26: Recent Activity show-5 / show-20 toggle
+  // Compact "5 minutes ago" style — only times today; older entries fall
+  // back to MM-DD HH:MM. Keeps each audit row to one line.
+  function relTime(ts) {
+    if (!ts) return ''
+    const d = new Date(ts.replace(' ', 'T') + 'Z')
+    if (isNaN(d.getTime())) return ts
+    const sec = Math.max(0, (Date.now() - d.getTime()) / 1000)
+    if (sec < 45)     return 'just now'
+    if (sec < 90)     return '1m ago'
+    if (sec < 3600)   return `${Math.round(sec / 60)}m ago`
+    if (sec < 7200)   return '1h ago'
+    if (sec < 86400)  return `${Math.round(sec / 3600)}h ago`
+    if (sec < 172800) return 'yesterday'
+    if (sec < 604800) return `${Math.round(sec / 86400)}d ago`
+    return d.toISOString().slice(5, 16).replace('T', ' ')   // MM-DD HH:MM
+  }
   async function restartService(name) {
     if (restarting[name]) return
     if (!confirm(`Restart ${name}? Any in-flight requests handled by this service will be dropped.`)) return
@@ -290,21 +307,47 @@
       </tbody></table>
     </div>
 
-    <!-- Recent activity — full width; tabular event log -->
-    <div class="card span-2"><div class="section-h"><div><h3>Recent Activity</h3><p>Audit log</p></div></div>
+    <!-- v0.2.26: Recent Activity — compact one-line-per-event feed. Time
+         (relative), actor, action verb, target — all on a single row. The
+         card shows 5 by default with a "Show more" toggle to expand to 20. -->
+    <div class="card span-2"><div class="section-h"><div><h3>Recent Activity</h3><p>Audit log · most recent first</p></div>
+      {#if audit.length > 5}
+        <button type="button" class="manage" onclick={() => auditExpanded = !auditExpanded}>
+          {auditExpanded ? 'Show 5' : `Show all ${Math.min(audit.length, 20)}`}
+        </button>
+      {/if}</div>
       {#if audit.length === 0}<div class="empty">No activity recorded.</div>
       {:else}
-        <table><thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Target</th></tr></thead><tbody>
-          {#each audit as a}
-            <tr><td><span class="mono" style="color:var(--txt-3)">{a.ts}</span></td><td><span class="mono">{a.actor}</span></td>
-              <td><span class="mono" style="color:var(--aura-strong)">{a.action}</span></td><td><span class="mono" style="color:var(--txt-2)">{a.target}</span></td></tr>
+        <ul class="audit-feed">
+          {#each audit.slice(0, auditExpanded ? 20 : 5) as a}
+            <li class="audit-row">
+              <span class="audit-ts" title={a.ts}>{relTime(a.ts)}</span>
+              <span class="audit-actor mono">{a.actor}</span>
+              <span class="audit-action mono">{a.action}</span>
+              {#if a.target}<span class="audit-target mono">{a.target}</span>{/if}
+            </li>
           {/each}
-        </tbody></table>
+        </ul>
       {/if}
     </div>
   </div>
 
 <style>
+  /* v0.2.26: compact audit feed — one event per row, fixed-width timestamp
+     column, action chip, target tail-clipped. Max ~5 rows by default. */
+  .audit-feed{list-style:none;padding:0;margin:0;border-top:1px solid var(--line)}
+  .audit-row{display:flex;align-items:center;gap:12px;padding:9px 18px;border-bottom:1px solid var(--line);font-size:12.5px;line-height:1.3}
+  .audit-row:last-child{border-bottom:none}
+  .audit-row:hover{background:var(--surface-1)}
+  .audit-ts{flex:none;width:90px;color:var(--txt-3);font-size:11.5px;font-family:var(--fs-mono)}
+  .audit-actor{flex:none;color:var(--txt);max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .audit-action{flex:none;color:var(--aura-strong);font-weight:500;padding:1px 8px;border-radius:5px;background:color-mix(in srgb, var(--aura-strong) 12%, transparent)}
+  .audit-target{flex:1;min-width:0;color:var(--txt-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
+  @media (max-width:640px){
+    .audit-ts{width:64px}
+    .audit-actor{max-width:120px}
+  }
+
   /* Small "did you know" hint block — neutral surface, not an alert. */
   .hint-block{margin-top:14px;padding:12px 14px;background:var(--surface-1);border:1px solid var(--line);border-left:3px solid var(--info);border-radius:8px;font-size:12.5px;color:var(--txt-2);line-height:1.55}
   .hint-block b{color:var(--txt)}
