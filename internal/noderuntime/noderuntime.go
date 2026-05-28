@@ -142,16 +142,51 @@ func (m *Manager) EnsurePM2(ctx context.Context, version string) error {
 	return err
 }
 
-// ReconcileDefaultSymlink ensures /opt/auracp/node/default points at the DB's
-// recorded default — used on startup so the symlink is always correct.
-func (m *Manager) ReconcileDefaultSymlink() {
+// Reconcile imports any Node version directories the installer laid down at
+// /opt/auracp/node/<X.Y.Z> into the DB, then aligns the /opt/auracp/node/default
+// symlink with the recorded default. Idempotent. Called on auracpd startup.
+func (m *Manager) Reconcile() {
 	if m.R.DryRun {
 		return
 	}
-	d, ok := m.Store.DefaultNodeRuntime()
-	if !ok {
-		return
+	// 1) adopt any on-disk versions that the DB doesn't know about yet.
+	entries, err := os.ReadDir(Base)
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || e.Name() == "default" {
+				continue
+			}
+			if !verRe.MatchString(e.Name()) {
+				continue
+			}
+			if _, exists := m.Store.NodeRuntime(e.Name()); exists {
+				continue
+			}
+			path := Dir(e.Name())
+			if _, err := os.Stat(filepath.Join(path, "bin", "node")); err != nil {
+				continue // looks like a leftover dir, not a real install
+			}
+			_ = m.Store.AddNodeRuntime(store.NodeRuntime{Version: e.Name(), Path: path})
+		}
 	}
-	_ = os.Remove(DefaultDir())
-	_ = os.Symlink(d.Path, DefaultDir())
+	// 2) if nothing is marked default yet, adopt whatever /opt/auracp/node/default
+	//    currently points at (installer-laid symlink) OR pick newest known version.
+	if _, ok := m.Store.DefaultNodeRuntime(); !ok {
+		if target, err := os.Readlink(DefaultDir()); err == nil {
+			v := filepath.Base(target)
+			if _, exists := m.Store.NodeRuntime(v); exists {
+				_ = m.Store.SetDefaultNodeRuntime(v)
+			}
+		}
+		if _, ok := m.Store.DefaultNodeRuntime(); !ok {
+			if rts, err := m.Store.NodeRuntimes(); err == nil && len(rts) > 0 {
+				_ = m.Store.SetDefaultNodeRuntime(rts[0].Version)
+			}
+		}
+	}
+	// 3) make sure the default symlink reflects the DB.
+	if d, ok := m.Store.DefaultNodeRuntime(); ok {
+		_ = os.Remove(DefaultDir())
+		_ = os.Symlink(d.Path, DefaultDir())
+	}
 }

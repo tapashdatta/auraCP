@@ -136,9 +136,13 @@ msg "Removing FrankenPHP…"
 run "rm -f /usr/bin/frankenphp"
 
 msg "Removing Node.js…"
+# Legacy NodeSource leftovers from older installers (apt-managed nodejs).
 purge_installed nodejs
 run "rm -f /etc/apt/sources.list.d/nodesource.list"
 run "rm -f /etc/apt/keyrings/nodesource.gpg /usr/share/keyrings/nodesource.gpg"
+# auraCP-managed Node lives under /opt/auracp/node (removed with the panel above);
+# also clean the system-PATH symlinks the installer added.
+run "rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx"
 
 # ── 3. databases ────────────────────────────────────────────────────────────
 if [ "$KEEP_DB" -eq 0 ]; then

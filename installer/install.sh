@@ -28,7 +28,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.9"
+AURACP_VERSION="0.1.10"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -426,12 +426,39 @@ install_postgres() {
 }
 
 install_node() {
-  msg "Installing Node.js ${NODE_MAJOR} LTS (system-wide, from NodeSource)…"
-  run "curl -fsSL https://deb.nodesource.com/setup_${NODE_MAJOR}.x -o /tmp/nodesource_setup.sh"
-  run "bash /tmp/nodesource_setup.sh"
-  run "apt-get install -y nodejs"
-  run "rm -f /tmp/nodesource_setup.sh"
-  ok "Node.js ${NODE_MAJOR} ready (default runtime for every site)."
+  msg "Installing Node.js ${NODE_MAJOR} (latest patch, from nodejs.org)…"
+  local arch="x64"
+  [ "$CADDY_ARCH" = "arm64" ] && arch="arm64"
+
+  # Resolve the latest patch for the chosen major from nodejs.org/dist/index.json.
+  # Python3 is on every Debian/Ubuntu base image; cheap one-shot parse.
+  local ver
+  ver=$(curl -fsSL https://nodejs.org/dist/index.json 2>/dev/null \
+        | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+prefix = 'v${NODE_MAJOR}.'
+for r in data:
+    if r['version'].startswith(prefix):
+        print(r['version'][1:]); break
+" 2>/dev/null || true)
+  if [ -z "$ver" ]; then
+    warn "Could not resolve latest Node ${NODE_MAJOR}.x from nodejs.org/dist; falling back to ${NODE_MAJOR}.0.0"
+    ver="${NODE_MAJOR}.0.0"
+  fi
+
+  local dir="${PREFIX}/node/${ver}"
+  run "mkdir -p ${dir}"
+  run "curl -fsSL https://nodejs.org/dist/v${ver}/node-v${ver}-linux-${arch}.tar.xz -o /tmp/node-${ver}.tar.xz"
+  run "tar -xJf /tmp/node-${ver}.tar.xz -C ${dir} --strip-components=1"
+  run "rm -f /tmp/node-${ver}.tar.xz"
+
+  # Default symlink + system PATH symlinks so npm/wp-cli/etc. find `node`.
+  run "ln -sfn ${dir} ${PREFIX}/node/default"
+  run "ln -sf  ${PREFIX}/node/default/bin/node /usr/local/bin/node"
+  run "ln -sf  ${PREFIX}/node/default/bin/npm  /usr/local/bin/npm"
+  run "ln -sf  ${PREFIX}/node/default/bin/npx  /usr/local/bin/npx"
+  ok "Node.js ${ver} installed at ${dir} (and /usr/local/bin/{node,npm,npx}); auracpd registers it on next start."
 }
 
 install_php() {

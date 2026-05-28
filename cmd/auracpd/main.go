@@ -65,7 +65,7 @@ func main() {
 
 	web := webserver.New(runner)
 	node := noderuntime.New(runner, st)
-	node.ReconcileDefaultSymlink()
+	node.Reconcile()
 
 	// Reconcile the panel domain: persist the flag (if given), then (re)apply the
 	// Caddy front for whatever domain is configured — this triggers Caddy's
