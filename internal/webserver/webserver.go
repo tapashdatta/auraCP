@@ -6,12 +6,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/validate"
 )
+
+// ErrCaddyMissing is returned when site/panel operations need Caddy but it
+// isn't installed yet. The API surfaces this verbatim so the operator knows
+// to run the data-plane installer.
+var ErrCaddyMissing = fmt.Errorf(
+	"Caddy is not installed on this host. Run installer/install.sh to provision the data plane (or `sudo apt install caddy`).")
 
 type Manager struct{ R *system.Runner }
 
@@ -147,6 +154,11 @@ func (m *Manager) RemovePanelProxy(ctx context.Context) error {
 
 // Reload validates the config, then asks Caddy to reload it gracefully.
 func (m *Manager) Reload(ctx context.Context) error {
+	if !m.R.DryRun {
+		if _, err := exec.LookPath("caddy"); err != nil {
+			return ErrCaddyMissing
+		}
+	}
 	if _, err := m.R.Run(ctx, "caddy", "validate", "--config", "/etc/caddy/Caddyfile"); err != nil {
 		return fmt.Errorf("caddy config invalid: %w", err)
 	}

@@ -78,10 +78,16 @@ run "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null"
 
 msg "Removing auracpd panel…"
 run "systemctl disable --now auracpd"
+# Purge the panel package — handles any installed version of 'auracp'.
 run "apt-get purge -y auracp"
+# Belt-and-suspenders for any leftover auracp-prefixed packages.
+pkgs=$(dpkg-query -W -f='${Package}\n' 'auracp*' 2>/dev/null || true)
+if [ -n "$pkgs" ]; then run "apt-get purge -y $pkgs"; fi
 run "rm -f /etc/systemd/system/auracpd.service"
+run "rm -rf /etc/systemd/system/auracpd.service.d"   # panel-domain drop-in et al
 run "rm -rf /opt/auracp /etc/auracp /var/lib/auracp"
-run "rm -f /usr/local/bin/auracp /usr/local/bin/auracpd"
+# bundled-installer command symlinks (from the .deb postinst)
+run "rm -f /usr/local/bin/auracp /usr/local/bin/auracpd /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall"
 run "systemctl daemon-reload"
 ok "Panel removed."
 

@@ -44,25 +44,27 @@ and leaves the server's resources for the sites it hosts.
 
 ## Install
 
-On a fresh **Debian 13** or **Ubuntu 24.04** host (x86-64 or ARM64):
+On a fresh **Debian 13** or **Ubuntu 24.04** host (x86-64 or ARM64), no repo clone needed
+— the `.deb` bundles the installer and exposes it as the `auracp-install` command:
 
 ```bash
-# 1) install the panel package (from a GitHub Release)
-sudo apt install ./auracp_0.1.1_amd64.deb
+# 1) install the panel  (one-line)
+sudo dpkg -i ./auracp_0.1.1_amd64.deb
 
-# 2) provision the data plane — run WITHOUT flags for the interactive package menu,
-#    or pass flags to go non-interactive:
-sudo ./installer/install.sh
-#    e.g. headless with a panel domain (Caddy issues its Let's Encrypt cert):
-sudo ./installer/install.sh --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
+# 2) provision the data plane  (interactive package menu)
+sudo auracp-install
+
+# …or fully non-interactive in a single line:
+sudo dpkg -i ./auracp_0.1.1_amd64.deb && \
+sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
 
 Then open the panel — `https://panel.example.com` if you set a domain, otherwise
 `https://<server-ip>:8443` (self-signed) — and **create your admin account** on the first-run setup screen.
 
-The installer locks the required packages (auracpd, Caddy) and lets you choose optional ones:
+`auracp-install` locks the required packages (auracpd, Caddy) and lets you choose optional ones:
 MariaDB, PostgreSQL, Node.js, PHP/FrankenPHP, Python, Redis, Typesense, Docker, UFW + fail2ban.
-Run with `--dry-run` first to preview the plan.
+Run with `--dry-run` first to preview the plan. To remove everything: `sudo auracp-uninstall`.
 
 ## Build from source
 

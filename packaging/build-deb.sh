@@ -21,6 +21,7 @@ DEB="$BIND/auracp_${VERSION}_${ARCH}.deb"
 rm -rf "$PKG"
 mkdir -p "$PKG/DEBIAN" \
          "$PKG/opt/auracp/bin" \
+         "$PKG/opt/auracp/installer" \
          "$PKG/etc/systemd/system" \
          "$PKG/var/lib/auracp" \
          "$PKG/etc/auracp"
@@ -28,6 +29,9 @@ mkdir -p "$PKG/DEBIAN" \
 install -m 0755 "$BIND/auracpd-linux-$ARCH" "$PKG/opt/auracp/bin/auracpd"
 install -m 0755 "$BIND/auracp-linux-$ARCH"  "$PKG/opt/auracp/bin/auracp"
 install -m 0644 "$ROOT/packaging/auracpd.service" "$PKG/etc/systemd/system/auracpd.service"
+# Bundle the data-plane installer + uninstaller so users don't need the repo.
+install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
+install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
 chmod 700 "$PKG/etc/auracp"
 
 INSTALLED_SIZE=$(du -sk "$PKG" | cut -f1)
@@ -52,12 +56,19 @@ cat > "$PKG/DEBIAN/postinst" <<'EOF'
 set -e
 mkdir -p /var/lib/auracp /etc/auracp
 chmod 700 /etc/auracp
-ln -sf /opt/auracp/bin/auracp /usr/local/bin/auracp
+ln -sf /opt/auracp/bin/auracp           /usr/local/bin/auracp
+ln -sf /opt/auracp/installer/install.sh /usr/local/bin/auracp-install
+ln -sf /opt/auracp/installer/uninstall.sh /usr/local/bin/auracp-uninstall
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
   systemctl enable auracpd >/dev/null 2>&1 || true
   systemctl restart auracpd || true
-  echo "auraCP started on https://<server-ip>:8443 — open it to create your admin account."
+  echo
+  echo "auraCP panel installed and running on https://<server-ip>:8443"
+  echo "Next step (provision the data plane — Caddy, MariaDB/Postgres, PHP/Node, …):"
+  echo "  sudo auracp-install"
+  echo "or non-interactively, e.g.:"
+  echo "  sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com"
 fi
 exit 0
 EOF
@@ -69,6 +80,7 @@ if [ -d /run/systemd/system ]; then
   systemctl stop auracpd || true
   systemctl disable auracpd >/dev/null 2>&1 || true
 fi
+rm -f /usr/local/bin/auracp /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall
 exit 0
 EOF
 

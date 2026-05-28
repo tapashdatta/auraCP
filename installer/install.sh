@@ -182,9 +182,18 @@ select_components() {
   else
     select_readline
   fi
-  if [ -z "$PANEL_DOMAIN" ]; then
-    read -r -p "  Panel domain (optional; blank = access via IP:${PANEL_PORT}): " PANEL_DOMAIN < /dev/tty || true
-  fi
+}
+
+# Asked for the panel domain regardless of whether other selection flags forced
+# the package menu to be skipped — this is its own decision.
+prompt_panel_domain() {
+  [ -n "$PANEL_DOMAIN" ] && return 0   # already set via flag / env
+  [ "$ASSUME_YES" -eq 1 ] && return 0  # honour --yes (no interactive bits)
+  [ -r /dev/tty ] || return 0
+  printf '\n%s\n' "${C_B}Panel domain (optional)${C_RESET}"
+  printf '%s\n' "  Setting a domain lets Caddy issue a real Let's Encrypt cert for the panel."
+  printf '%s\n' "  Point its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}."
+  read -r -p "  Panel domain: " PANEL_DOMAIN < /dev/tty || true
 }
 
 select_whiptail() {
@@ -392,6 +401,16 @@ install_security() {
 
 install_auracpd() { # required — the control plane
   msg "Installing auracpd…"
+
+  # When this installer is shipped inside the .deb (auracp-install command),
+  # the panel package is already installed — just keep the service healthy.
+  if [ "$DRY_RUN" -eq 0 ] && dpkg-query -W -f='${Status}' auracp 2>/dev/null | grep -q "install ok installed"; then
+    run "systemctl daemon-reload"
+    run "systemctl enable --now auracpd"
+    ok "Panel already installed (auracp package) — service ensured running."
+    return
+  fi
+
   local repo deb=""
   repo="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
   # Find a prebuilt .deb without `ls` (which exits non-zero on no-match under set -e).
@@ -492,6 +511,7 @@ main() {
   printf '%s\n' "${C_B}auraCP ${AURACP_VERSION} installer${C_RESET}"
   preflight
   select_components
+  prompt_panel_domain
   print_plan
   confirm
 

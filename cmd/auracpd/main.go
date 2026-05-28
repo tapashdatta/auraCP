@@ -103,8 +103,19 @@ func main() {
 		if err != nil {
 			log.Fatalf("tls cert: %v", err)
 		}
+		ln, err := net.Listen("tcp", *addr)
+		if err != nil {
+			log.Fatalf("listen: %v", err)
+		}
+		// Plain HTTP requests on the TLS port get 301'd to https://, so users
+		// who type http://… don't see a TLS handshake error.
+		tlsLn, httpLn := splitTLSAndHTTP(ln)
+		go func() {
+			redir := &http.Server{Handler: http.HandlerFunc(httpsRedirect), ReadHeaderTimeout: 5 * time.Second}
+			_ = redir.Serve(httpLn)
+		}()
 		log.Printf("auracpd listening on https://%s (db: %s)", *addr, *dbPath)
-		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+		if err := srv.ServeTLS(tlsLn, certPath, keyPath); err != nil {
 			log.Fatalf("server: %v", err)
 		}
 		return
