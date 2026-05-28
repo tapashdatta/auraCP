@@ -6,6 +6,11 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"os/user"
+	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/auth"
@@ -94,6 +99,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("GET /api/sites/{domain}/databases", srv.requirePerm("databases", "read", srv.listDatabases))
 	mux.Handle("POST /api/sites/{domain}/databases", srv.requirePerm("databases", "create", srv.createDatabase))
 	mux.Handle("DELETE /api/sites/{domain}/databases/{engine}/{name}", srv.requirePerm("databases", "delete", srv.deleteDatabase))
+	mux.Handle("POST /api/sites/{domain}/databases/{engine}/{name}/manage", srv.requirePerm("databases", "read", srv.manageDatabase))
 
 	// per-site features
 	mux.Handle("GET /api/sites/{domain}/logs", srv.protect(srv.siteLogs))
@@ -345,6 +351,84 @@ func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "database.delete", engine+":"+name)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/databases/{engine}/{name}/manage
+//
+// v0.2.25: mint a one-time SSO token, write it to /run/auracp/adminer-sso/
+// with the decrypted credentials, and return a URL the browser can open
+// to land in Adminer pre-authenticated. The PHP wrapper at /_adminer/ reads
+// the token, deletes it (single-use), and seeds Adminer's session with the
+// credentials. Token TTL is 60s — long enough to survive a slow browser
+// open, short enough that a leaked URL is unusable a minute later.
+func (s *Server) manageDatabase(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	engine := r.PathValue("engine")
+	name := r.PathValue("name")
+	dbs, err := s.store.DatabasesForSite(domain)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	var rec *store.Database
+	for i := range dbs {
+		if dbs[i].Engine == engine && dbs[i].Name == name {
+			rec = &dbs[i]
+			break
+		}
+	}
+	if rec == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "database not found"})
+		return
+	}
+	enc, err := s.store.DatabasePasswordEnc(engine, name)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	password, err := s.secret.Decrypt(enc)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	tok, err := auth.RandomToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	dir := "/run/auracp/adminer-sso"
+	if mkerr := os.MkdirAll(dir, 0o700); mkerr != nil {
+		writeErr(w, http.StatusInternalServerError, mkerr)
+		return
+	}
+	// Token file holds JSON { engine, name, user, password, expires }. The
+	// PHP wrapper checks expires before honouring it; auracpd separately
+	// sweeps stale tokens every minute (cleanup goroutine, future).
+	payload := map[string]any{
+		"engine":   engine,
+		"name":     name,
+		"user":     rec.DBUser,
+		"password": password,
+		"expires":  time.Now().Add(60 * time.Second).Unix(),
+	}
+	blob, _ := json.Marshal(payload)
+	tokPath := filepath.Join(dir, tok)
+	// Mode 0640: readable by www-data (Adminer's PHP-FPM pool group), not
+	// world-readable. Owner stays root (auracpd) so the file can't be
+	// rewritten from PHP.
+	if werr := os.WriteFile(tokPath, blob, 0o640); werr != nil {
+		writeErr(w, http.StatusInternalServerError, werr)
+		return
+	}
+	// Chown the token file to root:www-data so PHP-FPM (www-data) can read it.
+	if u, lookErr := user.Lookup("www-data"); lookErr == nil {
+		gid, _ := strconv.Atoi(u.Gid)
+		_ = os.Chown(tokPath, 0, gid)
+	}
+	s.audit(r, "database.manage", engine+":"+name)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"url": "/_adminer/?sso=" + tok,
+	})
 }
 
 func (s *Server) listDatabaseServers(w http.ResponseWriter, r *http.Request) {

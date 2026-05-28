@@ -205,6 +205,34 @@ server {
     client_body_timeout 600s;
     client_body_buffer_size 256k;
 
+    # v0.2.25: Adminer (database manager UI). Lives under /_adminer/ on the
+    # panel domain so it inherits panel auth (session cookies are scoped to
+    # this host) and the panel's TLS. The SSO wrapper at index.php reads a
+    # one-time token written by auracpd and pre-authenticates Adminer; no
+    # standalone login form is ever shown.
+    location /_adminer/ {
+        alias /opt/auracp/adminer/;
+        index index.php;
+        # Static files (Adminer CSS/JS): serve directly.
+        location ~ ^/_adminer/.+\.(css|js|png|svg|ico|woff2?)$ {
+            alias /opt/auracp/adminer/;
+            expires 7d;
+            access_log off;
+        }
+        # Route every other request through the PHP wrapper. The wrapper
+        # validates the SSO token (or the existing PHP session) and only
+        # then hands off to Adminer.
+        location ~ ^/_adminer/.*$ {
+            include fastcgi_params;
+            fastcgi_pass unix:/run/php-fpm/auracp-adminer.sock;
+            fastcgi_param SCRIPT_FILENAME /opt/auracp/adminer/index.php;
+            fastcgi_param SCRIPT_NAME /_adminer/index.php;
+            fastcgi_param PATH_INFO "";
+            fastcgi_param HTTPS $https if_not_empty;
+            fastcgi_read_timeout 60s;
+        }
+    }
+
     location / {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;

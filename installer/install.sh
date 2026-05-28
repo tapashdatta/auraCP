@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.24"
+AURACP_VERSION="0.2.25"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -769,6 +769,79 @@ install_php_fpm() {
   # Default version — first one listed unless explicitly overridden.
   [ -z "$PHP_DEFAULT" ] && PHP_DEFAULT="${PHP_VERSIONS%% *}"
   ok "PHP-FPM ready: ${PHP_VERSIONS} (default ${PHP_DEFAULT})."
+  install_adminer "$PHP_DEFAULT"
+}
+
+# v0.2.25: install Adminer (single-file PHP DB manager) so each panel-managed
+# database gets a 1-click Manage button. We pin a known-good upstream
+# version + sha256 so a compromised packages.adminer.org couldn't substitute
+# code on us. Wrapper PHP + plugins live alongside; nginx panel vhost serves
+# /_adminer/ via a dedicated PHP-FPM pool (default PHP version).
+ADMINER_VERSION="4.8.1"
+ADMINER_SHA256="2fd7e6d8f987b243ab1839249551f62adce19704c47d3d0c8dd9e57ea5b9c6b3"
+install_adminer() {
+  local default_php="$1"
+  [ -z "$default_php" ] && return 0
+  msg "Installing Adminer ${ADMINER_VERSION} (database manager UI)…"
+
+  run "install -d -m 0755 /opt/auracp/adminer"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    local tmp
+    tmp=$(mktemp /tmp/adminer.XXXXXX.php)
+    curl -fsSL "https://github.com/vrana/adminer/releases/download/v${ADMINER_VERSION}/adminer-${ADMINER_VERSION}.php" -o "$tmp" \
+      || { rm -f "$tmp"; warn "Adminer download failed; Manage buttons won't work until install_adminer succeeds."; return 0; }
+    local got
+    got=$(sha256sum "$tmp" | cut -d' ' -f1)
+    if [ "$got" != "$ADMINER_SHA256" ]; then
+      rm -f "$tmp"
+      warn "Adminer sha256 mismatch (got ${got}, expected ${ADMINER_SHA256}); skipping."
+      return 0
+    fi
+    install -m 0644 "$tmp" /opt/auracp/adminer/adminer.php
+    rm -f "$tmp"
+  fi
+  # Wrapper + plugin file are shipped in the .deb at /opt/auracp/packaging/.
+  # During install_adminer we copy them next to adminer.php where the wrapper
+  # expects them via __DIR__.
+  if [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
+    run "install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php"
+    run "install -m 0644 /opt/auracp/packaging/adminer-plugins.php /opt/auracp/adminer/adminer-plugins.php"
+  else
+    warn "Adminer wrapper not bundled in the .deb (re-build with v0.2.25+ packaging); Manage buttons will 500 until fixed."
+  fi
+  # Tmpfile for the SSO token directory — /run is tmpfs so this re-creates
+  # on every boot; mode 0700 root:www-data so only PHP-FPM can read tokens.
+  cat > /etc/tmpfiles.d/auracp-adminer.conf <<'EOF'
+d /run/auracp 0755 root root -
+d /run/auracp/adminer-sso 0750 root www-data -
+EOF
+  run "systemd-tmpfiles --create /etc/tmpfiles.d/auracp-adminer.conf"
+
+  # Dedicated FPM pool for Adminer on the default PHP version. Runs as
+  # www-data so the panel doesn't bind it to any single site's identity.
+  local pool="/etc/php/${default_php}/fpm/pool.d/auracp-adminer.conf"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    cat > "$pool" <<EOF
+[auracp-adminer]
+user = www-data
+group = www-data
+listen = /run/php-fpm/auracp-adminer.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0660
+pm = ondemand
+pm.max_children = 5
+pm.process_idle_timeout = 30s
+chdir = /opt/auracp/adminer
+php_admin_value[open_basedir] = /opt/auracp/adminer:/run/auracp/adminer-sso:/tmp
+php_admin_value[upload_max_filesize] = 512M
+php_admin_value[post_max_size] = 512M
+php_admin_value[memory_limit] = 256M
+EOF
+  fi
+  run "systemctl reload php${default_php}-fpm"
+  ADMINER_DEFAULT_PHP="$default_php"
+  ok "Adminer ready at /_adminer/ on the panel domain (PHP ${default_php})."
 }
 
 install_mariadb() {

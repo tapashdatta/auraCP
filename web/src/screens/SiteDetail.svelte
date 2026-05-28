@@ -141,6 +141,19 @@
     if (!notice) notice = `Basic auth credentials saved. Visitors will now be prompted as ${basicAuth.user}.`
     basicAuth = { user: '', password: '' }
   }
+  // v0.2.25: open Adminer for the chosen database. Mints a one-time SSO
+  // token server-side, then opens the returned URL in a new tab. The PHP
+  // wrapper at /_adminer/ consumes the token (single-use) and seeds
+  // Adminer's session with the credentials — no login form, no typing.
+  async function manageDb(engine, name) {
+    const r = await apiFetch(`${base}/databases/${encodeURIComponent(engine)}/${encodeURIComponent(name)}/manage`, { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { notice = d.error || 'Could not start a manage session'; return }
+    if (!d.url) { notice = 'Manage session returned no URL'; return }
+    // open in a new tab so the panel stays as-is in the background
+    window.open(d.url, '_blank', 'noopener')
+  }
+
   // v0.2.23: drop a database + its user from the engine and the store.
   async function deleteDb(engine, name) {
     if (!confirm(`Drop the ${engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'} database "${name}" and its user? This cannot be undone.`)) return
@@ -811,9 +824,15 @@
                   <td><span class="pill-eng {d.engine === 'postgres' ? 'eng-pg' : 'eng-maria'}">{d.engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'}</span></td>
                   <td><span class="mono" style="color:var(--txt-2);font-size:12.5px">{d.user}</span></td>
                   <td style="text-align:right">
-                    <button type="button" class="file-del" onclick={() => deleteDb(d.engine, d.name)} title="Drop database" aria-label="Delete {d.name}">
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-                    </button>
+                    <div style="display:inline-flex;gap:6px;align-items:center">
+                      <button type="button" class="btn btn-ghost" style="padding:5px 11px;font-size:12px" onclick={() => manageDb(d.engine, d.name)} title="Open Adminer">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:13px;height:13px;vertical-align:-2px;margin-right:5px"><polyline points="14 3 21 3 21 10"/><line x1="21" y1="3" x2="10" y2="14"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
+                        Manage
+                      </button>
+                      <button type="button" class="file-del" onclick={() => deleteDb(d.engine, d.name)} title="Drop database" aria-label="Delete {d.name}">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               {/each}

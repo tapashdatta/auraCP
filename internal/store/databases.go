@@ -39,3 +39,14 @@ func (s *Store) DatabasesForSite(domain string) ([]Database, error) {
 	}
 	return out, rows.Err()
 }
+
+// DatabasePasswordEnc returns the encrypted password blob for (engine, name).
+// Caller is responsible for decrypting via the secret box. Used by the
+// Adminer SSO endpoint to mint a one-time login token; never exposed via
+// any listing API.
+func (s *Store) DatabasePasswordEnc(engine, name string) (string, error) {
+	var enc string
+	err := s.DB.QueryRow(`SELECT password_enc FROM databases WHERE engine = ? AND name = ?`,
+		engine, name).Scan(&enc)
+	return enc, err
+}
