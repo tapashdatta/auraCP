@@ -103,6 +103,8 @@ func (m *Manager) Render(s Spec) (string, error) {
 		Bots:    s.BlockBots,
 		Cache:   s.Cache,
 		CacheTTL: s.CacheTTL,
+		BasicAuthUser: s.BasicAuthUser,
+		BasicAuthFile: paths.HTPasswdFile(s.Domain),
 	}
 	if d.CacheTTL == "" {
 		d.CacheTTL = "600s"
@@ -179,6 +181,23 @@ func (m *Manager) Apply(ctx context.Context, s Spec) error {
 		_ = os.Remove(paths.NginxSiteLink(s.Domain))
 		if err := os.Symlink(paths.NginxSiteFile(s.Domain), paths.NginxSiteLink(s.Domain)); err != nil {
 			return err
+		}
+		// htpasswd for basic_auth — nginx supports the bcrypt $2y$ format that
+		// internal/auth.HashPassword produces, so we write user:hash directly.
+		// Skip if either field is missing; the template's `if .BasicAuthUser`
+		// guard means an empty file path is never referenced.
+		if s.BasicAuthUser != "" && s.BasicAuthHash != "" {
+			if err := os.MkdirAll(paths.HTPasswdDir, 0o755); err != nil {
+				return err
+			}
+			line := s.BasicAuthUser + ":" + s.BasicAuthHash + "\n"
+			if err := os.WriteFile(paths.HTPasswdFile(s.Domain), []byte(line), 0o644); err != nil {
+				return err
+			}
+		} else {
+			// Tidy up — if basic_auth was just disabled, drop the file so a
+			// stale hash doesn't accidentally re-authenticate later.
+			_ = os.Remove(paths.HTPasswdFile(s.Domain))
 		}
 	}
 	return m.Reload(ctx)

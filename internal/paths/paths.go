@@ -17,9 +17,15 @@ const (
 	SSLDir = "/etc/auracp/ssl"
 	// ACME HTTP-01 challenge tokens are written here and served by nginx.
 	ACMEChallengeDir = "/var/lib/auracp/acme"
-	SystemdDir       = "/etc/systemd/system"
-	SFTPGroup        = "auracp-sftp"
+	// Per-site htpasswd files for basic auth — nginx auth_basic_user_file points here.
+	HTPasswdDir = "/etc/auracp/htpasswd"
+	SystemdDir  = "/etc/systemd/system"
+	SFTPGroup   = "auracp-sftp"
 )
+
+// HTPasswdFile returns the per-site htpasswd path that the nginx template
+// renders into the `auth_basic_user_file` directive.
+func HTPasswdFile(domain string) string { return filepath.Join(HTPasswdDir, domain) }
 
 // PanelNginxFile fronts the control panel itself behind nginx (LE cert on :443).
 // The "00-" prefix keeps it ordering-stable among site vhosts.

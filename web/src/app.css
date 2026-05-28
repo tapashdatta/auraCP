@@ -134,6 +134,13 @@ input,select{font-family:inherit}
 /* visually-hidden label utility: keeps the element discoverable to screen
    readers (and lints) without occupying any visual space. */
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+/* Empty-state block used inside cards / sections — gives the muted text
+   real padding + alignment so it reads as a deliberate state, not stray
+   markup. The .mono spans inside light up against the slightly-tinted bg. */
+.empty{padding:32px 22px;color:var(--txt-2);font-size:13px;line-height:1.6;text-align:center;background:var(--surface-1);border-top:1px solid var(--line)}
+.empty:first-child{border-top:none}
+.empty .mono{background:var(--surface-2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px}
+.empty b{color:var(--txt);font-weight:600}
 
 /* ---------- top bar (Lisso-style floating pill) ---------- */
 .topbar{

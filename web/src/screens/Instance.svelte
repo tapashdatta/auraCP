@@ -133,12 +133,11 @@
     </div>
   {/if}
 
-  <!-- Two-column responsive grid for the management cards. Wide cards
-       (Services, Node runtimes, Recent activity) span both columns; the
-       form-heavy cards (Cloudflare, Panel domain, Updates) stack 1:1. -->
+  <!-- Two-column responsive grid for the management cards. Only Recent
+       Activity (full audit log table) spans both columns; everything else
+       sits in one of the two columns so the page uses horizontal space. -->
   <div class="instance-grid">
-    <!-- Wide card: Services -->
-    <div class="card span-2"><div class="section-h"><div><h3>Services</h3><p>auraCP-managed system units</p></div></div>
+    <div class="card"><div class="section-h"><div><h3>Services</h3><p>auraCP-managed system units</p></div></div>
       <table><thead><tr><th>Service</th><th>Status</th></tr></thead><tbody>
         {#each Object.entries(services) as [name, state]}
           <tr><td><span class="mono">{name}</span></td><td><span class="status"><span class="sdot {stateClass(state)}"></span>{state || 'unknown'}</span></td></tr>
@@ -199,9 +198,8 @@
       </div>
     </div>
 
-    <!-- Remote backups card — wider; spans two columns because the form has
-         provider+target side-by-side AND a multiline params textarea. -->
-    <div class="card span-2"><div class="section-h"><div><h3>Remote Backups</h3><p>rclone destination for off-site backup copies</p></div>
+    <!-- Remote backups card -->
+    <div class="card"><div class="section-h"><div><h3>Remote Backups</h3><p>rclone destination for off-site backup copies</p></div>
       <span class="status"><span class="sdot {remote.configured ? 's-up' : 's-down'}"></span>{remote.configured ? remote.type || 'configured' : 'Not set'}</span></div>
       <div class="section-b">
         <div class="two">
@@ -226,8 +224,8 @@
       </div>
     </div>
 
-    <!-- Node runtimes — wider; the version table + install form benefit from full width. -->
-    <div class="card span-2"><div class="section-h"><div><h3>Node.js Runtimes</h3>
+    <!-- Node runtimes -->
+    <div class="card"><div class="section-h"><div><h3>Node.js Runtimes</h3>
       <p>Installed under <span class="mono">/opt/auracp/node/&lt;version&gt;</span> · sites can pin to any of these</p></div></div>
       {#if nodes.length === 0}<div class="empty">No managed Node runtimes yet. Install one below.</div>
       {:else}
@@ -270,10 +268,12 @@
   </div>
 
 <style>
-  /* 2-column Instance dashboard. Wide cards opt into 1:1 / 2:1 via .span-2. */
-  .instance-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:18px}
+  /* 2-column Instance dashboard. Only .span-2 cards (Recent Activity) take
+     the full row; everything else lands in one of two columns. Breakpoint
+     lowered to 760px so the layout splits on most laptop browsers. */
+  .instance-grid{display:grid;grid-template-columns:repeat(2, minmax(0, 1fr));gap:18px;align-items:start}
   .instance-grid .span-2{grid-column:1 / -1}
-  @media (max-width: 900px){
+  @media (max-width: 760px){
     .instance-grid{grid-template-columns:1fr}
     .instance-grid .span-2{grid-column:auto}
   }

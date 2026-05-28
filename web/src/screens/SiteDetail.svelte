@@ -47,7 +47,15 @@
     }
     else if (tab === 'vhost') {
       const v = await getJSON(`${base}/vhost`, null)
-      if (v) { vhost = { content: v.content || '', path: v.path || '', loaded: true, dirty: false } }
+      if (v) {
+        vhost = { content: v.content || '', path: v.path || '', loaded: true, dirty: false }
+        if (!v.content && v.note) notice = v.note
+      } else {
+        // Server returned nothing — surface a clear failure instead of leaving
+        // 'Loading vhost…' on screen forever.
+        vhost = { content: '', path: '', loaded: true, dirty: false }
+        notice = 'Could not load the vhost. Save anything in Settings to trigger a reload, or check `journalctl -u auracpd`.'
+      }
     }
     else if (tab === 'cache' || tab === 'ssl' || tab === 'security') config = await getJSON(`${base}/config`, {})
     else if (tab === 'sshftp') sshUsers = await getJSON(`${base}/ssh-users`, [])
@@ -101,7 +109,11 @@
   }
   function toggleConfig(k) { setConfig({ [k]: isOn(k) ? 'false' : 'true' }) }
   async function saveBasicAuth() {
+    if (!basicAuth.user || !basicAuth.password) { notice = 'Username and password are required.'; return }
+    notice = ''
     await setConfig({ basic_auth: 'true', basic_auth_user: basicAuth.user, basic_auth_password: basicAuth.password })
+    // setConfig sets `notice` only on error. If still empty, we succeeded.
+    if (!notice) notice = `Basic auth credentials saved. Visitors will now be prompted as ${basicAuth.user}.`
     basicAuth = { user: '', password: '' }
   }
   async function addSSH() {
@@ -137,10 +149,19 @@
   async function addCron() {
     busy = true
     const r = await apiFetch(`${base}/cron`, { method: 'POST', body: JSON.stringify(newCron) })
+    const d = await r.json().catch(() => ({}))
     busy = false
-    if (r.ok) { newCron = { schedule: '', command: '' }; load('cron') }
+    if (!r.ok) { notice = d.error || `Could not add cron job: ${r.status}`; return }
+    notice = `Cron job added; ${site.user}'s crontab refreshed.`
+    newCron = { schedule: '', command: '' }
+    load('cron')
   }
-  async function delCron(id) { await apiFetch(`${base}/cron/${id}`, { method: 'DELETE' }); load('cron') }
+  async function delCron(id) {
+    const r = await apiFetch(`${base}/cron/${id}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { notice = d.error || `Could not delete: ${r.status}`; return }
+    load('cron')
+  }
   async function makeBackup() {
     busy = true; await apiFetch(`${base}/backups`, { method: 'POST' }); busy = false; load('settings')
   }
@@ -311,19 +332,29 @@
     </div></div>
 
   {:else if active === 'ssl'}
-    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Managed automatically by auracpd (Let's Encrypt via lego)</p></div>
+    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Issued + renewed by auracpd via <span class="mono">go-acme/lego</span>. HTTP-01 by default; Cloudflare DNS-01 below.</p></div>
       {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}</div>
       <div class="section-b" style="padding-top:4px">
-        {#if sslStatus && sslStatus.status === 'active'}
+        {#if sslStatus === null}
+          <div class="kv"><span class="k">Status</span><span class="v">checking…</span></div>
+        {:else if sslStatus.status === 'active'}
           <div class="kv"><span class="k">Issuer</span><span class="v">{sslStatus.issuer || '—'}</span></div>
           <div class="kv"><span class="k">Domains</span><span class="v">{(sslStatus.domains || []).join(', ') || '—'}</span></div>
           <div class="kv"><span class="k">Expires</span><span class="v">{sslStatus.expires ? new Date(sslStatus.expires).toLocaleString() : '—'}</span></div>
         {:else}
-          <div class="kv"><span class="k">Status</span><span class="v">{sslStatus?.message || 'checking…'}</span></div>
+          <div class="kv"><span class="k">Status</span><span class="v">{sslStatus?.message || 'no certificate served yet'}</span></div>
           <div class="kv"><span class="k">Provider</span><span class="v">Let's Encrypt (auto)</span></div>
+          <div class="hint" style="margin-left:0;margin-top:8px">
+            Cert issuance runs in the background after a site is created.
+            Watch <span class="mono">journalctl -u auracpd</span> for <span class="mono">acme: issued cert</span>.
+            If your DNS goes through Cloudflare with the orange cloud, enable DNS-01 below.
+          </div>
         {/if}
-        <div class="kv"><span class="k">Cloudflare DNS-01 (wildcard)</span><button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></div>
-        <div class="note" style="margin-top:6px"><div>DNS-01 requires a Cloudflare API token under <b>Instance → Cloudflare</b>.</div></div>
+        <div style="margin-top:14px;display:flex;gap:8px">
+          <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check now</button>
+        </div>
+        <div class="kv" style="margin-top:14px"><span class="k">Cloudflare DNS-01 (wildcard / proxied)</span><button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></div>
+        <div class="hint" style="margin-left:0">Requires a Cloudflare API token under <b>Instance → Cloudflare</b>. Use this for wildcards, or when CF orange-cloud is blocking HTTP-01.</div>
       </div></div>
 
   {:else if active === 'security'}
@@ -343,6 +374,10 @@
         <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
       {/if}
       <div class="kv"><span class="k">Block bad bots</span><button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></div>
+      <div class="hint" style="margin-left:0">
+        Blocks the SEO scraper set by User-Agent: <span class="mono">AhrefsBot</span>, <span class="mono">SemrushBot</span>, <span class="mono">MJ12bot</span>, <span class="mono">DotBot</span>, <span class="mono">PetalBot</span>.
+        Returns <span class="mono">403</span> at the nginx layer — no PHP / app workload spent on them.
+      </div>
     </div></div>
 
   {:else if active === 'sshftp'}

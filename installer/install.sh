@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.11"
+AURACP_VERSION="0.2.12"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -47,8 +47,11 @@ OPT_PHP="${AURACP_PHP:-yes}"
 # Space-separated list — install one or many PHP-FPM versions side-by-side from
 # deb.sury.org. Sites pin to whichever they need via the Create form. Adding
 # extra versions later is also possible from Settings → PHP Versions.
-PHP_VERSIONS="${AURACP_PHP_VERSIONS:-${AURACP_PHP_VERSION:-8.4}}"
-PHP_DEFAULT="${AURACP_PHP_DEFAULT:-}"     # which version becomes the panel default; first installed if empty
+# Default selects ALL three supported versions so operators don't have to come
+# back to the installer to add another one mid-week; pruning unused versions
+# is one click in the panel UI.
+PHP_VERSIONS="${AURACP_PHP_VERSIONS:-${AURACP_PHP_VERSION:-8.3 8.4 8.5}}"
+PHP_DEFAULT="${AURACP_PHP_DEFAULT:-8.4}"   # 8.4 is the panel default for new PHP sites unless overridden
 OPT_NODE="${AURACP_NODE:-yes}"
 OPT_PYTHON="${AURACP_PYTHON:-no}"
 OPT_MARIADB="${AURACP_MARIADB:-yes}"
