@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"log"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"github.com/auracp/auracp/internal/db"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
+	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
@@ -49,6 +51,22 @@ func main() {
 		log.Fatalf("store: %v", err)
 	}
 	defer st.Close()
+
+	// v0.2.21: hydrate per-role permission overrides from the settings table
+	// into perm's in-memory map. Persistence is one row per role
+	// (role_perm_<role>); empty value = no override. ROLE_ADMIN is ignored.
+	if all, err := st.AllSettings(); err == nil {
+		for _, role := range []string{"ROLE_SITE_MANAGER", "ROLE_USER"} {
+			blob := all["role_perm_"+role]
+			if blob == "" {
+				continue
+			}
+			var s perm.Set
+			if jerr := json.Unmarshal([]byte(blob), &s); jerr == nil && s != nil {
+				perm.SetOverride(role, s)
+			}
+		}
+	}
 
 	sec, err := secret.Open(*etcDir)
 	if err != nil {

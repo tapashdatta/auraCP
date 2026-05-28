@@ -4,6 +4,7 @@
   import { session } from '../lib/auth.svelte.js'
   import { fetchSites } from '../lib/data.js'
   import { apiFetch } from '../lib/api.js'
+  import { brandIcons } from '../lib/icons.js'
 
   let allSites = $state([])   // populated from the API on mount
   let stats = $state(null)
@@ -174,10 +175,10 @@
         {/if}
         {#each filtered as s}
           <tr>
-            <td><div class="domain"><div class="fav">{s.ic}</div><div class="nm">{s.domain}<small>{s.root}</small></div></div></td>
+            <td><div class="domain"><div class="fav brand">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic}{/if}</div><div class="nm">{s.domain}<small>{s.root}</small></div></div></td>
             <td><span class="mono">{s.user}</span></td>
             <td>
-              <span class="badge {s.badge}"><span class="ic">{s.ic}</span>{s.app}</span>
+              <span class="badge {s.badge}"><span class="ic brand-sm">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic}{/if}</span>{s.app}</span>
               {#if s.node}<span class="node-tag">node {s.node}</span>{/if}
             </td>
             <td><span class="status"><span class="sdot s-{s.status}"></span>{s.statusText}</span></td>

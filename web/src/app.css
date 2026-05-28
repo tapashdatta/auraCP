@@ -64,18 +64,20 @@
 }
 
 :root[data-theme="dark"] {
-  /* Softer, lighter dark — closer to a working code editor than midnight.
-     Tested for AA contrast against --txt at the new --surface-0 level. */
-  --ink:#15191f;
-  --surface-0:#1a1e25;
-  --surface-1:#1e232b;
-  --surface-2:#252b34;
-  --surface-3:#2d343f;
-  --line:rgba(255,255,255,.06);
-  --line-2:rgba(255,255,255,.12);
-  --txt:#e6eaf2;
-  --txt-2:#9aa4b6;
-  --txt-3:#6a7488;
+  /* v0.2.21: dark = mid-gray, not midnight. The previous palette read as
+     "code-editor black" which felt heavy in a control-panel context. These
+     values sit two stops lighter, closer to Linear's dark surfaces.
+     AA contrast verified against --txt at --surface-0. */
+  --ink:#26292f;
+  --surface-0:#2c2f36;
+  --surface-1:#32363d;
+  --surface-2:#3a3f47;
+  --surface-3:#444a54;
+  --line:rgba(255,255,255,.07);
+  --line-2:rgba(255,255,255,.14);
+  --txt:#eef0f4;
+  --txt-2:#a8aebb;
+  --txt-3:#7a8190;
   --aura:#38e3a3;
   --aura-strong:#38e3a3;
   --aura-ink:#04130d;
@@ -374,10 +376,18 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global
    reset; visual styling sits on .tab itself. */
-.tab{padding:11px 14px;color:var(--txt-3);font-weight:500;font-size:13.5px;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:.1s;cursor:pointer;background:none}
+.tab{padding:11px 14px;color:var(--txt-3);font-weight:500;font-size:13.5px;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:.1s;cursor:pointer;background:none;display:inline-flex;align-items:center;gap:7px}
 .tab:hover{color:var(--txt-2)}
 .tab.active{color:var(--txt);border-bottom-color:var(--aura)}
 .tab .num{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);margin-left:6px}
+.tab .tab-ic{display:inline-flex;align-items:center;color:currentColor}
+.tab .tab-ic svg{width:14px;height:14px}
+/* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
+   default centered-glyph background for a sized SVG that fills the box. */
+.fav.brand{padding:7px}
+.fav.brand svg{width:100%;height:100%}
+.badge .ic.brand-sm{width:14px;height:14px}
+.badge .ic.brand-sm svg{width:100%;height:100%}
 .section{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);margin-bottom:18px;overflow:hidden;box-shadow:var(--shadow)}
 .section-h{padding:15px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:14px}
 .section-h h3{font-size:15px;font-weight:600}
@@ -467,6 +477,18 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .chmod-preview > div{display:flex;flex-direction:column;align-items:center;gap:4px}
 .chmod-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600}
 .chmod-preview .mono{font-size:16px;color:var(--txt);font-weight:600}
+
+/* v0.2.21: compact two-column form layout for the Add Database panel —
+   engine + name on row 1, user + password on row 2. Collapses below 640px. */
+.db-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:8px}
+@media (max-width:640px){ .db-grid{grid-template-columns:1fr} }
+.db-add-h{display:flex;align-items:center;gap:8px;margin:6px 0 14px;font-size:13.5px;font-weight:600;color:var(--txt-2)}
+.db-add-h svg{width:14px;height:14px}
+/* Regenerate-password button (icon-only). Same size as the input row's
+   visual height; cycles the password on click. */
+.input-row .gen{flex:none;display:grid;place-items:center;width:38px;height:38px;border:1px solid var(--line);border-radius:8px;background:var(--surface-1);color:var(--txt-2);cursor:pointer;transition:.1s}
+.input-row .gen:hover{color:var(--aura-strong);border-color:var(--line-2);background:var(--surface-2)}
+.input-row .gen svg{width:14px;height:14px}
 
 /* v0.2.18: live upload progress bar */
 .upload-prog{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-1)}

@@ -144,7 +144,7 @@
 
 <div class="wrap fade">
   <button type="button" class="back" onclick={() => go('sites')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</button>
-  <div class="ph"><div><h1>Instance</h1><div class="sub">{info?.os || ''} · {info?.hostname || ''}</div></div></div>
+  <div class="ph"><div><h1>Settings</h1><div class="sub">{info?.os || ''} · {info?.hostname || ''}</div></div></div>
 
   {#if info}
     <div class="stats">

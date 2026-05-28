@@ -2,6 +2,7 @@
   import { go, ui } from '../lib/store.svelte.js'
   import { detailTabs } from '../lib/data.js'
   import { apiFetch } from '../lib/api.js'
+  import { brandIcons, tabIcons } from '../lib/icons.js'
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
   let active = $state('settings')
@@ -587,7 +588,7 @@
   </button>
 
   <div class="site-head">
-    <div class="fav">{site.ic || '◆'}</div>
+    <div class="fav brand">{#if brandIcons[site.type]}{@html brandIcons[site.type]}{:else}{site.ic || '◆'}{/if}</div>
     <div>
       <h1>{site.domain}</h1>
       <div class="status" style="margin-top:4px"><span class="sdot s-{site.status || 'up'}"></span>{site.statusText || 'Online'}</div>
@@ -605,7 +606,10 @@
 
   <div class="tabs" role="tablist">
     {#each detailTabs as t}
-      <button type="button" role="tab" aria-selected={active === t.id} class="tab" class:active={active === t.id} onclick={() => setTab(t.id)}>{t.label}</button>
+      <button type="button" role="tab" aria-selected={active === t.id} class="tab" class:active={active === t.id} onclick={() => setTab(t.id)}>
+        {#if tabIcons[t.id]}<span class="tab-ic" aria-hidden="true">{@html tabIcons[t.id]}</span>{/if}
+        {t.label}
+      </button>
     {/each}
   </div>
 
@@ -699,29 +703,43 @@
             {/each}
           </tbody></table>
         {/if}
+        <!-- v0.2.21: condensed two-row layout. Row 1: Engine + Database name.
+             Row 2: Database user + password (with regenerate). Visually
+             compact and matches how operators think about a DB record. -->
         <div class="section-b" style="border-top:1px solid var(--line)">
-          <div class="two">
+          <h4 class="db-add-h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New database</h4>
+          <div class="db-grid">
             <div class="field"><label>
               <span class="label-text">Engine</span>
-              <select class="select ui" bind:value={newDb.engine}><option value="mariadb">MariaDB</option><option value="postgres">PostgreSQL</option></select>
+              <select class="select ui" bind:value={newDb.engine}>
+                <option value="mariadb">MariaDB</option>
+                <option value="postgres">PostgreSQL</option>
+              </select>
             </label></div>
             <div class="field"><label>
               <span class="label-text">Database name</span>
               <input class="input" bind:value={newDb.name} placeholder="app_db">
             </label></div>
           </div>
-          <div class="field"><label>
-            <span class="label-text">Database user</span>
-            <input class="input" bind:value={newDb.user} placeholder="app_user">
-          </label></div>
-          <div class="field"><label>
-            <span class="label-text">Password <span class="hint">auto-generated · editable · shown after creation</span></span>
-            <div class="input-row">
-              <input class="input" bind:value={newDb.password}>
-              <button type="button" class="gen" onclick={() => newDb.password = randPw()}>Regenerate</button>
-            </div>
-          </label></div>
-          <button class="btn btn-primary" onclick={addDb} disabled={busy || !newDb.name || !newDb.user || !newDb.password}>Add Database</button>
+          <div class="db-grid">
+            <div class="field"><label>
+              <span class="label-text">Database user</span>
+              <input class="input" bind:value={newDb.user} placeholder="app_user">
+            </label></div>
+            <div class="field"><label>
+              <span class="label-text">Password <span class="hint">auto-generated, editable</span></span>
+              <div class="input-row">
+                <input class="input" bind:value={newDb.password}>
+                <button type="button" class="gen" onclick={() => newDb.password = randPw()} title="Regenerate password" aria-label="Regenerate password">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
+              </div>
+            </label></div>
+          </div>
+          <button class="btn btn-primary" onclick={addDb} disabled={busy || !newDb.name || !newDb.user || !newDb.password}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add Database
+          </button>
           {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
         </div>
       </div>

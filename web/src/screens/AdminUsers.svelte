@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { go } from '../lib/store.svelte.js'
   import { apiFetch } from '../lib/api.js'
+  import { brandIcons } from '../lib/icons.js'
 
   const RES = ['sites', 'databases', 'backups', 'cron', 'files', 'ssh_users', 'users', 'settings']
   const ACT = ['create', 'read', 'update', 'delete']
@@ -35,11 +36,56 @@
   let scopedSites = $state({})       // {domain: true}
   let busy = $state(false), notice = $state(''), error = $state('')
 
+  // v0.2.21: editable role defaults. State shape mirrors the API:
+  //   roles[ROLE] = { permissions: {res: {create:bool,...}}, customized: bool, editable: bool }
+  let roles = $state({})
+  let rolesDirty = $state({})
+  let rolesBusy = $state({})
+  let rolesMsg = $state('')
+
+  async function loadRoles() {
+    const r = await apiFetch('/api/admin/roles')
+    if (r.ok) { roles = await r.json(); rolesDirty = {} }
+  }
+
+  function toggleRolePerm(role, res, act) {
+    if (!roles[role]?.editable) return
+    const next = { ...roles }
+    next[role] = { ...next[role], permissions: { ...next[role].permissions } }
+    const cur = next[role].permissions[res] || { create:false, read:false, update:false, delete:false }
+    next[role].permissions[res] = { ...cur, [act]: !cur[act] }
+    roles = next
+    rolesDirty = { ...rolesDirty, [role]: true }
+    rolesMsg = ''
+  }
+
+  async function saveRole(role) {
+    rolesBusy = { ...rolesBusy, [role]: true }
+    const r = await apiFetch('/api/admin/roles/' + encodeURIComponent(role), {
+      method: 'PUT', body: JSON.stringify(roles[role].permissions)
+    })
+    const d = await r.json().catch(() => ({}))
+    rolesBusy = { ...rolesBusy, [role]: false }
+    if (!r.ok) { rolesMsg = d.error || 'Save failed'; return }
+    rolesMsg = `${roleLabel[role]} permissions updated.`
+    rolesDirty = { ...rolesDirty, [role]: false }
+    await loadRoles()
+  }
+
+  async function resetRole(role) {
+    if (!confirm(`Reset ${roleLabel[role]} permissions to the compiled defaults?`)) return
+    const r = await apiFetch('/api/admin/roles/' + encodeURIComponent(role), { method: 'DELETE' })
+    if (!r.ok) { const d = await r.json().catch(() => ({})); rolesMsg = d.error || 'Reset failed'; return }
+    rolesMsg = `${roleLabel[role]} reverted to defaults.`
+    await loadRoles()
+  }
+
   async function load() {
     const r = await apiFetch('/api/admin/users')
     users = r.ok ? await r.json() : []
     const sr = await apiFetch('/api/sites')
     sites = sr.ok ? await sr.json() : []
+    await loadRoles()
   }
   onMount(load)
 
@@ -255,7 +301,7 @@
                   {#each sites as s}
                     <label class="site-row" class:on={!!scopedSites[s.domain]}>
                       <input type="checkbox" bind:checked={scopedSites[s.domain]}>
-                      <span class="site-ic">{s.ic || '◆'}</span>
+                      <span class="site-ic brand">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic || '◆'}{/if}</span>
                       <span class="mono">{s.domain}</span>
                       <span class="site-meta">{s.user}</span>
                     </label>
@@ -294,30 +340,60 @@
     </div>
 
   {:else if tab === 'roles'}
-    <!-- Read-only documentation of what each role can do, plus the CRUD matrix.
-         Useful when explaining account models to teammates without having to
-         flip into the Add tab. -->
+    <!-- v0.2.21: role permissions are now editable defaults (was read-only).
+         ROLE_ADMIN is intentionally locked — admins always have everything,
+         a property of the role rather than a tunable. SITE_MANAGER and USER
+         can be customised; changes apply to NEW users + existing users whose
+         per-user permissions haven't been overridden in the user form. -->
     <div class="role-cards fade">
+      {#if rolesMsg}<div class="card" style="grid-column:1/-1;padding:12px 16px;background:var(--surface-1)"><span class="mono" style="color:var(--txt)">{rolesMsg}</span></div>{/if}
       {#each ['ROLE_ADMIN', 'ROLE_SITE_MANAGER', 'ROLE_USER'] as role}
         <div class="card role-card">
-          <div class="section-h"><div>
-            <h3><span class="role-chip role-{role}">{roleLabel[role]}</span></h3>
-            <p>{roleHint[role]}</p>
-          </div></div>
+          <div class="section-h">
+            <div>
+              <h3>
+                <span class="role-chip role-{role}">{roleLabel[role]}</span>
+                {#if roles[role]?.customized}<span class="custom-pill">customised</span>{/if}
+              </h3>
+              <p>{roleHint[role]}</p>
+            </div>
+            {#if role !== 'ROLE_ADMIN'}
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                {#if roles[role]?.customized}
+                  <button class="btn btn-ghost" style="padding:6px 10px" onclick={() => resetRole(role)} title="Reset to compiled defaults">Reset</button>
+                {/if}
+                <button class="btn btn-primary" style="padding:6px 12px" onclick={() => saveRole(role)}
+                        disabled={!rolesDirty[role] || rolesBusy[role]}>
+                  {rolesBusy[role] ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            {/if}
+          </div>
           <div class="section-b" style="padding-top:6px">
             <table class="perm-grid">
               <thead><tr><th>Resource</th>{#each ACT as a}<th style="text-align:center;text-transform:capitalize">{a}</th>{/each}</tr></thead>
               <tbody>
                 {#each RES as r}
-                  {@const p = defaultsFor(role)[r]}
+                  {@const p = roles[role]?.permissions?.[r] || { create:false, read:false, update:false, delete:false }}
                   <tr><td><span class="mono">{r}</span></td>
                     {#each ACT as a}
-                      <td style="text-align:center"><span class="perm-dot" class:on={p[a]} aria-label={p[a] ? 'yes' : 'no'}></span></td>
+                      <td style="text-align:center;vertical-align:middle">
+                        {#if role === 'ROLE_ADMIN'}
+                          <span class="perm-dot on" aria-label="always allowed"></span>
+                        {:else}
+                          <button type="button" role="switch" aria-checked={!!p[a]} aria-label="{r} {a}"
+                                  class="toggle toggle-sm" class:on={!!p[a]}
+                                  onclick={() => toggleRolePerm(role, r, a)}></button>
+                        {/if}
+                      </td>
                     {/each}
                   </tr>
                 {/each}
               </tbody>
             </table>
+            {#if role === 'ROLE_ADMIN'}
+              <p style="margin:10px 6px 0;font-size:12px;color:var(--txt-3)">Admins always have full access — the matrix is shown for reference, not for editing.</p>
+            {/if}
           </div>
         </div>
       {/each}
@@ -379,4 +455,6 @@
   /* Static yes/no dot for the role matrix. */
   .perm-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line)}
   .perm-dot.on{background:var(--up);border-color:var(--up)}
+  /* v0.2.21: "customised" pill next to a role title — signals admin override. */
+  .custom-pill{display:inline-flex;align-items:center;margin-left:8px;padding:2px 8px;border-radius:var(--radius-pill);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;background:color-mix(in srgb, var(--warn) 16%, var(--surface-1));color:var(--warn);border:1px solid color-mix(in srgb, var(--warn) 32%, transparent)}
 </style>

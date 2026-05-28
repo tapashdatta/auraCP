@@ -2,7 +2,10 @@
 // of per-resource CRUD capabilities. ROLE_ADMIN implicitly has everything.
 package perm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // Resources that can be permissioned.
 var Resources = []string{
@@ -43,8 +46,41 @@ func (s Set) Can(resource, action string) bool {
 	return false
 }
 
-// DefaultForRole returns sensible default capabilities for a role.
-func DefaultForRole(role string) Set {
+// v0.2.21: in-memory role default overrides, populated at daemon startup
+// from the settings table (key: role_perm_<role>). Admin can edit role
+// defaults via the Roles & Permissions tab; persistence + this map keep
+// them in sync. ROLE_ADMIN is NOT overridable — full access is a property
+// of the role, not a configurable matrix.
+var (
+	overridesMu sync.RWMutex
+	overrides   = map[string]Set{}
+)
+
+func SetOverride(role string, s Set) {
+	if role == "ROLE_ADMIN" {
+		return // ignored; admins always have all
+	}
+	overridesMu.Lock()
+	defer overridesMu.Unlock()
+	overrides[role] = s
+}
+
+func ClearOverride(role string) {
+	overridesMu.Lock()
+	defer overridesMu.Unlock()
+	delete(overrides, role)
+}
+
+func HasOverride(role string) bool {
+	overridesMu.RLock()
+	defer overridesMu.RUnlock()
+	_, ok := overrides[role]
+	return ok
+}
+
+// CompiledDefault returns the hard-coded default — bypasses any runtime
+// override. Useful for the UI's "reset to factory" button.
+func CompiledDefault(role string) Set {
 	switch role {
 	case "ROLE_ADMIN":
 		s := Set{}
@@ -65,6 +101,26 @@ func DefaultForRole(role string) Set {
 			"users": none(), "settings": none(),
 		}
 	}
+}
+
+// DefaultForRole returns the effective default capabilities for a role —
+// admin-customised override if present, compiled-in default otherwise.
+func DefaultForRole(role string) Set {
+	if role == "ROLE_ADMIN" {
+		return CompiledDefault(role)
+	}
+	overridesMu.RLock()
+	if s, ok := overrides[role]; ok {
+		overridesMu.RUnlock()
+		// Return a defensive copy so callers can't mutate the override.
+		out := Set{}
+		for k, v := range s {
+			out[k] = v
+		}
+		return out
+	}
+	overridesMu.RUnlock()
+	return CompiledDefault(role)
 }
 
 // Marshal serialises a set to JSON for storage.

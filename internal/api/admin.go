@@ -6,6 +6,7 @@ import (
 
 	"github.com/auracp/auracp/internal/auth"
 	"github.com/auracp/auracp/internal/instance"
+	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/store"
 )
 
@@ -127,6 +128,69 @@ func (s *Server) updateAdminUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "user.update", email)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GET /api/admin/roles — current effective per-role default matrices, with a
+// `customized` flag per role indicating whether the admin has overridden it.
+// ROLE_ADMIN is always full access; its matrix is informational only.
+func (s *Server) listRolePerms(w http.ResponseWriter, r *http.Request) {
+	roles := []string{"ROLE_ADMIN", "ROLE_SITE_MANAGER", "ROLE_USER"}
+	out := make(map[string]any, len(roles))
+	for _, role := range roles {
+		out[role] = map[string]any{
+			"permissions": perm.DefaultForRole(role),
+			"customized":  perm.HasOverride(role),
+			"editable":    role != "ROLE_ADMIN",
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// PUT /api/admin/roles/{role}  body: CRUD matrix as JSON
+// Stores in settings table + installs the runtime override. ROLE_ADMIN is
+// not editable — its matrix is fixed at full access.
+func (s *Server) updateRolePerms(w http.ResponseWriter, r *http.Request) {
+	role := r.PathValue("role")
+	if role == "ROLE_ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role is fixed at full access"})
+		return
+	}
+	if role != "ROLE_SITE_MANAGER" && role != "ROLE_USER" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown role"})
+		return
+	}
+	var in perm.Set
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	blob, _ := json.Marshal(in)
+	if err := s.store.SetSetting("role_perm_"+role, string(blob)); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	perm.SetOverride(role, in)
+	s.audit(r, "role.update", role)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// DELETE /api/admin/roles/{role} — clear the override; matrix reverts to the
+// compiled default.
+func (s *Server) resetRolePerms(w http.ResponseWriter, r *http.Request) {
+	role := r.PathValue("role")
+	if role == "ROLE_ADMIN" {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "admin role is fixed at full access"})
+		return
+	}
+	// Empty-value setting effectively wipes the override on the next startup;
+	// ClearOverride drops the in-memory entry immediately.
+	if err := s.store.SetSetting("role_perm_"+role, ""); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	perm.ClearOverride(role)
+	s.audit(r, "role.reset", role)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
