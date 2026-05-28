@@ -131,6 +131,37 @@ if [ -d /run/systemd/system ]; then
     done
   fi
 
+  # v0.2.46: ensure every installed php<v>-fpm has at least one pool — drop
+  # an auracp-placeholder.conf if pool.d/ has no .conf files. This recovers
+  # hosts where deleting the bundled www.conf left the pool dir empty and
+  # FPM refused to start with "No pool defined".
+  # Inner heredoc uses a distinct terminator (POOL_PLACEHOLDER) to avoid
+  # confusing the outer postinst heredoc parser.
+  for cfgdir in /etc/php/*/fpm/pool.d; do
+    [ -d "$cfgdir" ] || continue
+    v=$(echo "$cfgdir" | sed -n 's|/etc/php/\([^/]*\)/fpm/pool.d|\1|p')
+    [ -z "$v" ] && continue
+    if ls "$cfgdir"/*.conf >/dev/null 2>&1; then
+      continue
+    fi
+    cat > "$cfgdir/auracp-placeholder.conf" <<POOL_PLACEHOLDER
+; auracp-managed - keeps php${v}-fpm able to start with zero site pools.
+; Do not delete. Unreachable socket; serves no traffic.
+[auracp-placeholder]
+user = www-data
+group = www-data
+listen = /run/php-fpm/auracp-placeholder-${v}.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0600
+pm = ondemand
+pm.max_children = 1
+pm.process_idle_timeout = 10s
+POOL_PLACEHOLDER
+    systemctl reset-failed "php${v}-fpm.service" 2>/dev/null || true
+    systemctl enable --now "php${v}-fpm.service" 2>/dev/null || true
+  done
+
   # v0.2.35: install wp-cli if PHP is present but the binary is missing.
   # Covers upgrades from < v0.2.33 (when wp-cli was added to install_php_fpm) —
   # those hosts have PHP-FPM but no /usr/local/bin/wp, and clicking

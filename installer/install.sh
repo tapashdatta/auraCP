@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.45"
+AURACP_VERSION="0.2.46"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -769,6 +769,31 @@ install_php_fpm() {
     # panel writes.
     if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then
       mv -f "/etc/php/${v}/fpm/pool.d/www.conf" "/etc/php/${v}/fpm/pool.d/www.conf.disabled"
+    fi
+    # v0.2.46: drop a placeholder pool so FPM has at least one section to
+    # load. Without it, removing the default www.conf (above) leaves an
+    # empty pool.d/ and php-fpm refuses to start with:
+    #   "No pool defined. at least one pool section must be specified"
+    # The placeholder listens on an unreachable socket (no nginx route,
+    # no http traffic), so it doesn't serve anything — it's a no-op pool
+    # purely to keep systemd happy. The pool also acts as a safety net
+    # when a site is later deleted: even if the last site pool for this
+    # PHP version goes away, FPM stays running.
+    if [ "$DRY_RUN" -eq 0 ]; then
+      cat > "/etc/php/${v}/fpm/pool.d/auracp-placeholder.conf" <<EOF
+; auracp-managed — keeps php${v}-fpm able to start with zero site pools.
+; Do not delete. Unreachable socket; serves no traffic.
+[auracp-placeholder]
+user = www-data
+group = www-data
+listen = /run/php-fpm/auracp-placeholder-${v}.sock
+listen.owner = www-data
+listen.group = www-data
+listen.mode = 0600
+pm = ondemand
+pm.max_children = 1
+pm.process_idle_timeout = 10s
+EOF
     fi
     run "systemctl enable --now php${v}-fpm"
   done
