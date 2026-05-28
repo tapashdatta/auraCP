@@ -51,7 +51,10 @@ func usage() {
 usage:
   auracp version        print version
   auracp sites          list sites (via the local daemon API)
-  auracp doctor [-v]    audit every site for vhost↔pool drift (no daemon needed)`)
+  auracp doctor [-v] [--json]
+                        audit every site for vhost↔pool drift (no daemon needed)
+                        -v     show details for green sites too
+                        --json machine-readable output for cron / monitoring`)
 }
 
 func listSites() error {

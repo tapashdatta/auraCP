@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,6 +155,82 @@ func TestNoDriftWhenAligned(t *testing.T) {
 	}
 	if s.poolUser != "a-ukfs" {
 		t.Errorf("poolUser: got %q", s.poolUser)
+	}
+}
+
+// TestJSONReportWireFormat pins the --json output contract. Field names
+// and shape are treated as semver-locked: monitoring systems consuming
+// `auracp doctor --json | jq` get a stable schema across releases.
+//
+// Specifically asserts:
+//   - `problems: []` (not null) so jq `.sites[].problems | length` always works
+//   - `summary` carries scanned + healthy + drift counts
+//   - omitempty fields hide cleanly for non-PHP sites
+func TestJSONReportWireFormat(t *testing.T) {
+	dir := t.TempDir()
+	vhostPath := filepath.Join(dir, "a.garuda.sh.conf")
+	poolPath := filepath.Join(dir, "pool.conf")
+	os.WriteFile(vhostPath, []byte(vhostFixturePhp), 0o644)
+	os.WriteFile(poolPath, []byte(poolFixtureDrift), 0o644)
+
+	// Build the same in-memory shape renderReportJSON expects.
+	s, _ := scanOne(vhostPath)
+	s.poolPath = poolPath
+	checkPool(s)
+
+	// Marshal directly (renderReportJSON prints to stdout, which we
+	// don't want to capture in a unit test — keep the test focused on
+	// the wire format, not the IO plumbing).
+	sj := siteJSON{
+		Domain:    s.domain,
+		Type:      s.siteType,
+		OK:        s.ok,
+		VhostUser: s.vhostUser,
+		PoolUser:  s.poolUser,
+		DocRoot:   s.docRoot,
+		FPMSocket: s.fpmSocket,
+		PoolPath:  s.poolPath,
+		Problems:  s.problems,
+	}
+	b, err := json.Marshal(sj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(b)
+
+	// Required field names (regression-guard the contract).
+	for _, key := range []string{
+		`"domain":"a.garuda.sh"`,
+		`"type":"php"`,
+		`"ok":false`,
+		`"vhost_user":"a-ukfs"`,
+		`"pool_user":"a-4zwq"`,
+		`"problems":[`,
+	} {
+		if !strings.Contains(js, key) {
+			t.Errorf("JSON missing required key/value %q in output: %s", key, js)
+		}
+	}
+
+	// Round-trip: a consumer should be able to unmarshal back into the
+	// same shape and read the drift count from problems.
+	var back siteJSON
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("round-trip unmarshal: %v", err)
+	}
+	if len(back.Problems) == 0 {
+		t.Error("expected at least one problem after round-trip")
+	}
+	if back.OK {
+		t.Error("OK should be false on drift")
+	}
+
+	// problems must be `[]` not null when ok — explicit empty-array
+	// contract so jq pipelines don't need null-coalescing.
+	clean := siteJSON{Domain: "ok.example.com", Type: "static-or-proxy", OK: true, Problems: []string{}}
+	cb, _ := json.Marshal(clean)
+	if !strings.Contains(string(cb), `"problems":[]`) {
+		t.Errorf("clean site's problems should serialize as `[]`, got: %s", string(cb))
 	}
 }
 

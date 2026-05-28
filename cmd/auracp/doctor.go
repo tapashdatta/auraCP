@@ -14,6 +14,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -67,6 +68,7 @@ var (
 func runDoctor() error {
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	verbose := fs.Bool("v", false, "show details for green sites too")
+	asJSON := fs.Bool("json", false, "emit machine-readable JSON (for cron / monitoring)")
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -113,6 +115,9 @@ func runDoctor() error {
 	// Sort by domain so the output is stable across runs.
 	sort.Slice(sites, func(i, j int) bool { return sites[i].domain < sites[j].domain })
 
+	if *asJSON {
+		return renderReportJSON(sites)
+	}
 	return renderReport(sites, *verbose)
 }
 
@@ -374,3 +379,90 @@ type doctorDriftErr struct{}
 func (doctorDriftErr) Error() string { return "doctor: one or more sites have drift" }
 
 var errDoctorDrift = doctorDriftErr{}
+
+// ─── JSON output (-json flag) ───────────────────────────────────────
+//
+// Wire format kept deliberately stable: this is the contract for any
+// monitoring system that consumes `auracp doctor --json | jq`. Treat
+// field names as semver-locked once published. Adding fields is fine;
+// renaming / removing is a breaking change.
+//
+// Schema:
+//   {
+//     "summary": {"scanned": N, "healthy": N, "drift": N},
+//     "sites": [
+//       {
+//         "domain":     "...",
+//         "type":       "php" | "static-or-proxy" | "unknown",
+//         "ok":         bool,
+//         "vhost_user": "...",
+//         "pool_user":  "...",     // empty for non-PHP
+//         "doc_root":   "...",
+//         "fpm_socket": "...",     // empty for non-PHP
+//         "pool_path":  "...",     // empty for non-PHP
+//         "problems":   ["..."]    // empty array if ok
+//       }
+//     ]
+//   }
+
+type siteJSON struct {
+	Domain    string   `json:"domain"`
+	Type      string   `json:"type"`
+	OK        bool     `json:"ok"`
+	VhostUser string   `json:"vhost_user,omitempty"`
+	PoolUser  string   `json:"pool_user,omitempty"`
+	DocRoot   string   `json:"doc_root,omitempty"`
+	FPMSocket string   `json:"fpm_socket,omitempty"`
+	PoolPath  string   `json:"pool_path,omitempty"`
+	Problems  []string `json:"problems"`
+}
+
+type reportJSON struct {
+	Summary struct {
+		Scanned int `json:"scanned"`
+		Healthy int `json:"healthy"`
+		Drift   int `json:"drift"`
+	} `json:"summary"`
+	Sites []siteJSON `json:"sites"`
+}
+
+func renderReportJSON(sites []*site) error {
+	rep := reportJSON{Sites: make([]siteJSON, 0, len(sites))}
+	for _, s := range sites {
+		problems := s.problems
+		if problems == nil {
+			// `"problems": []` rather than null is the contract — every
+			// monitoring template can assume the field is an array.
+			problems = []string{}
+		}
+		rep.Sites = append(rep.Sites, siteJSON{
+			Domain:    s.domain,
+			Type:      s.siteType,
+			OK:        s.ok,
+			VhostUser: s.vhostUser,
+			PoolUser:  s.poolUser,
+			DocRoot:   s.docRoot,
+			FPMSocket: s.fpmSocket,
+			PoolPath:  s.poolPath,
+			Problems:  problems,
+		})
+		rep.Summary.Scanned++
+		if s.ok {
+			rep.Summary.Healthy++
+		} else {
+			rep.Summary.Drift++
+		}
+	}
+	out, err := json.MarshalIndent(rep, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(out))
+	// Same exit-code contract as the human renderer — return the
+	// sentinel error so main() exits non-zero on drift. Cron + monitoring
+	// configs typically branch on exit code first, parse JSON second.
+	if rep.Summary.Drift > 0 {
+		return errDoctorDrift
+	}
+	return nil
+}
