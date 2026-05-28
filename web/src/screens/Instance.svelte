@@ -209,6 +209,15 @@
         <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
         {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
         {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
+        <!-- v0.2.19: Cloudflare gotcha note. Free tier caps request bodies at
+             100 MB and Rocket Loader rewrites the SPA; the panel doesn't
+             benefit from the CDN anyway. -->
+        <div class="hint-block">
+          <b>Using Cloudflare?</b> Set this hostname to <b>DNS only</b> (grey cloud).
+          Free-tier caps request bodies at 100 MB (breaks larger uploads) and
+          Rocket Loader rewrites the SPA. Your <i>site</i> domains can stay proxied —
+          only the <i>panel</i> should be direct.
+        </div>
       </div>
     </div>
 
@@ -305,6 +314,11 @@
   </div>
 
 <style>
+  /* Small "did you know" hint block — neutral surface, not an alert. */
+  .hint-block{margin-top:14px;padding:12px 14px;background:var(--surface-1);border:1px solid var(--line);border-left:3px solid var(--info);border-radius:8px;font-size:12.5px;color:var(--txt-2);line-height:1.55}
+  .hint-block b{color:var(--txt)}
+  .hint-block i{font-style:normal;color:var(--txt)}
+
   /* 2-column Instance dashboard. Only .span-2 cards (Recent Activity) take
      the full row; everything else lands in one of two columns. Breakpoint
      lowered to 760px so the layout splits on most laptop browsers. */

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -47,9 +48,16 @@ func (s *Server) siteFiles(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/sites/{domain}/files (multipart/form-data; path=<sub>, files=<...>)
-// Accepts one or many file parts; each is streamed to disk and chowned to the
-// site user. Returns the count saved + any per-file errors (partial success
-// is the common case for big drag-drops).
+//
+// v0.2.19: streams the multipart body part-by-part directly to disk via
+// MultipartReader, instead of the old ParseMultipartForm path that buffered
+// up to 256 MB before spilling to /tmp. The new flow has no memory cap on
+// upload size — it's bounded by available disk in the site's docroot — and
+// surfaces partial-success per part the same way the old path did.
+//
+// Path field: we expect "path" to appear before "files" (FormData appends in
+// DOM order; our SPA does this correctly). If "files" come first we treat
+// path as empty (i.e. upload to the docroot).
 func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
 	st, err := s.store.SiteByDomain(domain)
@@ -57,33 +65,45 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	// 256 MB in memory before spilling to /tmp — generous enough for typical
-	// WordPress uploads, photo dumps, etc. Anything larger should use SFTP.
-	if err := r.ParseMultipartForm(256 << 20); err != nil {
-		writeErr(w, http.StatusBadRequest, err)
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expected multipart/form-data: " + err.Error()})
 		return
 	}
-	sub := r.FormValue("path")
-	fhs := r.MultipartForm.File["files"]
-	if len(fhs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no files in the upload"})
-		return
-	}
+	sub := ""
 	saved := 0
 	var errs []string
-	for _, fh := range fhs {
-		f, err := fh.Open()
-		if err != nil {
-			errs = append(errs, fh.Filename+": "+err.Error())
-			continue
+	for {
+		part, err := mr.NextPart()
+		if err == io.EOF {
+			break
 		}
-		err = files.Save(st.SiteUser, domain, sub, fh.Filename, f)
-		f.Close()
 		if err != nil {
-			errs = append(errs, fh.Filename+": "+err.Error())
-			continue
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "multipart read failed: " + err.Error()})
+			return
 		}
-		saved++
+		switch part.FormName() {
+		case "path":
+			// Form fields are small; read into memory with a tight cap.
+			b, _ := io.ReadAll(io.LimitReader(part, 4096))
+			sub = string(b)
+		case "files":
+			name := part.FileName()
+			if name == "" {
+				_ = part.Close()
+				continue
+			}
+			if err := files.Save(st.SiteUser, domain, sub, name, part); err != nil {
+				errs = append(errs, name+": "+err.Error())
+			} else {
+				saved++
+			}
+		}
+		_ = part.Close()
+	}
+	if saved == 0 && len(errs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no files in the upload"})
+		return
 	}
 	s.audit(r, "site.files.upload", domain+"/"+sub)
 	writeJSON(w, http.StatusOK, map[string]any{"saved": saved, "errors": errs})
