@@ -210,8 +210,14 @@ func (m *Manager) ensureClient() error {
 		return err
 	}
 
-	// Email from settings (Settings → Notifications); fall back to admin@<panel-host>.
-	email := "admin@auracp.local"
+	// Contact email is OPTIONAL for Let's Encrypt — accounts can register
+	// without one. The previous default of "admin@auracp.local" was rejected
+	// outright with `invalidContact :: contact email has invalid domain`
+	// because LE validates the TLD against the public suffix list and `.local`
+	// (RFC 6762, mDNS) isn't on it. Leave email empty unless the operator
+	// explicitly set one via Settings → SSL (key: `acme_email`); LE then
+	// registers a no-contact account (you won't get expiry-reminder emails).
+	var email string
 	if e, ok := m.store.GetSetting("acme_email"); ok && e != "" {
 		email = e
 	}
