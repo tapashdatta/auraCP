@@ -416,10 +416,17 @@
   .user-grid{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:18px;align-items:start}
   @media (max-width:920px){ .user-grid{grid-template-columns:1fr} }
 
-  .perm-grid{width:100%}
-  .perm-grid td, .perm-grid th{padding:9px 12px}
+  /* v0.2.27: denser permission matrix — was 9×12 px padding which made
+     8 resources × 4 actions feel sprawling. New padding pairs with the
+     shrunk .toggle-sm so the whole grid drops in height significantly. */
+  .perm-grid{width:100%;font-size:12.5px}
+  .perm-grid td, .perm-grid th{padding:5px 10px}
+  .perm-grid thead th{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600;padding-bottom:2px}
+  .perm-grid tbody td:first-child{color:var(--txt);font-weight:500}
   .perm-grid td:not(:first-child){text-align:center}
   .perm-grid .toggle{margin:0 auto}
+  /* Hover row highlight makes it obvious which resource you're toggling. */
+  .perm-grid tbody tr:hover{background:var(--surface-1)}
 
   .role-blurb{margin:-6px 0 14px;padding:10px 14px;border-radius:8px;background:var(--surface-1);border:1px solid var(--line);font-size:12.5px;color:var(--txt-2);line-height:1.5}
 

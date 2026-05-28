@@ -637,11 +637,14 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 /* Compact 36×22 variant for dense grids (e.g. AdminUsers permission matrix
    — 32 toggles in a small space, the full-size 52×32 doesn't fit). Same
    visual language at 70% scale. */
-.toggle.toggle-sm{width:36px;height:22px}
-.toggle.toggle-sm::after{width:18px;height:18px;top:2px;left:2px}
-.toggle.toggle-sm.on::after{left:16px}
-.toggle.toggle-sm:active::after{width:20px}
-.toggle.toggle-sm.on:active::after{left:14px;width:20px}
+/* v0.2.27: shrunk toggle-sm — it's used exclusively in the permission
+   matrix (32 cells visible at once), so the previous 36×22 made the
+   table feel oversized. New size matches the typography density. */
+.toggle.toggle-sm{width:28px;height:16px;box-shadow:inset 0 1px 1px rgba(0,0,0,.06)}
+.toggle.toggle-sm::after{width:12px;height:12px;top:2px;left:2px;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+.toggle.toggle-sm.on::after{left:14px}
+.toggle.toggle-sm:active::after{width:14px}
+.toggle.toggle-sm.on:active::after{left:12px;width:14px}
 .code{font-family:var(--fs-mono);font-size:12.5px;line-height:1.7;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px 18px;color:var(--txt-2);overflow:auto;max-height:360px;white-space:pre-wrap}
 /* Vhost / file editor — same monospace, but full-width and resizable. */
 .vhost-editor{font-family:var(--fs-mono);font-size:12.5px;line-height:1.65;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-sm);padding:14px 16px;color:var(--txt);width:100%;resize:vertical;min-height:280px;outline:none;font-weight:400;tab-size:4}
