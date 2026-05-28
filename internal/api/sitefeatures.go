@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"strconv"
 
 	"github.com/auracp/auracp/internal/files"
@@ -213,6 +214,108 @@ func (s *Server) readTextFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+// POST /api/sites/{domain}/files/chmod {"path": "sub/file", "mode": "0644"}
+// Mode is parsed as octal; the request fails if it's outside 0–0777.
+func (s *Server) chmodFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Path string `json:"path"`
+		Mode string `json:"mode"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	n, err := strconv.ParseUint(in.Mode, 8, 32)
+	if err != nil || n > 0o777 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be octal 0–0777 (e.g. 0644)"})
+		return
+	}
+	if err := files.Chmod(st.SiteUser, domain, in.Path, os.FileMode(n)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.chmod", domain+"/"+in.Path+":"+in.Mode)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/files/delete-many {"paths": ["sub/a", "sub/b"]}
+// Bulk delete is one round-trip; per-entry errors come back in `errors`.
+func (s *Server) deleteManyFiles(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct{ Paths []string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	deleted := 0
+	var errs []string
+	for _, p := range in.Paths {
+		if err := files.Delete(st.SiteUser, domain, p); err != nil {
+			errs = append(errs, p+": "+err.Error())
+			continue
+		}
+		deleted++
+	}
+	s.audit(r, "site.files.delete-many", domain+" ×"+strconv.Itoa(deleted))
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted, "errors": errs})
+}
+
+// POST /api/sites/{domain}/files/zip {"paths": [...], "dest": "archive.zip"}
+func (s *Server) zipFiles(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Paths []string
+		Dest  string
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.Zip(st.SiteUser, domain, in.Paths, in.Dest); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.zip", domain+"/"+in.Dest)
+	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/files/unzip {"path": "sub/archive.zip"}
+func (s *Server) unzipFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct{ Path string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.Unzip(st.SiteUser, domain, in.Path); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.unzip", domain+"/"+in.Path)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // PUT /api/sites/{domain}/files/text {"path": "sub/file.ext", "content": "..."}

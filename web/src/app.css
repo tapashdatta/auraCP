@@ -437,6 +437,36 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .editor-area{flex:1;width:100%;padding:18px 22px;border:none;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;line-height:1.55;resize:none;outline:none;tab-size:2;white-space:pre}
 .editor-area:focus{outline:none}
 @keyframes auracp-fade-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
+
+/* v0.2.17 — multi-select, sticky bulk action bar, chmod modal */
+.file-check{accent-color:var(--aura-strong);width:15px;height:15px;flex:none;margin:0;cursor:pointer}
+.file-row-grid.sel{background:var(--aura-glow)}
+.file-row-grid.sel:hover{background:color-mix(in srgb, var(--aura-glow) 80%, var(--surface-1))}
+.bulk-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 18px;background:var(--surface-1);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.bulk-count{font-weight:600;color:var(--txt);font-size:13px}
+.bulk-spacer{flex:1}
+.btn.btn-danger{background:var(--down-soft);color:var(--down);border:1px solid color-mix(in srgb, var(--down) 25%, transparent)}
+.btn.btn-danger:hover{background:color-mix(in srgb, var(--down) 18%, var(--down-soft));border-color:color-mix(in srgb, var(--down) 40%, transparent)}
+
+/* chmod modal: narrower than the editor modal — 3-column grid feels right
+   around 480 px wide. Center it on the viewport. */
+.chmod-card{top:auto;left:50%;right:auto;bottom:auto;transform:translate(-50%, -50%);position:fixed;width:min(480px, 92vw);height:auto;max-height:90vh}
+.chmod-card{top:50%}
+.chmod-body{padding:18px 22px 8px}
+.chmod-grid{width:100%;border-collapse:separate;border-spacing:0 6px}
+.chmod-grid th, .chmod-grid td{padding:6px 10px;font-weight:500}
+.chmod-grid thead th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);text-align:center;padding-bottom:4px}
+.chmod-grid tbody th{text-align:left;color:var(--txt-2);font-size:13px;width:80px}
+.chmod-cell{display:inline-flex;flex-direction:column;align-items:center;gap:4px;padding:8px 10px;border-radius:8px;cursor:pointer;transition:.1s;min-width:48px;background:var(--surface-1);border:1px solid var(--line)}
+.chmod-cell:hover{background:var(--surface-2);border-color:var(--line-2)}
+.chmod-cell input{accent-color:var(--aura-strong);width:14px;height:14px;margin:0;cursor:pointer}
+.chmod-cell span{font-family:var(--fs-mono);font-size:12px;color:var(--txt-2);font-weight:600}
+.chmod-cell:has(input:checked){background:var(--aura-glow);border-color:var(--aura)}
+.chmod-cell:has(input:checked) span{color:var(--aura-strong)}
+.chmod-preview{display:flex;justify-content:space-around;gap:16px;margin-top:14px;padding:14px 18px;background:var(--surface-1);border:1px solid var(--line);border-radius:10px}
+.chmod-preview > div{display:flex;flex-direction:column;align-items:center;gap:4px}
+.chmod-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600}
+.chmod-preview .mono{font-size:16px;color:var(--txt);font-weight:600}
 /* Drag-and-drop overlay on the file manager section — softly highlights the
    container while files hover, with a clear instruction. */
 .section.drop-active{border:1.5px dashed var(--aura);background:var(--aura-glow)}

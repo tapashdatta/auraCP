@@ -6,6 +6,7 @@
 package files
 
 import (
+	"archive/zip"
 	"fmt"
 	"io"
 	"os"
@@ -306,6 +307,205 @@ func WriteText(siteUser, domain, sub, content string) error {
 		return err
 	}
 	return chownToUser(target, siteUser)
+}
+
+// Chmod sets the file's permission bits. Caller passes a Unix mode in octal
+// (e.g. 0o644). The mode is masked to 0o777 so callers can't accidentally
+// flip setuid/setgid/sticky bits.
+func Chmod(siteUser, domain, sub string, mode os.FileMode) error {
+	root, target, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	if target == root {
+		return fmt.Errorf("refusing to chmod the document root itself")
+	}
+	return os.Chmod(target, mode&0o777)
+}
+
+// ZipMaxBytes is the upper bound for files we'll write into a zip archive.
+// Refuses zips that would exceed this in total — keeps a single panel call
+// from filling the disk.
+const ZipMaxBytes int64 = 2 << 30 // 2 GiB
+
+// Zip archives <subs> into <docroot>/<destSub>. Refuses to overwrite. Walks
+// directories recursively. Each archive entry is stored with a relative
+// path so extraction reproduces the same tree.
+func Zip(siteUser, domain string, subs []string, destSub string) error {
+	if len(subs) == 0 {
+		return fmt.Errorf("no files to archive")
+	}
+	clean := filepath.Base(filepath.Clean(destSub))
+	if clean == "" || clean == "." || clean == ".." || strings.ContainsAny(clean, "/\\") {
+		return fmt.Errorf("invalid archive name: %q", destSub)
+	}
+	if !strings.HasSuffix(strings.ToLower(clean), ".zip") {
+		clean += ".zip"
+	}
+	root, _, err := resolve(siteUser, domain, "")
+	if err != nil {
+		return err
+	}
+	// Validate every source path; collect (absPath, relInsideRoot) pairs.
+	type src struct{ abs, rel string }
+	var srcs []src
+	for _, sub := range subs {
+		_, target, err := resolve(siteUser, domain, sub)
+		if err != nil {
+			return err
+		}
+		if target == root {
+			return fmt.Errorf("refusing to zip the entire document root")
+		}
+		srcs = append(srcs, src{abs: target, rel: filepath.Base(target)})
+	}
+
+	dest := filepath.Join(root, clean)
+	if _, err := os.Lstat(dest); err == nil {
+		return fmt.Errorf("destination already exists: %s", clean)
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(out)
+	var total int64
+	for _, s := range srcs {
+		err := filepath.Walk(s.abs, func(p string, info os.FileInfo, werr error) error {
+			if werr != nil {
+				return werr
+			}
+			// Skip the destination file itself in case it's inside the walk.
+			if p == dest {
+				return nil
+			}
+			// Skip symlinks — don't follow out of the docroot accidentally.
+			if info.Mode()&os.ModeSymlink != 0 {
+				return nil
+			}
+			rel := s.rel
+			if p != s.abs {
+				rel = filepath.Join(s.rel, strings.TrimPrefix(p, s.abs+string(os.PathSeparator)))
+			}
+			if info.IsDir() {
+				// Directory entries are required by some tools (e.g. Finder).
+				_, derr := zw.Create(rel + "/")
+				return derr
+			}
+			total += info.Size()
+			if total > ZipMaxBytes {
+				return fmt.Errorf("archive exceeds %d bytes", ZipMaxBytes)
+			}
+			fh, herr := zip.FileInfoHeader(info)
+			if herr != nil {
+				return herr
+			}
+			fh.Name = rel
+			fh.Method = zip.Deflate
+			zfw, ferr := zw.CreateHeader(fh)
+			if ferr != nil {
+				return ferr
+			}
+			f, oerr := os.Open(p)
+			if oerr != nil {
+				return oerr
+			}
+			defer f.Close()
+			_, cerr := io.Copy(zfw, f)
+			return cerr
+		})
+		if err != nil {
+			zw.Close()
+			out.Close()
+			_ = os.Remove(dest)
+			return err
+		}
+	}
+	if err := zw.Close(); err != nil {
+		out.Close()
+		_ = os.Remove(dest)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		_ = os.Remove(dest)
+		return err
+	}
+	return chownToUser(dest, siteUser)
+}
+
+// Unzip extracts <sub> (a .zip) into its containing directory. Every entry's
+// final path is re-checked for containment so a malicious archive can't
+// "Zip Slip" out of the docroot.
+func Unzip(siteUser, domain, sub string) error {
+	root, target, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		return err
+	}
+	if fi.IsDir() {
+		return fmt.Errorf("path is a directory; expected a .zip file")
+	}
+	if !strings.HasSuffix(strings.ToLower(target), ".zip") {
+		return fmt.Errorf("not a .zip file")
+	}
+	zr, err := zip.OpenReader(target)
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+
+	dir := filepath.Dir(target)
+	for _, f := range zr.File {
+		// Reject absolute paths, traversal, and entries that, after join,
+		// escape the destination directory (the classic Zip Slip check).
+		if strings.HasPrefix(f.Name, "/") || strings.Contains(f.Name, "..") {
+			return fmt.Errorf("archive contains unsafe path: %q", f.Name)
+		}
+		dst := filepath.Join(dir, f.Name)
+		clean := filepath.Clean(dst)
+		if clean != dir && !strings.HasPrefix(clean, dir+string(os.PathSeparator)) {
+			return fmt.Errorf("archive entry escapes docroot: %q", f.Name)
+		}
+		// Final containment sanity-check against the site root.
+		if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return fmt.Errorf("archive entry escapes site root: %q", f.Name)
+		}
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(clean, 0o755); err != nil {
+				return err
+			}
+			_ = chownToUser(clean, siteUser)
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
+			return err
+		}
+		mode := f.Mode().Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		w, err := os.OpenFile(clean, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err != nil {
+			return err
+		}
+		rc, err := f.Open()
+		if err != nil {
+			w.Close()
+			return err
+		}
+		if _, err := io.Copy(w, rc); err != nil {
+			rc.Close()
+			w.Close()
+			return err
+		}
+		rc.Close()
+		w.Close()
+		_ = chownToUser(clean, siteUser)
+	}
+	return nil
 }
 
 // chownToUser sets the file's ownership to the site user. We're running as

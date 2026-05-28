@@ -199,8 +199,8 @@
     busy = false
     notice = r.ok ? (d.enabled ? 'PM2 enabled — backend restarted via pm2-runtime.' : 'PM2 disabled — back to plain node.') : (d.error || 'Failed')
   }
-  function openDir(name) { filePath = filePath ? `${filePath}/${name}` : name; load('files') }
-  function upDir() { filePath = filePath.split('/').slice(0, -1).join('/'); load('files') }
+  function openDir(name) { selected = {}; filePath = filePath ? `${filePath}/${name}` : name; load('files') }
+  function upDir() { selected = {}; filePath = filePath.split('/').slice(0, -1).join('/'); load('files') }
   function setLogKind(k) { logKind = k; load('logs') }
   function fmtSize(n) { return n > 1<<20 ? (n/(1<<20)).toFixed(1)+' MB' : (n/1024).toFixed(1)+' KB' }
 
@@ -263,6 +263,7 @@
   const crumbs = $derived(filePath ? filePath.split('/').filter(Boolean) : [])
   function jumpCrumb(idx) {
     // idx=-1 → home; otherwise rebuild the path up to (and including) idx.
+    selected = {}
     filePath = idx < 0 ? '' : crumbs.slice(0, idx + 1).join('/')
     load('files')
   }
@@ -353,6 +354,111 @@
   // Empty-state SFTP hint uses the current page's hostname — i.e. how the
   // operator reached the panel, which is also a valid SFTP host for the box.
   const sftpHost = $derived(typeof location !== 'undefined' ? location.hostname : '')
+
+  // ─── v0.2.17: multi-select, chmod, zip/unzip ───────────────────────────
+  // Multi-select state. Keyed by name within the current directory so we
+  // don't have to reconcile across navigation — switching directories clears
+  // the selection (intentional: bulk-acting across directories invites bugs).
+  let selected = $state({})
+  const selectedCount = $derived(Object.values(selected).filter(Boolean).length)
+  const selectedNames = $derived(Object.keys(selected).filter(n => selected[n]))
+  function clearSelection() { selected = {} }
+  function toggleSel(name) { selected = { ...selected, [name]: !selected[name] } }
+  function selectAll() {
+    const next = {}
+    for (const f of files) next[f.name] = true
+    selected = next
+  }
+
+  async function bulkDelete() {
+    if (selectedCount === 0) return
+    if (!confirm(`Delete ${selectedCount} selected item${selectedCount > 1 ? 's' : ''}? This cannot be undone.`)) return
+    const paths = selectedNames.map(n => filePath ? `${filePath}/${n}` : n)
+    const r = await apiFetch(`${base}/files/delete-many`, {
+      method: 'POST', body: JSON.stringify({ paths })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Bulk delete failed'; return }
+    const errs = Array.isArray(d.errors) ? d.errors.length : 0
+    uploadMsg = errs > 0
+      ? `Deleted ${d.deleted}; ${errs} failed: ${d.errors.join(', ')}`
+      : `Deleted ${d.deleted} item${d.deleted > 1 ? 's' : ''}.`
+    clearSelection()
+    load('files')
+  }
+
+  async function bulkZip() {
+    if (selectedCount === 0) return
+    const def = selectedCount === 1 ? selectedNames[0] + '.zip' : `archive-${Date.now().toString(36)}.zip`
+    const name = prompt('Archive name:', def)
+    if (!name) return
+    const paths = selectedNames.map(n => filePath ? `${filePath}/${n}` : n)
+    const r = await apiFetch(`${base}/files/zip`, {
+      method: 'POST', body: JSON.stringify({ paths, dest: name.trim() })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Zip failed'; return }
+    uploadMsg = `Created ${name}.`
+    clearSelection()
+    load('files')
+  }
+
+  async function unzipItem(name) {
+    if (!confirm(`Extract ${name} here? Existing files with matching names will be overwritten.`)) return
+    const sub = filePath ? `${filePath}/${name}` : name
+    const r = await apiFetch(`${base}/files/unzip`, {
+      method: 'POST', body: JSON.stringify({ path: sub })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Extract failed'; return }
+    uploadMsg = `Extracted ${name}.`
+    load('files')
+  }
+
+  // ─── chmod modal ────────────────────────────────────────────────────────
+  // Model: a 9-bit grid (rwx × user/group/other). Mode is converted to / from
+  // the octal string the API expects. Mode is also previewed as the classic
+  // rwxr-xr-x string so the operator recognises it instantly.
+  let chmod = $state({ open: false, name: '', sub: '', bits: [false,false,false, false,false,false, false,false,false], err: '', busy: false })
+  const chmodLabels = ['Owner read','Owner write','Owner exec','Group read','Group write','Group exec','Other read','Other write','Other exec']
+  const chmodPreview = $derived.by(() => {
+    const c = (i) => chmod.bits[i] ? 'rwx'[i % 3] : '-'
+    return c(0)+c(1)+c(2) + c(3)+c(4)+c(5) + c(6)+c(7)+c(8)
+  })
+  const chmodOctal = $derived.by(() => {
+    const oct = (a, b, c) => (chmod.bits[a]?4:0) + (chmod.bits[b]?2:0) + (chmod.bits[c]?1:0)
+    return '0' + oct(0,1,2) + oct(3,4,5) + oct(6,7,8)
+  })
+
+  function openChmod(f) {
+    // Parse the existing 10-char mode string "drwxr-xr-x" — drop the leading
+    // type bit, then convert each of the 9 perm chars to a boolean.
+    const m = (f.mode || '').slice(-9)
+    const bits = []
+    for (let i = 0; i < 9; i++) bits.push(m[i] === 'rwx'[i % 3])
+    chmod = {
+      open: true,
+      name: f.name,
+      sub: filePath ? `${filePath}/${f.name}` : f.name,
+      bits, err: '', busy: false,
+    }
+  }
+  function closeChmod() { chmod = { ...chmod, open: false } }
+  async function saveChmod() {
+    chmod.busy = true
+    chmod.err = ''
+    const r = await apiFetch(`${base}/files/chmod`, {
+      method: 'POST', body: JSON.stringify({ path: chmod.sub, mode: chmodOctal })
+    })
+    const d = await r.json().catch(() => ({}))
+    chmod.busy = false
+    if (!r.ok) { chmod.err = d.error || 'Chmod failed'; return }
+    uploadMsg = `${chmod.name} → ${chmodPreview} (${chmodOctal})`
+    closeChmod()
+    load('files')
+  }
+
+  function isZip(name) { return /\.zip$/i.test(name) }
 </script>
 
 <div class="wrap fade">
@@ -626,6 +732,26 @@
         <div class="drop-overlay">Drop files to upload to <span class="mono">{filePath || '/'}</span></div>
       {/if}
 
+      <!-- v0.2.17: sticky bulk-action bar appears when one or more rows are
+           checked. Pinned to the top of the file list so it's always reachable
+           without scrolling back up on long directories. -->
+      {#if selectedCount > 0}
+        <div class="bulk-bar">
+          <span class="bulk-count">{selectedCount} selected</span>
+          <button type="button" class="btn btn-ghost" style="padding:6px 12px" onclick={selectAll}>Select all ({files.length})</button>
+          <button type="button" class="btn btn-ghost" style="padding:6px 12px" onclick={clearSelection}>Clear</button>
+          <span class="bulk-spacer"></span>
+          <button type="button" class="btn btn-ghost" style="padding:6px 12px" onclick={bulkZip}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M21 8v13H3V8M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
+            Zip
+          </button>
+          <button type="button" class="btn btn-danger" style="padding:6px 12px" onclick={bulkDelete}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            Delete
+          </button>
+        </div>
+      {/if}
+
       <div class="section-b" style="padding:0">
         {#if files.length === 0}
           <!-- CloudPanel-style empty state with concrete SFTP details. The
@@ -647,7 +773,9 @@
           </div>
         {:else}
           {#each files as f}
-            <div class="file-row-grid">
+            <div class="file-row-grid" class:sel={selected[f.name]}>
+              <input type="checkbox" class="file-check" checked={!!selected[f.name]}
+                     onchange={() => toggleSel(f.name)} aria-label="Select {f.name}">
               {#if f.dir}
                 <button type="button" class="file-row k" onclick={() => openDir(f.name)} title="Open folder">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
@@ -658,6 +786,11 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
                 </button>
+              {:else if isZip(f.name)}
+                <button type="button" class="file-row k" onclick={() => unzipItem(f.name)} title="Extract here">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M10 12v8M10 16h4"/></svg>
+                  {f.name}
+                </button>
               {:else}
                 <button type="button" class="file-row k" onclick={() => downloadFile(f.name)} title="Download (binary)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
@@ -666,11 +799,19 @@
               {/if}
               <span class="file-meta">{f.mode} · {fmtSize(f.size)}</span>
               <div class="file-actions">
+                {#if isZip(f.name) && !f.dir}
+                  <button type="button" class="file-act" onclick={() => unzipItem(f.name)} title="Extract here" aria-label="Extract {f.name}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+                  </button>
+                {/if}
                 {#if !f.dir}
                   <button type="button" class="file-act" onclick={() => downloadFile(f.name)} title="Download" aria-label="Download {f.name}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
                   </button>
                 {/if}
+                <button type="button" class="file-act" onclick={() => openChmod(f)} title="Permissions" aria-label="Permissions for {f.name}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 1l9 4v6c0 5.5-3.8 10.7-9 12-5.2-1.3-9-6.5-9-12V5l9-4z"/></svg>
+                </button>
                 <button type="button" class="file-act" onclick={() => renameItem(f.name)} title="Rename" aria-label="Rename {f.name}">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
                 </button>
@@ -713,6 +854,51 @@
         <div class="modal-foot">
           <span class="mono">{editor.content.length} bytes · {editor.content.split('\n').length} lines</span>
           <span style="color:var(--txt-2)">Ctrl/Cmd+S to save</span>
+        </div>
+      </div>
+    {/if}
+
+    <!-- chmod modal: 3x3 grid of rwx checkboxes with the live preview ("rwxr-xr-x")
+         and the resulting octal mode underneath. The grid layout matches how chmod
+         is usually explained in tutorials, so the mental model transfers. -->
+    {#if chmod.open}
+      <div class="modal-back" onclick={closeChmod} role="presentation"></div>
+      <div class="modal-card chmod-card" role="dialog" aria-label="Permissions for {chmod.name}">
+        <div class="modal-head">
+          <div>
+            <h3>Permissions</h3>
+            <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px">{chmod.name}</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn btn-ghost" onclick={closeChmod}>Cancel</button>
+            <button type="button" class="btn btn-primary" onclick={saveChmod} disabled={chmod.busy}>
+              {chmod.busy ? 'Saving…' : 'Apply'}
+            </button>
+          </div>
+        </div>
+        {#if chmod.err}<div class="note" style="margin:0 22px 12px"><div>{chmod.err}</div></div>{/if}
+        <div class="chmod-body">
+          <table class="chmod-grid">
+            <thead><tr><th></th><th>Read</th><th>Write</th><th>Execute</th></tr></thead>
+            <tbody>
+              {#each ['Owner','Group','Other'] as who, row}
+                <tr>
+                  <th>{who}</th>
+                  {#each [0,1,2] as col}
+                    {@const i = row * 3 + col}
+                    <td><label class="chmod-cell">
+                      <input type="checkbox" bind:checked={chmod.bits[i]} aria-label={chmodLabels[i]}>
+                      <span>{'rwx'[col]}</span>
+                    </label></td>
+                  {/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+          <div class="chmod-preview">
+            <div><span class="chmod-label">Symbolic</span><span class="mono">{chmodPreview}</span></div>
+            <div><span class="chmod-label">Octal</span><span class="mono">{chmodOctal}</span></div>
+          </div>
         </div>
       </div>
     {/if}
