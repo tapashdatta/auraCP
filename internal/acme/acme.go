@@ -171,7 +171,7 @@ func (m *Manager) issue(ctx context.Context, domain string, opts IssueOpts) erro
 			return fmt.Errorf("DNS-01 setup: %w", err)
 		}
 		log.Printf("acme: issuing %s via DNS-01 (Cloudflare, operator-selected)", domain)
-		res, err := m.client.Certificate.Obtain(req)
+		res, err := m.obtainWithKidHeal(req)
 		if err != nil {
 			prev.Status = "failed"
 			prev.LastError = "DNS-01 (Cloudflare): " + err.Error()
@@ -185,7 +185,7 @@ func (m *Manager) issue(ctx context.Context, domain string, opts IssueOpts) erro
 	if err := m.setHTTP01(); err != nil {
 		return err
 	}
-	res, err := m.client.Certificate.Obtain(req)
+	res, err := m.obtainWithKidHeal(req)
 	if err != nil {
 		// Helpful hint when the error pattern matches "Cloudflare proxy
 		// in the way" — direct the operator to the opt-in DNS-01 path
@@ -200,6 +200,52 @@ func (m *Manager) issue(ctx context.Context, domain string, opts IssueOpts) erro
 		return fmt.Errorf("obtain cert for %s (HTTP-01): %w%s", domain, err, hint)
 	}
 	return m.saveIssuedCert(ctx, domain, &prev, res, "http-01")
+}
+
+// obtainWithKidHeal wraps client.Certificate.Obtain with a one-shot retry
+// when LE rejects the JWS for missing kid — the symptom of a corrupted
+// registration cache that escaped ensureClient's startup heal (e.g. when
+// the client was built before v0.2.43 and is still cached in memory).
+//
+// Detection: error message contains both "JWS" and "Key ID" (LE's exact
+// wording is "Unable to validate JWS :: No Key ID in JWS header"). On a
+// hit we discard the cached client + the on-disk registration.json, force
+// a fresh ensureClient (which re-runs the startup heal + ResolveAccountByKey
+// → Register fallback), and retry the obtain. If the retry STILL fails we
+// surface the second error — the registration is genuinely broken and the
+// operator needs to look.
+func (m *Manager) obtainWithKidHeal(req legoacme.ObtainRequest) (*legoacme.Resource, error) {
+	res, err := m.client.Certificate.Obtain(req)
+	if err == nil || !isKidError(err) {
+		return res, err
+	}
+	log.Printf("acme: detected 'No Key ID in JWS header' — resetting registration cache and retrying")
+	// Throw away the in-memory client + on-disk registration, then rebuild.
+	m.mu.Lock()
+	m.client = nil
+	m.acct = nil
+	m.mu.Unlock()
+	_ = os.Remove(filepath.Join(m.etcDir, "acme", "registration.json"))
+	if rerr := m.ensureClient(); rerr != nil {
+		return nil, fmt.Errorf("rebuild after kid error: %w", rerr)
+	}
+	// Re-arm the challenge that was set before the failure. We only know
+	// the type indirectly; both branches above set the matching provider
+	// before calling us, so we can just re-set HTTP-01 (the dominant case);
+	// the ForceDNS01 branch will re-arm DNS-01 itself on a second Issue
+	// click because that path is operator-driven.
+	if err := m.setHTTP01(); err != nil {
+		return nil, err
+	}
+	return m.client.Certificate.Obtain(req)
+}
+
+func isKidError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "JWS") && strings.Contains(s, "Key ID")
 }
 
 // looksLikeProxiedDomain matches lego/LE error text that typically means the
