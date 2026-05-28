@@ -49,13 +49,13 @@ On a fresh **Debian 13** or **Ubuntu 24.04** host (x86-64 or ARM64), no repo clo
 
 ```bash
 # 1) install the panel  (one-line)
-sudo dpkg -i ./auracp_0.1.1_amd64.deb
+sudo dpkg -i ./auracp_0.1.2_amd64.deb
 
 # 2) provision the data plane  (interactive package menu)
 sudo auracp-install
 
 # …or fully non-interactive in a single line:
-sudo dpkg -i ./auracp_0.1.1_amd64.deb && \
+sudo dpkg -i ./auracp_0.1.2_amd64.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
 
