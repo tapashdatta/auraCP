@@ -123,11 +123,20 @@ if (!$isAuthPost && !$hasSession) {
 // v0.2.48: register an Adminer subclass that emits <script src="adminer.js">
 // in the <head>. Adminer 4.x auto-loads adminer.css from its own directory
 // but NOT adminer.js; the only stable injection point is the Adminer
-// subclass's head() override. The subclass is defined inside the function
-// body because the parent `Adminer` class only exists after adminer.php is
-// included — `extends Adminer` at the top level would fail to parse.
+// subclass's head() override.
+//
+// v0.2.54: Adminer 5.x moved the base class into the `Adminer` namespace
+// (`namespace Adminer; class Adminer { ... }`). The pre-v0.2.54 wrapper
+// used `extends Adminer` which resolves to the global `\Adminer` —
+// missing on 5.x → fatal on include → operator sees a white screen.
+// Use the fully-qualified `\Adminer\Adminer` so the include succeeds
+// regardless of the operator's PHP namespace context.
+//
+// The subclass is defined inside the function body because the parent
+// class only exists after adminer.php is included — `extends ...` at
+// the top level would fail to parse.
 function adminer_object() {
-    return new class extends Adminer {
+    return new class extends \Adminer\Adminer {
         function head(...$args) {
             parent::head(...$args);
             echo '<script src="adminer.js" defer></script>' . "\n";

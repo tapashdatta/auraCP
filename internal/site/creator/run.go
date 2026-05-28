@@ -15,6 +15,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -105,33 +106,59 @@ type Deps struct {
 // disabled (so self-signed certs in the pre-issuance window don't
 // throw) and asserts the response body is non-empty.
 //
-// Bypasses DNS by setting Host header to the domain — the request
-// targets the loopback address but nginx routes by Host header. Same
-// pattern operators use when debugging: `curl --resolve <domain>:443:127.0.0.1`.
+// v0.2.54: the URL uses the real domain (not 127.0.0.1) so TLS SNI
+// matches a configured server_name. Forcing the URL host to 127.0.0.1
+// made SNI advertise "127.0.0.1" which nothing matches — the v0.2.38
+// catch-all (00-default.conf with ssl_reject_handshake on) intercepts
+// and the handshake fails with "tls: unrecognized name". We still
+// want to bypass DNS, so a custom DialContext rewrites the TCP target
+// to 127.0.0.1 regardless of what the URL host resolves to. Same
+// pattern as `curl --resolve <domain>:443:127.0.0.1`.
 func SmokeProbe(domain string) error {
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		// Force every request to 127.0.0.1 regardless of the URL's host.
-		DialTLS: nil,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true,
+			// ServerName left empty — Go derives SNI from the URL host.
+		},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// addr is "<domain>:443" — rewrite TCP target to loopback,
+			// keeping the port the URL implied.
+			_, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				port = "443"
+			}
+			return dialer.DialContext(ctx, network, "127.0.0.1:"+port)
+		},
 	}
 	client := &http.Client{
 		Timeout:   SmokeProbeTimeout,
 		Transport: transport,
+		// Don't follow redirects — a 301 → https://www.<domain> would
+		// fail TLS dial outside loopback. We only want the first response.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-	req, err := http.NewRequest("GET", "https://127.0.0.1/", nil)
+	req, err := http.NewRequest("GET", "https://"+domain+"/", nil)
 	if err != nil {
 		return err
 	}
-	req.Host = domain
-	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.48")
+	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.54")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("probe request: %w", err)
 	}
 	defer resp.Body.Close()
+	// A 3xx redirect (e.g. wordpress redirecting to /wp-admin/install.php)
+	// counts as success — the upstream IS responding with intent. We
+	// only flag empty 2xx / 5xx bodies, which is the actual symptom of
+	// the a.garuda.sh-class bug.
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		return nil
+	}
 	// Read the first 512 bytes — that's enough to detect "empty body"
-	// (the a.garuda.sh bug) without spending bandwidth on a heavy
-	// homepage.
+	// without spending bandwidth on a heavy homepage.
 	buf := make([]byte, 512)
 	n, _ := resp.Body.Read(buf)
 	if n == 0 {

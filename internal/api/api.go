@@ -250,9 +250,21 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// v0.2.34: WordPress auto-install pre-flight. Provision the DB here
-	// (so its creds land in the store regardless of whether wp-cli
-	// succeeds later); the pipeline consumes them via createSiteInput.
+	// v0.2.34: WordPress auto-install pre-flight.
+	//
+	// v0.2.54: re-ordered to fix two operator-facing bugs:
+	//
+	//   1. Pre-v0.2.54 the empty-email check fired AFTER the DB was
+	//      created. Operator retried with the email field filled in,
+	//      handler generated a NEW random DB suffix, created ANOTHER
+	//      DB. N retries = N orphan DBs. Fix: default WPAdminEmail to
+	//      admin@<domain> if empty (operator can change it via WP's
+	//      Settings → General once installed). No more email gate.
+	//
+	//   2. Pipeline validation that fires AFTER DB creation (e.g.
+	//      Preflight rejecting a domain conflict) also orphaned the
+	//      DB. Fix: track `dbCreated` + rollback on pipeline failure.
+	dbCreated := false
 	if in.Type == "wordpress" && in.WPInstall {
 		if !wpinstall.Available() {
 			writeJSON(w, http.StatusBadRequest, map[string]string{
@@ -260,8 +272,21 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Auto-generate DB name/user. Same suffix is reused so the operator
-		// can guess one from the other when troubleshooting.
+		// Defaults FIRST — no validation gate that could fire mid-way.
+		if in.WPAdminUser == "" {
+			in.WPAdminUser = "admin"
+		}
+		if in.WPAdminEmail == "" {
+			in.WPAdminEmail = "admin@" + in.Domain
+		}
+		if in.WPTitle == "" {
+			in.WPTitle = in.Domain
+		}
+		if in.WPAdminPass == "" {
+			in.WPAdminPass, _ = auth.RandomPassword()
+		}
+		// NOW provision the DB. Any failure here surfaces before any
+		// other resource has been touched.
 		suffix, _ := auth.RandomToken()
 		if len(suffix) > 8 {
 			suffix = suffix[:8]
@@ -279,22 +304,7 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
-		// Admin password: auto-generate if the operator didn't supply one.
-		// We return the password to the panel once on success so it can be
-		// shown in a modal and copied; nothing of it stays in cleartext.
-		if in.WPAdminPass == "" {
-			in.WPAdminPass, _ = auth.RandomPassword()
-		}
-		if in.WPAdminUser == "" {
-			in.WPAdminUser = "admin"
-		}
-		if in.WPAdminEmail == "" {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "admin email is required for WordPress auto-install"})
-			return
-		}
-		if in.WPTitle == "" {
-			in.WPTitle = in.Domain
-		}
+		dbCreated = true
 		in.WPDBName = dbName
 		in.WPDBUser = dbUser
 		in.WPDBPass = dbPass
@@ -306,6 +316,13 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 	// which builds a creator.Spec internally.
 	rec, err := s.createSiteViaNewPipeline(r.Context(), in)
 	if err != nil {
+		// v0.2.54: roll back the DB we just provisioned. Without this,
+		// every Preflight rejection (domain conflict, bad user, etc.)
+		// leaves an orphan MariaDB database that gradually accumulates
+		// as the operator retries the form with corrected fields.
+		if dbCreated {
+			_ = s.dbs.Drop(r.Context(), "mariadb", in.WPDBName, in.WPDBUser)
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
