@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# auraCP installer — lightweight server control panel for Debian 13.
+# auraCP installer — lightweight server control panel.
+# Supported: Debian 12 (bookworm), Debian 13 (trixie),
+#            Ubuntu 22.04 (jammy), Ubuntu 24.04 (noble) — on amd64 + arm64.
 #
 # Required packages are always installed; everything else is the admin's choice
 # (MariaDB and/or PostgreSQL, Node.js, PHP, Python, Redis, security hardening).
@@ -13,7 +15,7 @@
 #
 # Selection flags (override defaults; imply --non-interactive when given):
 #   --db=mariadb|postgres|both|none   --node=yes|no      --php=yes|no
-#   --php-version=8.3|8.4|8.5         --python=yes|no     --redis=yes|no
+#   --python=yes|no                   --redis=yes|no
 #   --mariadb-version=10.11|11.4|11.8 --postgres-version=16|17|18
 #   --node-version=20|22|24
 #   --typesense=yes|no                --docker=yes|no
@@ -21,14 +23,14 @@
 #   --panel-domain=panel.example.com  (front the panel; Caddy issues its SSL cert)
 #
 # Or via env: AURACP_MARIADB, AURACP_POSTGRES, AURACP_NODE, AURACP_PHP,
-#   AURACP_PHP_VERSION, AURACP_PYTHON, AURACP_REDIS, AURACP_SECURITY, AURACP_PORT
+#   AURACP_PYTHON, AURACP_REDIS, AURACP_SECURITY, AURACP_PORT
 #
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.14"
+AURACP_VERSION="0.1.15"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -39,7 +41,10 @@ INTERACTIVE=1                           # auto-disabled when selection flags are
 
 # optional components (yes/no); defaults chosen for a typical PHP+DB host
 OPT_PHP="${AURACP_PHP:-yes}"
-PHP_VERSION="${AURACP_PHP_VERSION:-8.4}"
+# NOTE: there's no PHP version knob. FrankenPHP statically embeds the PHP
+# runtime — its installer ignores any version argument and ships whatever the
+# latest FrankenPHP release bundles. Exposing a choice that the underlying
+# tool doesn't honour would just deceive the user.
 OPT_NODE="${AURACP_NODE:-yes}"
 OPT_PYTHON="${AURACP_PYTHON:-no}"
 OPT_MARIADB="${AURACP_MARIADB:-yes}"
@@ -48,7 +53,7 @@ OPT_REDIS="${AURACP_REDIS:-no}"
 OPT_TYPESENSE="${AURACP_TYPESENSE:-no}"
 OPT_DOCKER="${AURACP_DOCKER:-no}"
 OPT_SECURITY="${AURACP_SECURITY:-yes}"  # UFW firewall + fail2ban
-TYPESENSE_VERSION="${AURACP_TYPESENSE_VERSION:-27.1}"
+TYPESENSE_VERSION="${AURACP_TYPESENSE_VERSION:-30.2}"
 
 # Per-engine version defaults — overridable via flags / env / TUI.
 MARIADB_VERSION="${AURACP_MARIADB_VERSION:-11.8}"     # 11.8 | 11.4 | 10.11  (LTS)
@@ -175,7 +180,6 @@ parse_args() {
         esac ;;
       --node=*)        sawSelection=1; OPT_NODE="${arg#*=}" ;;
       --php=*)         sawSelection=1; OPT_PHP="${arg#*=}" ;;
-      --php-version=*) PHP_VERSION="${arg#*=}" ;;
       --mariadb-version=*)  MARIADB_VERSION="${arg#*=}" ;;
       --postgres-version=*) POSTGRES_VERSION="${arg#*=}" ;;
       --node-version=*)     NODE_MAJOR="${arg#*=}" ;;
@@ -188,12 +192,59 @@ parse_args() {
       *) die "Unknown option: $arg (try --help)" ;;
     esac
   done
-  case "$PHP_VERSION"     in 8.3|8.4|8.5) ;;     *) die "--php-version must be 8.3 / 8.4 / 8.5";; esac
   case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
   case "$POSTGRES_VERSION" in 16|17|18) ;;       *) die "--postgres-version must be 16 / 17 / 18";; esac
   case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
   [ "$sawSelection" -eq 1 ] && INTERACTIVE=0
   return 0
+}
+
+# ──────────────────────────────────────────────────────────────────────────
+# upstream-repo probes
+# ──────────────────────────────────────────────────────────────────────────
+# mariadb.org and apt.postgresql.org publish per-OS-codename repos — older
+# engine versions stop being built once an OS is released, so a hardcoded
+# version list goes 404 on newer hosts (e.g. MariaDB 10.11 on Debian 13).
+# These helpers probe what's actually published and cache the answer.
+
+_MARIADB_PROBED=0; _MARIADB_AVAILABLE=""
+mariadb_available() {
+  if [ "$_MARIADB_PROBED" -eq 0 ]; then
+    local v distro="${OS_ID:-debian}"
+    for v in 11.8 11.4 10.11; do
+      if curl -fsI -o /dev/null --max-time 5 \
+          "https://mirror.mariadb.org/repo/${v}/${distro}/dists/${OS_CODENAME}/InRelease" 2>/dev/null; then
+        _MARIADB_AVAILABLE="$_MARIADB_AVAILABLE $v"
+      fi
+    done
+    _MARIADB_AVAILABLE="${_MARIADB_AVAILABLE# }"
+    _MARIADB_PROBED=1
+  fi
+  echo "$_MARIADB_AVAILABLE"
+}
+
+# apt.postgresql.org keeps a single -pgdg repo per codename with every current
+# major in it — so we probe codename support once and report all current majors.
+_POSTGRES_PROBED=0; _POSTGRES_AVAILABLE=""
+postgres_available() {
+  if [ "$_POSTGRES_PROBED" -eq 0 ]; then
+    if curl -fsI -o /dev/null --max-time 5 \
+        "https://apt.postgresql.org/pub/repos/apt/dists/${OS_CODENAME}-pgdg/InRelease" 2>/dev/null; then
+      _POSTGRES_AVAILABLE="18 17 16"
+    fi
+    _POSTGRES_PROBED=1
+  fi
+  echo "$_POSTGRES_AVAILABLE"
+}
+
+# Snap $1's current value to one of the space-separated values in $2; if it
+# isn't a member, fall back to the first (newest) one. Echoes the chosen value.
+snap_to_available() {
+  local want="$1" list="$2"
+  case " $list " in
+    *" $want "*) echo "$want" ;;
+    *)           echo "${list%% *}" ;;
+  esac
 }
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -233,7 +284,7 @@ select_whiptail() {
     MARIADB "MariaDB database engine"          "$(onoff "$OPT_MARIADB")" \
     POSTGRES "PostgreSQL database engine"        "$(onoff "$OPT_POSTGRES")" \
     NODE    "Node.js ${NODE_MAJOR} LTS runtime" "$(onoff "$OPT_NODE")" \
-    PHP     "PHP ${PHP_VERSION} (FrankenPHP)"    "$(onoff "$OPT_PHP")" \
+    PHP     "PHP (FrankenPHP, embedded)"        "$(onoff "$OPT_PHP")" \
     PYTHON  "Python 3 (gunicorn/uvicorn)"        "$(onoff "$OPT_PYTHON")" \
     REDIS   "Redis (object cache)"               "$(onoff "$OPT_REDIS")" \
     TYPESENSE "Typesense search server"           "$(onoff "$OPT_TYPESENSE")" \
@@ -252,28 +303,49 @@ select_whiptail() {
   case "$chosen" in *DOCKER*) OPT_DOCKER=yes;; esac
   case "$chosen" in *SECURITY*) OPT_SECURITY=yes;; esac
 
-  if yesno "$OPT_PHP"; then
-    PHP_VERSION=$(whiptail --title "PHP version" --radiolist "auraCP supports PHP 8.3+ only." 12 60 3 \
-      8.5 "PHP 8.5" "$(req "$PHP_VERSION" 8.5)" \
-      8.4 "PHP 8.4" "$(req "$PHP_VERSION" 8.4)" \
-      8.3 "PHP 8.3" "$(req "$PHP_VERSION" 8.3)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || PHP_VERSION=8.4
-  fi
   if yesno "$OPT_MARIADB"; then
-    MARIADB_VERSION=$(whiptail --title "MariaDB version" --radiolist \
-      "Pick a MariaDB LTS to install (from mariadb.org repo):" 12 60 3 \
-      11.8  "11.8 LTS (current)"  "$(req "$MARIADB_VERSION" 11.8)" \
-      11.4  "11.4 LTS"            "$(req "$MARIADB_VERSION" 11.4)" \
-      10.11 "10.11 LTS (oldest supported)" "$(req "$MARIADB_VERSION" 10.11)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || MARIADB_VERSION=11.8
+    local mver_list mver_args=() mver_count=0 v
+    mver_list=$(mariadb_available)
+    if [ -z "$mver_list" ]; then
+      whiptail --title "MariaDB unavailable" --msgbox \
+        "mariadb.org publishes no MariaDB build for ${OS_ID} ${OS_CODENAME}.\nMariaDB will be skipped." 10 60 < /dev/tty || true
+      OPT_MARIADB=no
+    else
+      MARIADB_VERSION=$(snap_to_available "$MARIADB_VERSION" "$mver_list")
+      for v in $mver_list; do
+        case "$v" in
+          11.8)  mver_args+=("$v" "11.8 LTS (current)"            "$(req "$MARIADB_VERSION" "$v")") ;;
+          11.4)  mver_args+=("$v" "11.4 LTS"                      "$(req "$MARIADB_VERSION" "$v")") ;;
+          10.11) mver_args+=("$v" "10.11 LTS (oldest supported)"  "$(req "$MARIADB_VERSION" "$v")") ;;
+          *)     mver_args+=("$v" "MariaDB $v"                    "$(req "$MARIADB_VERSION" "$v")") ;;
+        esac
+        mver_count=$((mver_count + 1))
+      done
+      MARIADB_VERSION=$(whiptail --title "MariaDB version" --radiolist \
+        "Available for ${OS_ID} ${OS_CODENAME} (from mariadb.org):" 12 64 "$mver_count" \
+        "${mver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || MARIADB_VERSION="${mver_list%% *}"
+    fi
   fi
   if yesno "$OPT_POSTGRES"; then
-    POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
-      "Pick a PostgreSQL major (from apt.postgresql.org):" 12 60 3 \
-      18 "PostgreSQL 18 (current)" "$(req "$POSTGRES_VERSION" 18)" \
-      17 "PostgreSQL 17"           "$(req "$POSTGRES_VERSION" 17)" \
-      16 "PostgreSQL 16"           "$(req "$POSTGRES_VERSION" 16)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION=18
+    local pver_list pver_args=() pver_count=0 v
+    pver_list=$(postgres_available)
+    if [ -z "$pver_list" ]; then
+      whiptail --title "PostgreSQL unavailable" --msgbox \
+        "apt.postgresql.org publishes no PGDG repo for ${OS_ID} ${OS_CODENAME}.\nPostgreSQL will be skipped." 10 60 < /dev/tty || true
+      OPT_POSTGRES=no
+    else
+      POSTGRES_VERSION=$(snap_to_available "$POSTGRES_VERSION" "$pver_list")
+      for v in $pver_list; do
+        case "$v" in
+          18) pver_args+=("$v" "PostgreSQL 18 (current)" "$(req "$POSTGRES_VERSION" "$v")") ;;
+          *)  pver_args+=("$v" "PostgreSQL $v"           "$(req "$POSTGRES_VERSION" "$v")") ;;
+        esac
+        pver_count=$((pver_count + 1))
+      done
+      POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
+        "Available for ${OS_ID} ${OS_CODENAME} (from apt.postgresql.org):" 12 64 "$pver_count" \
+        "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION="${pver_list%% *}"
+    fi
   fi
   if yesno "$OPT_NODE"; then
     NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
@@ -296,18 +368,30 @@ select_readline() {
   OPT_MARIADB=$(ask "Install MariaDB?"   "$OPT_MARIADB")
   OPT_POSTGRES=$(ask "Install PostgreSQL?" "$OPT_POSTGRES")
   OPT_NODE=$(ask "Install Node.js ${NODE_MAJOR} LTS?" "$OPT_NODE")
-  OPT_PHP=$(ask "Install PHP (FrankenPHP)?" "$OPT_PHP")
-  if yesno "$OPT_PHP"; then
-    read -r -p "  PHP version [8.3/8.4/8.5] (${PHP_VERSION}): " v < /dev/tty || true
-    case "${v:-$PHP_VERSION}" in 8.3|8.4|8.5) PHP_VERSION="${v:-$PHP_VERSION}";; esac
-  fi
+  OPT_PHP=$(ask "Install PHP (FrankenPHP, embedded)?" "$OPT_PHP")
   if yesno "$OPT_MARIADB"; then
-    read -r -p "  MariaDB LTS [11.8/11.4/10.11] (${MARIADB_VERSION}): " v < /dev/tty || true
-    case "${v:-$MARIADB_VERSION}" in 10.11|11.4|11.8) MARIADB_VERSION="${v:-$MARIADB_VERSION}";; esac
+    local mver_list
+    mver_list=$(mariadb_available)
+    if [ -z "$mver_list" ]; then
+      warn "mariadb.org has no MariaDB for ${OS_ID} ${OS_CODENAME} — skipping MariaDB."
+      OPT_MARIADB=no
+    else
+      MARIADB_VERSION=$(snap_to_available "$MARIADB_VERSION" "$mver_list")
+      read -r -p "  MariaDB LTS [$(echo "$mver_list" | tr ' ' '/')] (${MARIADB_VERSION}): " v < /dev/tty || true
+      case " $mver_list " in *" ${v:-$MARIADB_VERSION} "*) MARIADB_VERSION="${v:-$MARIADB_VERSION}";; esac
+    fi
   fi
   if yesno "$OPT_POSTGRES"; then
-    read -r -p "  PostgreSQL major [18/17/16] (${POSTGRES_VERSION}): " v < /dev/tty || true
-    case "${v:-$POSTGRES_VERSION}" in 16|17|18) POSTGRES_VERSION="${v:-$POSTGRES_VERSION}";; esac
+    local pver_list
+    pver_list=$(postgres_available)
+    if [ -z "$pver_list" ]; then
+      warn "apt.postgresql.org has no PGDG repo for ${OS_ID} ${OS_CODENAME} — skipping Postgres."
+      OPT_POSTGRES=no
+    else
+      POSTGRES_VERSION=$(snap_to_available "$POSTGRES_VERSION" "$pver_list")
+      read -r -p "  PostgreSQL major [$(echo "$pver_list" | tr ' ' '/')] (${POSTGRES_VERSION}): " v < /dev/tty || true
+      case " $pver_list " in *" ${v:-$POSTGRES_VERSION} "*) POSTGRES_VERSION="${v:-$POSTGRES_VERSION}";; esac
+    fi
   fi
   if yesno "$OPT_NODE"; then
     read -r -p "  Node.js LTS [24/22/20] (${NODE_MAJOR}): " v < /dev/tty || true
@@ -347,8 +431,7 @@ print_plan() {
   printf '  %-22s %s\n' "PostgreSQL" "$m"
   m="$(mark "$OPT_NODE")";     yesno "$OPT_NODE"     && m="$m ${C_DIM}(${NODE_MAJOR})${C_RESET}"
   printf '  %-22s %s\n' "Node.js" "$m"
-  m="$(mark "$OPT_PHP")"; yesno "$OPT_PHP" && m="$m ${C_DIM}(${PHP_VERSION})${C_RESET}"
-  printf '  %-22s %s\n' "PHP / FrankenPHP" "$m"
+  printf '  %-22s %s\n' "PHP / FrankenPHP" "$(mark "$OPT_PHP")"
   printf '  %-22s %s\n' "Python 3" "$(mark "$OPT_PYTHON")"
   printf '  %-22s %s\n' "Redis" "$(mark "$OPT_REDIS")"
   printf '  %-22s %s\n' "Typesense" "$(mark "$OPT_TYPESENSE")"
@@ -404,6 +487,24 @@ install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
 }
 
 install_mariadb() {
+  # Belt-and-suspenders: the TUI path already snaps MARIADB_VERSION to an
+  # available value, but a user passing --mariadb-version= reaches here with
+  # the raw value. Re-validate against the probe so we don't write a doomed
+  # apt source that 404s on the very next apt-get update.
+  local available
+  available=$(mariadb_available)
+  if [ -z "$available" ]; then
+    warn "mariadb.org has no MariaDB published for ${OS_ID} ${OS_CODENAME} — skipping."
+    return 0
+  fi
+  case " $available " in
+    *" $MARIADB_VERSION "*) ;;
+    *)
+      local newest="${available%% *}"
+      warn "MariaDB ${MARIADB_VERSION} isn't published for ${OS_ID} ${OS_CODENAME}; installing ${newest} instead (available: ${available})."
+      MARIADB_VERSION="$newest"
+      ;;
+  esac
   msg "Installing MariaDB ${MARIADB_VERSION} (from mariadb.org)…"
   local distro="${OS_ID:-debian}"
   run "install -d -m 0755 /usr/share/keyrings"
@@ -417,6 +518,20 @@ install_mariadb() {
 }
 
 install_postgres() {
+  local available
+  available=$(postgres_available)
+  if [ -z "$available" ]; then
+    warn "apt.postgresql.org has no PGDG repo for ${OS_ID} ${OS_CODENAME} — skipping Postgres."
+    return 0
+  fi
+  case " $available " in
+    *" $POSTGRES_VERSION "*) ;;
+    *)
+      local newest="${available%% *}"
+      warn "PostgreSQL ${POSTGRES_VERSION} isn't available on ${OS_ID} ${OS_CODENAME}; installing ${newest} instead."
+      POSTGRES_VERSION="$newest"
+      ;;
+  esac
   msg "Installing PostgreSQL ${POSTGRES_VERSION} (from apt.postgresql.org)…"
   run "install -d -m 0755 /usr/share/keyrings"
   run "curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg"
@@ -446,8 +561,10 @@ for r in data:
         print(r['version'][1:]); break
 " 2>/dev/null || true)
   if [ -z "$ver" ]; then
-    warn "Could not resolve latest Node ${NODE_MAJOR}.x from nodejs.org/dist; falling back to ${NODE_MAJOR}.0.0"
-    ver="${NODE_MAJOR}.0.0"
+    # Don't silently guess at ${NODE_MAJOR}.0.0 — that's a years-old initial
+    # release and may have been pruned. Bail loud so the operator notices and
+    # retries (transient DNS / proxy hiccup is the usual cause).
+    die "Could not resolve latest Node ${NODE_MAJOR}.x from nodejs.org/dist. Check connectivity and re-run."
   fi
 
   local dir="${PREFIX}/node/${ver}"
@@ -465,11 +582,12 @@ for r in data:
 }
 
 install_php() {
-  msg "Installing FrankenPHP (PHP ${PHP_VERSION})…"
-  # FrankenPHP ships PHP embedded; static binary keeps the footprint small.
+  msg "Installing FrankenPHP (PHP statically embedded)…"
+  # FrankenPHP's upstream install.sh ships a static binary with PHP embedded —
+  # the bundled PHP version is fixed per FrankenPHP release (currently 8.5).
   run "curl -fsSL https://frankenphp.dev/install.sh | sh"
   run "mv -f frankenphp /usr/bin/frankenphp 2>/dev/null || true"
-  ok "FrankenPHP (PHP ${PHP_VERSION}) ready."
+  ok "FrankenPHP ready."
 }
 
 install_python() {
