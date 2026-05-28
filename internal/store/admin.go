@@ -5,11 +5,12 @@ type UserView struct {
 	Email       string `json:"email"`
 	Role        string `json:"role"`
 	Permissions string `json:"permissions"` // JSON ("" = role default)
+	SitesScope  string `json:"sitesScope"`  // JSON array of domains ("" = all)
 	MFAEnabled  bool   `json:"mfaEnabled"`
 }
 
 func (s *Store) ListUsers() ([]UserView, error) {
-	rows, err := s.DB.Query(`SELECT email, role, permissions, totp_secret FROM panel_users ORDER BY id`)
+	rows, err := s.DB.Query(`SELECT email, role, permissions, sites_scope, totp_secret FROM panel_users ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -18,7 +19,7 @@ func (s *Store) ListUsers() ([]UserView, error) {
 	for rows.Next() {
 		var v UserView
 		var secret *string
-		if err := rows.Scan(&v.Email, &v.Role, &v.Permissions, &secret); err != nil {
+		if err := rows.Scan(&v.Email, &v.Role, &v.Permissions, &v.SitesScope, &secret); err != nil {
 			return nil, err
 		}
 		v.MFAEnabled = secret != nil && *secret != ""

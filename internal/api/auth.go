@@ -58,7 +58,8 @@ func (s *Server) setupAdmin(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	id, err := s.store.CreateUser(in.Email, hash, "ROLE_ADMIN", "")
+	// First-run admin: all permissions (handled by Role=ADMIN), all sites scope.
+	id, err := s.store.CreateUser(in.Email, hash, "ROLE_ADMIN", "", "")
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

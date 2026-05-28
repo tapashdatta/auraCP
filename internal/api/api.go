@@ -14,6 +14,7 @@ import (
 	"github.com/auracp/auracp/internal/db"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
+	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
@@ -99,6 +100,11 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("POST /api/sites/{domain}/files", srv.requirePerm("files", "create", srv.uploadFiles))
 	mux.Handle("DELETE /api/sites/{domain}/files", srv.requirePerm("files", "delete", srv.deleteFile))
 	mux.Handle("GET /api/sites/{domain}/files/download", srv.requirePerm("files", "read", srv.downloadFile))
+	mux.Handle("POST /api/sites/{domain}/files/rename", srv.requirePerm("files", "update", srv.renameFile))
+	mux.Handle("POST /api/sites/{domain}/files/mkdir", srv.requirePerm("files", "create", srv.mkdirFile))
+	mux.Handle("POST /api/sites/{domain}/files/touch", srv.requirePerm("files", "create", srv.touchFile))
+	mux.Handle("GET /api/sites/{domain}/files/text", srv.requirePerm("files", "read", srv.readTextFile))
+	mux.Handle("PUT /api/sites/{domain}/files/text", srv.requirePerm("files", "update", srv.writeTextFile))
 	mux.Handle("GET /api/sites/{domain}/cron", srv.requirePerm("cron", "read", srv.listCron))
 	mux.Handle("POST /api/sites/{domain}/cron", srv.requirePerm("cron", "create", srv.addCron))
 	mux.Handle("DELETE /api/sites/{domain}/cron/{id}", srv.requirePerm("cron", "delete", srv.deleteCron))
@@ -164,6 +170,18 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
+	// v0.2.15: filter to the user's allowed-sites scope (admins see everything).
+	if u, ok := s.currentUser(r); ok && u.Role != "ROLE_ADMIN" {
+		if set, all := perm.AllowedSites(u.SitesScope); !all {
+			filtered := sites[:0]
+			for _, st := range sites {
+				if set[st.Domain] {
+					filtered = append(filtered, st)
+				}
+			}
+			sites = filtered
+		}
+	}
 	views := make([]store.SiteView, 0, len(sites))
 	for _, st := range sites {
 		views = append(views, st.View())
@@ -171,8 +189,33 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, views)
 }
 
+// scopedDomain returns 403 (and ok=false) if the current user can't act on the
+// given domain, given their sites_scope. Admins always pass. Use this at the
+// top of per-site mutating handlers; read handlers also use it so a scoped
+// user can't sniff config from sites they shouldn't see.
+func (s *Server) scopedDomain(w http.ResponseWriter, r *http.Request, domain string) bool {
+	u, ok := s.currentUser(r)
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthenticated"})
+		return false
+	}
+	if u.Role == "ROLE_ADMIN" {
+		return true
+	}
+	set, all := perm.AllowedSites(u.SitesScope)
+	if all || set[domain] {
+		return true
+	}
+	writeJSON(w, http.StatusForbidden, map[string]string{"error": "this site is not in your assigned scope"})
+	return false
+}
+
 func (s *Server) getSite(w http.ResponseWriter, r *http.Request) {
-	st, err := s.store.SiteByDomain(r.PathValue("domain"))
+	domain := r.PathValue("domain")
+	if !s.scopedDomain(w, r, domain) {
+		return
+	}
+	st, err := s.store.SiteByDomain(domain)
 	if err != nil {
 		writeErr(w, http.StatusNotFound, err)
 		return

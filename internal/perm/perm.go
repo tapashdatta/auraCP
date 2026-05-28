@@ -84,3 +84,30 @@ func Parse(jsonStr, role string) Set {
 	}
 	return s
 }
+
+// AllowedSites parses a JSON-array site scope. Empty string = "all sites"
+// (back-compat default for pre-v0.2.15 users); a JSON array of domains
+// restricts the user to that set; "*" inside the array also means "all".
+// Returns (set, allFlag): when allFlag is true, ignore set. v0.2.15+.
+func AllowedSites(sitesScopeJSON string) (set map[string]bool, all bool) {
+	if sitesScopeJSON == "" {
+		return nil, true
+	}
+	var domains []string
+	if err := json.Unmarshal([]byte(sitesScopeJSON), &domains); err != nil {
+		// Malformed JSON — fail open (admin can fix it), don't lock the user out.
+		return nil, true
+	}
+	if len(domains) == 0 {
+		// Explicit empty array means "no sites" — operator's choice; honour it.
+		return map[string]bool{}, false
+	}
+	out := make(map[string]bool, len(domains))
+	for _, d := range domains {
+		if d == "*" {
+			return nil, true
+		}
+		out[d] = true
+	}
+	return out, false
+}

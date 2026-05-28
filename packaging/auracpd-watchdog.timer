@@ -1,0 +1,15 @@
+[Unit]
+Description=auraCP — fire auracpd watchdog every minute
+Requires=auracpd-watchdog.service
+
+[Timer]
+# First fire 30s after boot so we don't trample auracpd's own startup, then
+# every 60s. Persistent=false because we don't need to "catch up" on missed
+# ticks across reboots — the next minute is fine.
+OnBootSec=30s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=auracpd-watchdog.service
+
+[Install]
+WantedBy=timers.target

@@ -12,6 +12,7 @@ type User struct {
 	PasswordHash string
 	Role         string
 	Permissions  string // JSON CRUD matrix ("" = role default)
+	SitesScope   string // JSON array of allowed domains ("" = all sites; v0.2.15+)
 	TOTPSecret   sql.NullString
 }
 
@@ -19,33 +20,34 @@ func (u User) MFAEnabled() bool { return u.TOTPSecret.Valid && u.TOTPSecret.Stri
 
 func scanUser(row interface{ Scan(...any) error }) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Permissions, &u.TOTPSecret)
+	err := row.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.Role, &u.Permissions, &u.SitesScope, &u.TOTPSecret)
 	return u, err
 }
 
 func (s *Store) UserByEmail(email string) (User, error) {
 	return scanUser(s.DB.QueryRow(
-		`SELECT id, email, password_hash, role, permissions, totp_secret FROM panel_users WHERE email = ?`, email))
+		`SELECT id, email, password_hash, role, permissions, sites_scope, totp_secret FROM panel_users WHERE email = ?`, email))
 }
 
 func (s *Store) UserByID(id int64) (User, error) {
 	return scanUser(s.DB.QueryRow(
-		`SELECT id, email, password_hash, role, permissions, totp_secret FROM panel_users WHERE id = ?`, id))
+		`SELECT id, email, password_hash, role, permissions, sites_scope, totp_secret FROM panel_users WHERE id = ?`, id))
 }
 
-func (s *Store) CreateUser(email, passwordHash, role, permissions string) (int64, error) {
-	res, err := s.DB.Exec(`INSERT INTO panel_users (email, password_hash, role, permissions) VALUES (?, ?, ?, ?)`,
-		email, passwordHash, role, permissions)
+func (s *Store) CreateUser(email, passwordHash, role, permissions, sitesScope string) (int64, error) {
+	res, err := s.DB.Exec(`INSERT INTO panel_users (email, password_hash, role, permissions, sites_scope) VALUES (?, ?, ?, ?, ?)`,
+		email, passwordHash, role, permissions, sitesScope)
 	if err != nil {
 		return 0, err
 	}
 	return res.LastInsertId()
 }
 
-// UpdateUserAccess changes a user's role and permission matrix.
-func (s *Store) UpdateUserAccess(email, role, permissions string) error {
-	_, err := s.DB.Exec(`UPDATE panel_users SET role = ?, permissions = ? WHERE email = ?`,
-		role, permissions, email)
+// UpdateUserAccess changes a user's role, permission matrix, and site scope.
+// sitesScope is a JSON array of domains; empty string = "all sites".
+func (s *Store) UpdateUserAccess(email, role, permissions, sitesScope string) error {
+	_, err := s.DB.Exec(`UPDATE panel_users SET role = ?, permissions = ?, sites_scope = ? WHERE email = ?`,
+		role, permissions, sitesScope, email)
 	return err
 }
 

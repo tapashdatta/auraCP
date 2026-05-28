@@ -1,0 +1,15 @@
+[Unit]
+Description=auraCP — auracpd health watchdog
+# Don't even try if auracpd was deliberately disabled — operator's choice.
+ConditionPathExists=!/etc/auracp/watchdog.disabled
+
+[Service]
+Type=oneshot
+ExecStart=/opt/auracp/bin/auracpd-watchdog
+# Tight resource budget — this is a 3-call curl + maybe a systemctl restart.
+Nice=10
+IOSchedulingClass=idle
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true

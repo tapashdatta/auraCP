@@ -151,6 +151,163 @@ func Delete(siteUser, domain, sub string) error {
 	return os.RemoveAll(target)
 }
 
+// Rename moves <sub> to a sibling with newName (basename only). New target
+// must stay inside the docroot. Refuses overwrites — caller must Delete first.
+func Rename(siteUser, domain, sub, newName string) error {
+	clean := filepath.Base(filepath.Clean(newName))
+	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
+		return fmt.Errorf("invalid name: %q", newName)
+	}
+	root, target, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	if target == root {
+		return fmt.Errorf("refusing to rename the document root")
+	}
+	dst := filepath.Join(filepath.Dir(target), clean)
+	if !strings.HasPrefix(filepath.Clean(dst), root) {
+		return fmt.Errorf("invalid target path")
+	}
+	if _, err := os.Lstat(dst); err == nil {
+		return fmt.Errorf("destination already exists: %s", clean)
+	}
+	return os.Rename(target, dst)
+}
+
+// Mkdir creates a new directory at <sub>/<name>, chowned to the site user so
+// the application can write into it.
+func Mkdir(siteUser, domain, sub, name string) error {
+	clean := filepath.Base(filepath.Clean(name))
+	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
+		return fmt.Errorf("invalid folder name: %q", name)
+	}
+	_, dir, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(dir, clean)
+	if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid target path")
+	}
+	if err := os.Mkdir(target, 0o755); err != nil {
+		return err
+	}
+	return chownToUser(target, siteUser)
+}
+
+// Touch creates an empty file at <sub>/<name>. Refuses to overwrite an
+// existing file (caller can use WriteText for that).
+func Touch(siteUser, domain, sub, name string) error {
+	clean := filepath.Base(filepath.Clean(name))
+	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
+		return fmt.Errorf("invalid filename: %q", name)
+	}
+	_, dir, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(dir, clean)
+	if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)+string(os.PathSeparator)) {
+		return fmt.Errorf("invalid target path")
+	}
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	f.Close()
+	return chownToUser(target, siteUser)
+}
+
+// EditMaxBytes is the upper bound for files openable in the in-browser editor.
+// Anything larger is rejected and the operator is told to use SFTP. 1 MiB
+// covers ~30k lines of typical source — enough for any config or template.
+const EditMaxBytes int64 = 1 << 20
+
+// ReadText opens <sub> as UTF-8-ish text. Refuses files > EditMaxBytes and
+// files that contain a NUL byte in the first 8 KiB (heuristic for binary).
+func ReadText(siteUser, domain, sub string) (string, error) {
+	_, target, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		return "", err
+	}
+	if fi.IsDir() {
+		return "", fmt.Errorf("path is a directory")
+	}
+	if fi.Size() > EditMaxBytes {
+		return "", fmt.Errorf("file is %d bytes; editor only opens files ≤ %d bytes (use SFTP for larger)", fi.Size(), EditMaxBytes)
+	}
+	b, err := os.ReadFile(target)
+	if err != nil {
+		return "", err
+	}
+	// Cheap binary sniff: a NUL in the first 8 KiB is overwhelmingly binary.
+	sniff := b
+	if len(sniff) > 8192 {
+		sniff = sniff[:8192]
+	}
+	for _, c := range sniff {
+		if c == 0 {
+			return "", fmt.Errorf("file appears to be binary; refusing to open in text editor")
+		}
+	}
+	return string(b), nil
+}
+
+// WriteText overwrites <sub> with content, preserving the original mode if it
+// existed and chowning to the site user. Refuses content > EditMaxBytes so
+// the editor can't be used to dump arbitrary blobs.
+func WriteText(siteUser, domain, sub, content string) error {
+	if int64(len(content)) > EditMaxBytes {
+		return fmt.Errorf("content too large (%d bytes); editor limit is %d", len(content), EditMaxBytes)
+	}
+	root, target, err := resolve(siteUser, domain, sub)
+	if err != nil {
+		return err
+	}
+	if target == root {
+		return fmt.Errorf("refusing to overwrite the document root")
+	}
+	// Preserve mode if file exists, else 0644.
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(target); err == nil {
+		if fi.IsDir() {
+			return fmt.Errorf("path is a directory")
+		}
+		mode = fi.Mode().Perm()
+	}
+	// Write to a temp file in the same directory, then rename. Avoids leaving
+	// a half-written file on disk if the write is interrupted.
+	dir := filepath.Dir(target)
+	tmp, err := os.CreateTemp(dir, ".auracp-edit-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.WriteString(content); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Chmod(tmpPath, mode); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		_ = os.Remove(tmpPath)
+		return err
+	}
+	return chownToUser(target, siteUser)
+}
+
 // chownToUser sets the file's ownership to the site user. We're running as
 // root in auracpd; the panel never serves files via Linux ACLs but per-app
 // runtimes need to read them as the site user.

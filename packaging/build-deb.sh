@@ -29,6 +29,11 @@ mkdir -p "$PKG/DEBIAN" \
 install -m 0755 "$BIND/auracpd-linux-$ARCH" "$PKG/opt/auracp/bin/auracpd"
 install -m 0755 "$BIND/auracp-linux-$ARCH"  "$PKG/opt/auracp/bin/auracp"
 install -m 0644 "$ROOT/packaging/auracpd.service" "$PKG/etc/systemd/system/auracpd.service"
+# v0.2.15: watchdog timer that survives the "Restart=always didn't fire after
+# clean stop" systemd corner case during in-panel upgrades.
+install -m 0755 "$ROOT/packaging/auracpd-watchdog.sh"      "$PKG/opt/auracp/bin/auracpd-watchdog"
+install -m 0644 "$ROOT/packaging/auracpd-watchdog.service" "$PKG/etc/systemd/system/auracpd-watchdog.service"
+install -m 0644 "$ROOT/packaging/auracpd-watchdog.timer"   "$PKG/etc/systemd/system/auracpd-watchdog.timer"
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
@@ -83,6 +88,10 @@ if [ -d /run/systemd/system ]; then
   if [ $i -ge 10 ]; then
     systemctl restart auracpd || true
   fi
+  # v0.2.15: enable + start the watchdog timer so any future stuck state
+  # (e.g. after an in-panel upgrade from a pre-v0.2.15 release) recovers
+  # by itself within ~60s instead of leaving the operator at a 502.
+  systemctl enable --now auracpd-watchdog.timer >/dev/null 2>&1 || true
   echo
   echo "auraCP panel installed and running on https://<server-ip>:8443"
   echo "Next step — provision the data plane (nginx, MariaDB/Postgres, PHP-FPM, Node, …):"
@@ -99,6 +108,16 @@ cat > "$PKG/DEBIAN/prerm" <<'EOF'
 #!/bin/sh
 set -e
 if [ -d /run/systemd/system ]; then
+  # Stop the watchdog FIRST so it can't observe the brief stop-then-start
+  # and double-restart auracpd during an upgrade.
+  systemctl stop auracpd-watchdog.timer 2>/dev/null || true
+  systemctl stop auracpd-watchdog.service 2>/dev/null || true
+  # Only fully disable the watchdog on a real remove (arg "remove") — keep
+  # it enabled across an upgrade (arg "upgrade") so the new postinst can
+  # rely on it being present.
+  if [ "${1:-}" = "remove" ] || [ "${1:-}" = "purge" ]; then
+    systemctl disable auracpd-watchdog.timer >/dev/null 2>&1 || true
+  fi
   systemctl stop auracpd || true
   systemctl disable auracpd >/dev/null 2>&1 || true
 fi

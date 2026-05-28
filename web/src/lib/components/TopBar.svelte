@@ -10,12 +10,33 @@
   let host = $state('')
   let updateAvailable = $state(false)
   let updateLatest = $state('')
+  let updateCurrent = $state('')
+  let upgrading = $state(false)
+  let upgradeMsg = $state('')
   function flip() { theme = toggleTheme() }
   const initials = $derived((session.user?.email || 'A')[0].toUpperCase())
   const isAdmin = $derived(session.user?.role === 'ROLE_ADMIN')
   async function doLogout() { menu = false; await logout() }
   function openAccount() { menu = false; go('account') }
-  function openUpdates() { go('instance') }   // Updates card lives on the Instance screen
+
+  // One-click in-place upgrade. Same flow the Updates card on Instance uses,
+  // but reachable from any screen — no detour through Settings.
+  async function applyUpdate() {
+    if (!updateAvailable || upgrading) return
+    if (!confirm(`Upgrade auracpd from ${updateCurrent || 'current'} to ${updateLatest}?\nThe panel will restart automatically.`)) return
+    upgrading = true
+    upgradeMsg = `Upgrading to ${updateLatest}…`
+    await apiFetch('/api/instance/update', { method: 'POST' })
+    let tries = 0
+    const tick = setInterval(async () => {
+      tries++
+      try {
+        const h = await fetch('/api/health', { cache: 'no-store' })
+        if (h.ok) { clearInterval(tick); upgradeMsg = 'Upgraded. Reloading…'; setTimeout(() => location.reload(), 400); return }
+      } catch {}
+      if (tries > 60) { clearInterval(tick); upgradeMsg = 'Panel did not come back within 60s. Check journalctl -u auracpd.'; upgrading = false }
+    }, 1000)
+  }
 
   onMount(async () => {
     const r = await apiFetch('/api/instance')
@@ -26,6 +47,7 @@
       const d = await u.json()
       updateAvailable = !!d.available
       updateLatest = d.latestPlain || ''
+      updateCurrent = d.current || ''
     }
   })
 </script>
@@ -43,10 +65,11 @@
   </nav>
   <div class="spacer"></div>
   {#if updateAvailable}
-    <button type="button" class="update-badge" onclick={openUpdates}
-            title="auraCP {updateLatest} is available — click to upgrade"
-            aria-label="Update available: auraCP {updateLatest}">
-      <span class="sdot s-warn"></span><span>Update {updateLatest}</span>
+    <button type="button" class="update-badge" onclick={applyUpdate} disabled={upgrading}
+            title={upgrading ? upgradeMsg : `auraCP ${updateLatest} is available — click to upgrade in place`}
+            aria-label={upgrading ? upgradeMsg : `Upgrade to auraCP ${updateLatest}`}>
+      <span class="sdot {upgrading ? 's-warn' : 's-warn'}" class:spinning={upgrading}></span>
+      <span>{upgrading ? 'Upgrading…' : `Update ${updateLatest}`}</span>
     </button>
   {/if}
   {#if host}<div class="instance-pill"><span class="sdot s-up"></span><span class="mono">{host}</span></div>{/if}

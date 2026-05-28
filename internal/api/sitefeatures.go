@@ -125,6 +125,120 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// POST /api/sites/{domain}/files/rename {"path": "old/sub", "newName": "newName"}
+func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Path    string `json:"path"`
+		NewName string `json:"newName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.Rename(st.SiteUser, domain, in.Path, in.NewName); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.rename", domain+"/"+in.Path+"→"+in.NewName)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/files/mkdir {"path": "parent/sub", "name": "folder"}
+func (s *Server) mkdirFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.Mkdir(st.SiteUser, domain, in.Path, in.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.mkdir", domain+"/"+in.Path+"/"+in.Name)
+	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/files/touch {"path": "parent/sub", "name": "file.ext"}
+func (s *Server) touchFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Path string `json:"path"`
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.Touch(st.SiteUser, domain, in.Path, in.Name); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.touch", domain+"/"+in.Path+"/"+in.Name)
+	writeJSON(w, http.StatusCreated, map[string]bool{"ok": true})
+}
+
+// GET /api/sites/{domain}/files/text?path=sub/file.ext — read a text file for
+// the in-browser editor. Refuses binary or files > 1 MiB.
+func (s *Server) readTextFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	sub := r.URL.Query().Get("path")
+	content, err := files.ReadText(st.SiteUser, domain, sub)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"content": content})
+}
+
+// PUT /api/sites/{domain}/files/text {"path": "sub/file.ext", "content": "..."}
+func (s *Server) writeTextFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := files.WriteText(st.SiteUser, domain, in.Path, in.Content); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.edit", domain+"/"+in.Path)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
 // GET /api/sites/{domain}/cron
 func (s *Server) listCron(w http.ResponseWriter, r *http.Request) {
 	jobs, err := s.store.CronJobsForSite(r.PathValue("domain"))

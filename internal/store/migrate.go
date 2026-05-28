@@ -1,5 +1,7 @@
 package store
 
+import "strings"
+
 // Schema migrations. Kept as ordered statements; a real migration table comes
 // later. Mirrors the data model in docs/ARCHITECTURE.md (trimmed for P0).
 var migrations = []string{
@@ -131,13 +133,32 @@ var migrations = []string{
 		value  TEXT NOT NULL,
 		PRIMARY KEY (domain, key)
 	)`,
+	// v0.2.15: per-user "allowed sites" scope. JSON array of domains; empty
+	// string means "all sites" (back-compat default). Non-admin users with a
+	// non-empty scope are limited to those domains in the sites listing and on
+	// per-site mutations. ALTER TABLE is idempotent via the error-swallow in
+	// migrate() below ("duplicate column" on re-run is fine).
+	`ALTER TABLE panel_users ADD COLUMN sites_scope TEXT NOT NULL DEFAULT ''`,
 }
 
 func (s *Store) migrate() error {
 	for _, stmt := range migrations {
 		if _, err := s.DB.Exec(stmt); err != nil {
+			// Idempotent ALTERs: on second startup the column already exists.
+			// SQLite returns "duplicate column name: <col>" — safe to skip.
+			if isAlterAddColumn(stmt) && isDuplicateColumn(err) {
+				continue
+			}
 			return err
 		}
 	}
 	return nil
+}
+
+func isAlterAddColumn(stmt string) bool {
+	return strings.HasPrefix(strings.TrimSpace(stmt), "ALTER TABLE")
+}
+
+func isDuplicateColumn(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "duplicate column")
 }

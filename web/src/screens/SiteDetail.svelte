@@ -256,6 +256,103 @@
     a.download = name
     a.click()
   }
+
+  // ─── v0.2.15: new file-manager surface ─────────────────────────────────
+  // Breadcrumb segments derived from filePath. "" → just [], so the breadcrumb
+  // renders only the "home" pip when at the docroot.
+  const crumbs = $derived(filePath ? filePath.split('/').filter(Boolean) : [])
+  function jumpCrumb(idx) {
+    // idx=-1 → home; otherwise rebuild the path up to (and including) idx.
+    filePath = idx < 0 ? '' : crumbs.slice(0, idx + 1).join('/')
+    load('files')
+  }
+
+  async function mkdir() {
+    const name = prompt('New folder name:')
+    if (!name) return
+    const r = await apiFetch(`${base}/files/mkdir`, {
+      method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Could not create folder'; return }
+    uploadMsg = `Created ${name}.`
+    load('files')
+  }
+
+  async function touchFile() {
+    const name = prompt('New file name (e.g. index.html, .env, robots.txt):')
+    if (!name) return
+    const r = await apiFetch(`${base}/files/touch`, {
+      method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Could not create file'; return }
+    uploadMsg = `Created ${name}.`
+    load('files')
+  }
+
+  async function renameItem(oldName) {
+    const next = prompt(`Rename ${oldName} to:`, oldName)
+    if (!next || next.trim() === oldName) return
+    const sub = filePath ? `${filePath}/${oldName}` : oldName
+    const r = await apiFetch(`${base}/files/rename`, {
+      method: 'POST', body: JSON.stringify({ path: sub, newName: next.trim() })
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Could not rename'; return }
+    uploadMsg = `Renamed to ${next}.`
+    load('files')
+  }
+
+  // ─── in-browser text editor ────────────────────────────────────────────
+  let editor = $state({ open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' })
+  // Conservative extension whitelist for "open in editor"; everything else
+  // downloads. Operators can always rename a file with a textual extension
+  // to edit it if they really mean to.
+  const TEXT_EXT = /\.(txt|md|html?|css|scss|less|js|mjs|cjs|ts|tsx|jsx|json|ya?ml|toml|ini|conf|cfg|env|env\.\w+|sh|bash|zsh|py|rb|php|go|rs|java|kt|swift|sql|xml|svg|log|csv|tsv|gitignore|htaccess|nginx|service)$/i
+
+  function isTextish(name) {
+    // No extension or a known-text extension → treat as editable.
+    if (TEXT_EXT.test(name)) return true
+    if (!name.includes('.')) return true
+    return false
+  }
+
+  async function openEditor(name) {
+    const sub = filePath ? `${filePath}/${name}` : name
+    editor = { open: true, name, sub, content: '', original: '', busy: true, err: '' }
+    const r = await apiFetch(`${base}/files/text?path=${encodeURIComponent(sub)}`)
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      editor.err = d.error || 'Could not open file'
+      editor.busy = false
+      return
+    }
+    editor.content = d.content || ''
+    editor.original = editor.content
+    editor.busy = false
+  }
+  function closeEditor() {
+    if (editor.content !== editor.original && !confirm('Discard unsaved changes?')) return
+    editor = { open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' }
+  }
+  async function saveEditor() {
+    editor.busy = true
+    editor.err = ''
+    const r = await apiFetch(`${base}/files/text`, {
+      method: 'PUT', body: JSON.stringify({ path: editor.sub, content: editor.content })
+    })
+    const d = await r.json().catch(() => ({}))
+    editor.busy = false
+    if (!r.ok) { editor.err = d.error || 'Save failed'; return }
+    editor.original = editor.content
+    uploadMsg = `Saved ${editor.name}.`
+    load('files')
+  }
+
+  // Empty-state SFTP hint uses the current page's hostname — i.e. how the
+  // operator reached the panel, which is also a valid SFTP host for the box.
+  const sftpHost = $derived(typeof location !== 'undefined' ? location.hostname : '')
 </script>
 
 <div class="wrap fade">
@@ -492,9 +589,30 @@
     <div class="section fade" role="region" aria-label="File manager"
          ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}
          class:drop-active={dragOver}>
-      <div class="section-h"><div><h3>File Manager</h3><p class="mono">{site.root}{filePath ? '/' + filePath : ''}</p></div>
+      <div class="section-h">
+        <div>
+          <h3>File Manager</h3>
+          <!-- Breadcrumb: clickable segments. Each jumps to that depth. -->
+          <div class="crumbs">
+            <button type="button" class="crumb home" onclick={() => jumpCrumb(-1)} aria-label="Document root">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 11l9-7 9 7v9a2 2 0 0 1-2 2h-4v-6h-6v6H5a2 2 0 0 1-2-2v-9z"/></svg>
+            </button>
+            {#each crumbs as seg, i}
+              <span class="crumb-sep">/</span>
+              <button type="button" class="crumb" onclick={() => jumpCrumb(i)}>{seg}</button>
+            {/each}
+          </div>
+          <p class="mono crumb-path">{site.root}{filePath ? '/' + filePath : ''}</p>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          {#if filePath}<button class="btn btn-ghost" style="padding:7px 14px" onclick={upDir}>↑ Up</button>{/if}
+          <button class="btn btn-ghost" style="padding:7px 14px" onclick={mkdir} title="New folder">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 11v6M9 14h6"/></svg>
+            New Folder
+          </button>
+          <button class="btn btn-ghost" style="padding:7px 14px" onclick={touchFile} title="New file">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 13v6M9 16h6"/></svg>
+            New File
+          </button>
           <button class="btn btn-primary" style="padding:7px 14px" onclick={() => fileInput.click()} disabled={uploadBusy}>
             {uploadBusy ? 'Uploading…' : 'Upload'}
           </button>
@@ -510,28 +628,56 @@
 
       <div class="section-b" style="padding:0">
         {#if files.length === 0}
-          <div class="empty">
-            This directory is empty. <b>Drop files here</b> or click <b>Upload</b> above.
-            For larger transfers, use SFTP as <span class="mono">{site.user}</span> on port 22.
+          <!-- CloudPanel-style empty state with concrete SFTP details. The
+               operator gets the exact host/user/port/path they need rather
+               than a vague "use SFTP" hint. -->
+          <div class="empty-fm">
+            <div class="empty-fm-ic" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+            </div>
+            <h4>This directory is empty.</h4>
+            <p>Drop files anywhere in this panel to upload, click <b>Upload</b> above, or use SFTP:</p>
+            <dl class="sftp-info">
+              <div><dt>Host</dt><dd class="mono">{sftpHost || site.domain}</dd></div>
+              <div><dt>Port</dt><dd class="mono">22</dd></div>
+              <div><dt>User</dt><dd class="mono">{site.user}</dd></div>
+              <div><dt>Path</dt><dd class="mono">{site.root}{filePath ? '/' + filePath : ''}</dd></div>
+            </dl>
+            <p class="empty-fm-hint">No password? Add one in the <b>SSH/FTP</b> tab.</p>
           </div>
         {:else}
           {#each files as f}
             <div class="file-row-grid">
               {#if f.dir}
-                <button type="button" class="file-row k" onclick={() => openDir(f.name)}>
+                <button type="button" class="file-row k" onclick={() => openDir(f.name)} title="Open folder">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
                   {f.name}
                 </button>
+              {:else if isTextish(f.name)}
+                <button type="button" class="file-row k" onclick={() => openEditor(f.name)} title="Open in editor">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
+                  {f.name}
+                </button>
               {:else}
-                <button type="button" class="file-row k" onclick={() => downloadFile(f.name)} title="Download">
+                <button type="button" class="file-row k" onclick={() => downloadFile(f.name)} title="Download (binary)">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
                 </button>
               {/if}
               <span class="file-meta">{f.mode} · {fmtSize(f.size)}</span>
-              <button type="button" class="file-del" onclick={() => deleteFile(f.name)} aria-label="Delete {f.name}" title="Delete">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-              </button>
+              <div class="file-actions">
+                {#if !f.dir}
+                  <button type="button" class="file-act" onclick={() => downloadFile(f.name)} title="Download" aria-label="Download {f.name}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+                  </button>
+                {/if}
+                <button type="button" class="file-act" onclick={() => renameItem(f.name)} title="Rename" aria-label="Rename {f.name}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.12 2.12 0 1 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                </button>
+                <button type="button" class="file-del" onclick={() => deleteFile(f.name)} aria-label="Delete {f.name}" title="Delete">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                </button>
+              </div>
             </div>
           {/each}
         {/if}
@@ -541,6 +687,35 @@
         <div class="note" style="margin:14px 18px"><div>{uploadMsg}</div></div>
       {/if}
     </div>
+
+    <!-- In-browser editor modal. Plain <textarea> with monospace styling —
+         deliberately lightweight (no CodeMirror; no Monaco). Files ≤ 1 MiB. -->
+    {#if editor.open}
+      <div class="modal-back" onclick={closeEditor} role="presentation"></div>
+      <div class="modal-card" role="dialog" aria-label="Edit {editor.name}">
+        <div class="modal-head">
+          <div>
+            <h3>{editor.name}</h3>
+            <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px">{site.root}/{editor.sub}</p>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn btn-ghost" onclick={closeEditor}>Cancel</button>
+            <button type="button" class="btn btn-primary" onclick={saveEditor}
+                    disabled={editor.busy || editor.content === editor.original}>
+              {editor.busy ? 'Saving…' : (editor.content === editor.original ? 'No changes' : 'Save')}
+            </button>
+          </div>
+        </div>
+        {#if editor.err}<div class="note" style="margin:0 18px 12px"><div>{editor.err}</div></div>{/if}
+        <textarea class="editor-area" bind:value={editor.content} spellcheck="false" autocomplete="off"
+                  placeholder={editor.busy ? 'Loading…' : ''} disabled={editor.busy}
+                  onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveEditor() } }}></textarea>
+        <div class="modal-foot">
+          <span class="mono">{editor.content.length} bytes · {editor.content.split('\n').length} lines</span>
+          <span style="color:var(--txt-2)">Ctrl/Cmd+S to save</span>
+        </div>
+      </div>
+    {/if}
 
   {:else if active === 'cron'}
     <div class="fade">

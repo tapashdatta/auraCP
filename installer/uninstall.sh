@@ -162,6 +162,11 @@ run "rm -f /etc/ssh/sshd_config.d/auracp-sftp.conf"
 run "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null"
 
 msg "Removing auracpd panel…"
+# v0.2.15: stop + remove the watchdog timer BEFORE the daemon so it can't
+# observe the brief stop and (correctly) try to restart it.
+run "systemctl disable --now auracpd-watchdog.timer 2>/dev/null"
+run "systemctl stop auracpd-watchdog.service 2>/dev/null"
+run "rm -f /etc/systemd/system/auracpd-watchdog.timer /etc/systemd/system/auracpd-watchdog.service"
 stop_unit auracpd
 run "pkill -9 -f /opt/auracp/bin/auracpd 2>/dev/null"
 run "pkill -9 -x auracpd 2>/dev/null"

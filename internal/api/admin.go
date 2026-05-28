@@ -59,9 +59,9 @@ func normalizeRole(role string) string {
 	return "ROLE_USER"
 }
 
-// POST /api/admin/users  {email, role, password?, permissions?(JSON)}
+// POST /api/admin/users  {email, role, password?, permissions?(JSON), sitesScope?(JSON)}
 func (s *Server) createAdminUser(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Email, Role, Password, Permissions string }
+	var in struct{ Email, Role, Password, Permissions, SitesScope string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -79,7 +79,7 @@ func (s *Server) createAdminUser(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	if _, err := s.store.CreateUser(in.Email, hash, role, in.Permissions); err != nil {
+	if _, err := s.store.CreateUser(in.Email, hash, role, in.Permissions, in.SitesScope); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -87,15 +87,15 @@ func (s *Server) createAdminUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"email": in.Email, "role": role, "password": in.Password})
 }
 
-// PUT /api/admin/users/{email}  {role, permissions(JSON)}
+// PUT /api/admin/users/{email}  {role, permissions(JSON), sitesScope(JSON)}
 func (s *Server) updateAdminUser(w http.ResponseWriter, r *http.Request) {
 	email := r.PathValue("email")
-	var in struct{ Role, Permissions string }
+	var in struct{ Role, Permissions, SitesScope string }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := s.store.UpdateUserAccess(email, normalizeRole(in.Role), in.Permissions); err != nil {
+	if err := s.store.UpdateUserAccess(email, normalizeRole(in.Role), in.Permissions, in.SitesScope); err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
