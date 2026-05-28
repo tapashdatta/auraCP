@@ -134,6 +134,13 @@ run "systemctl daemon-reload"
 
 msg "Removing FrankenPHP…"
 run "rm -f /usr/bin/frankenphp"
+# The FrankenPHP installer (frankenphp.dev/install.sh) adds an apt source for
+# static PHP builds (pkg.dunglas.dev → /etc/apt/sources.list.d/static-php*.list)
+# and a keyring under /etc/apt/keyrings or /usr/share/keyrings. Scrub the lot —
+# its names have varied across versions, so glob both common locations.
+run "rm -f /etc/apt/sources.list.d/static-php*.list /etc/apt/sources.list.d/frankenphp*.list"
+run "rm -f /etc/apt/keyrings/static-php*.gpg /etc/apt/keyrings/frankenphp*.gpg /etc/apt/keyrings/pkg-dunglas*.gpg"
+run "rm -f /usr/share/keyrings/static-php*.gpg /usr/share/keyrings/frankenphp*.gpg /usr/share/keyrings/pkg-dunglas*.gpg"
 
 msg "Removing Node.js…"
 # Legacy NodeSource leftovers from older installers (apt-managed nodejs).
