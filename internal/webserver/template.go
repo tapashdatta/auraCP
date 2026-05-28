@@ -149,6 +149,40 @@ server {
 {{- end }}
 `
 
+// v0.2.38: catch-all default server. Without this, nginx serves the FIRST
+// listen-block it loaded when a request's server_name doesn't match any
+// configured site — and that first block is typically the panel (since its
+// vhost lives at /etc/nginx/sites-enabled/00-panel.conf, alphabetically
+// first). The visible symptom: a freshly-created site whose Let's Encrypt
+// cert is still pending shows the control panel UI when the operator
+// browses to https://<newsite> over HTTPS, because the new site only has
+// listen:80 until lego provisions the cert.
+//
+// This block, written to /etc/nginx/sites-enabled/00-default.conf, takes
+// `default_server` on every listen-pair. HTTP returns 444 (close conn);
+// HTTPS uses ssl_reject_handshake (nginx 1.19+) so we don't even need a
+// snake-oil cert to terminate TLS — nginx rejects the handshake outright.
+const catchAllTemplate = `# auraCP — catch-all default server (managed; do not edit by hand)
+#
+# Drops requests for domains that point at this server but don't have a
+# provisioned vhost yet. Without this, nginx serves the first defined
+# server block (typically the panel) as a fallback — making freshly
+# created sites appear as the panel until their cert lands.
+
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    ssl_reject_handshake on;
+}
+`
+
 const panelTemplate = `# auraCP control panel — fronts auracpd's :8443 self-signed TLS.
 #
 # v0.2.22: upload pipeline directives explicit at the server level so big

@@ -27,6 +27,14 @@ const (
 // renders into the `auth_basic_user_file` directive.
 func HTPasswdFile(domain string) string { return filepath.Join(HTPasswdDir, domain) }
 
+// CatchAllNginxFile / CatchAllNginxLink — v0.2.38. Default-server vhost
+// that catches requests for unmatched server_names. Lives at "00-default"
+// so it sorts before everything else; nginx honours `default_server`
+// regardless of order, but the early load makes the intent obvious in
+// `nginx -T` output. See internal/webserver/template.go::catchAllTemplate.
+func CatchAllNginxFile() string { return filepath.Join(NginxSitesAvailable, "00-default.conf") }
+func CatchAllNginxLink() string { return filepath.Join(NginxSitesEnabled, "00-default.conf") }
+
 // PanelNginxFile fronts the control panel itself behind nginx (LE cert on :443).
 // The "00-" prefix keeps it ordering-stable among site vhosts.
 func PanelNginxFile() string { return filepath.Join(NginxSitesAvailable, "00-panel.conf") }

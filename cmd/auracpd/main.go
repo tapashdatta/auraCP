@@ -91,6 +91,14 @@ func main() {
 	panelBackend := scheme + "://127.0.0.1:" + port
 
 	web := webserver.New(runner)
+	// v0.2.38: install the default-server vhost (drops unmatched HTTPS,
+	// 444s unmatched HTTP). Idempotent — only writes + reloads nginx when
+	// the conf is stale or missing. Without this, sites whose cert is
+	// still being issued fall back to the panel server block when a
+	// browser hits them over HTTPS.
+	if err := web.ApplyCatchAll(context.Background()); err != nil {
+		log.Printf("catch-all default vhost: %v (sites still being provisioned may show the panel until lego issues their cert)", err)
+	}
 	node := noderuntime.New(runner, st)
 	node.Reconcile()
 	php := phpruntime.New(runner, st)

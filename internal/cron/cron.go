@@ -30,7 +30,10 @@ func (m *Manager) Apply(ctx context.Context, user, domain string) error {
 		return err
 	}
 	var b strings.Builder
-	b.WriteString("# Managed by auraCP — do not edit by hand\n")
+	// v0.2.38: pure-ASCII header. The previous em-dash (U+2014) made some
+	// crontab parsers (notably vixie-cron in LANG=C) reject line 1 with
+	// "bad command errors in crontab file, can't install."
+	b.WriteString("# Managed by auraCP - do not edit by hand\n")
 	for _, j := range jobs {
 		if j.Enabled {
 			fmt.Fprintf(&b, "%s %s\n", j.Schedule, j.Command)

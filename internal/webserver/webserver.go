@@ -255,6 +255,41 @@ type panelData struct {
 
 // ApplyPanelProxy fronts the control panel under a domain on :80/:443. nginx
 // reverse-proxies HTTPS traffic into auracpd's :8443 self-signed TLS. The cert
+// ApplyCatchAll installs the default-server vhost (00-default.conf) so
+// requests for unmatched server_names get dropped instead of falling back
+// to whichever server block nginx loaded first (typically the panel —
+// which is how freshly-created sites showed the control panel UI before
+// their cert landed). Idempotent + safe to call on every daemon startup.
+// v0.2.38.
+func (m *Manager) ApplyCatchAll(ctx context.Context) error {
+	if m.R.DryRun {
+		return nil
+	}
+	if err := os.MkdirAll(paths.NginxSitesAvailable, 0o755); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.NginxSitesEnabled, 0o755); err != nil {
+		return err
+	}
+	// If the file already has the expected content, skip the write+reload —
+	// avoids a needless nginx reload on every daemon startup.
+	want := []byte(catchAllTemplate)
+	if existing, err := os.ReadFile(paths.CatchAllNginxFile()); err == nil && bytes.Equal(existing, want) {
+		// Still ensure the symlink — operator might have removed it.
+		if _, err := os.Stat(paths.CatchAllNginxLink()); err == nil {
+			return nil
+		}
+	}
+	if err := os.WriteFile(paths.CatchAllNginxFile(), want, 0o644); err != nil {
+		return err
+	}
+	_ = os.Remove(paths.CatchAllNginxLink())
+	if err := os.Symlink(paths.CatchAllNginxFile(), paths.CatchAllNginxLink()); err != nil {
+		return err
+	}
+	return m.Reload(ctx)
+}
+
 // for <domain> is issued by lego (background job in cmd/auracpd) and lands in
 // paths.SSLDir, which a subsequent ReloadPanel picks up. While the cert is
 // pending, the panel is reachable plaintext on :80.
