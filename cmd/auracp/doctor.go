@@ -14,7 +14,9 @@
 package main
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"os"
@@ -22,6 +24,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Constants — kept inline rather than importing internal/paths because
@@ -32,6 +35,18 @@ const (
 	phpEtcRoot        = "/etc/php"
 	runPhpFpmDir      = "/run/php-fpm"
 	homeBase          = "/home"
+	sslDir            = "/etc/auracp/ssl"
+)
+
+// SSL expiry thresholds. Tuned to LE's 60-day renewal window:
+//   < 7d   → hard problem (auracpd's renewal goroutine should have
+//             refreshed this 23 days ago at the 30-day mark; something
+//             is wrong, error not warning)
+//   < 30d  → warning (within the renewal window; renewer should pick
+//             it up on the next tick; surface so operator can verify)
+const (
+	sslWarnDays  = 30
+	sslErrorDays = 7
 )
 
 // Site is what doctor knows about one vhost. Populated by scan; consumed
@@ -49,6 +64,13 @@ type site struct {
 	poolPath   string // /etc/php/<ver>/fpm/pool.d/<domain>.conf
 	poolUser   string // `user = <name>` from the pool
 	poolListen string // `listen = <socket>` from the pool
+
+	// SSL fields (populated by checkCert; "skipped" means we couldn't
+	// read the cert file at all — typically because doctor was run as
+	// a non-root user and /etc/auracp/ is mode 0700).
+	certStatus  string    // "ok" | "warn" | "expired" | "absent" | "skipped" | "malformed"
+	certExpires time.Time // empty when status != ok/warn/expired
+	certDaysLeft int      // negative if expired; 0 when not checked
 
 	// Result fields (populated by check):
 	ok       bool
@@ -207,8 +229,76 @@ func checkSite(s *site) {
 		}
 	}
 
+	// SSL: runs for every site type — static, php, node, python, proxy
+	// all serve TLS through nginx, so all have a cert on disk.
+	checkCert(s)
+
 	if len(s.problems) == 0 {
 		s.ok = true
+	}
+}
+
+// checkCert reads /etc/auracp/ssl/<domain>.crt, parses the PEM-encoded
+// x509 cert, and surfaces expiry state. Gracefully degrades when the
+// file isn't readable (typically because /etc/auracp/ is 0700 and
+// doctor is running as a non-root operator) — we set certStatus to
+// "skipped" and DO NOT flag it as a problem, because the operator
+// can't be expected to sudo just to read the cert. Root runs get full
+// coverage; non-root runs get drift coverage only, surfaced clearly.
+func checkCert(s *site) {
+	path := filepath.Join(sslDir, s.domain+".crt")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsPermission(err) {
+			s.certStatus = "skipped"
+			// no problem appended — non-root traversal is expected
+			return
+		}
+		if os.IsNotExist(err) {
+			// Two cases: site is on plain HTTP (pre-issuance), or
+			// the cert was never issued. Either way, surface it but
+			// don't make it a hard failure — sites work on :80.
+			s.certStatus = "absent"
+			s.problems = append(s.problems,
+				fmt.Sprintf("no SSL cert at %s (pre-issuance, or auracpd's lego renewer hasn't run yet)", path))
+			return
+		}
+		s.certStatus = "skipped"
+		return
+	}
+	block, _ := pem.Decode(body)
+	if block == nil {
+		s.certStatus = "malformed"
+		s.problems = append(s.problems, fmt.Sprintf("cert %s: not PEM-encoded", path))
+		return
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		s.certStatus = "malformed"
+		s.problems = append(s.problems, fmt.Sprintf("cert %s: parse failed (%v)", path, err))
+		return
+	}
+	s.certExpires = cert.NotAfter
+	s.certDaysLeft = int(time.Until(cert.NotAfter) / (24 * time.Hour))
+
+	switch {
+	case s.certDaysLeft < 0:
+		s.certStatus = "expired"
+		s.problems = append(s.problems,
+			fmt.Sprintf("SSL EXPIRED %d days ago (browsers showing TLS warning; auracpd's renewer should have caught this — check journalctl -u auracpd | grep acme)",
+				-s.certDaysLeft))
+	case s.certDaysLeft < sslErrorDays:
+		s.certStatus = "expired" // critical, treat as expired-soon
+		s.problems = append(s.problems,
+			fmt.Sprintf("SSL expires in %d days (urgent — auracpd's 12h renewal goroutine should have refreshed at the 30-day mark; investigate)",
+				s.certDaysLeft))
+	case s.certDaysLeft < sslWarnDays:
+		s.certStatus = "warn"
+		s.problems = append(s.problems,
+			fmt.Sprintf("SSL expires in %d days (within renewal window; verify auracpd's renewer ran successfully)",
+				s.certDaysLeft))
+	default:
+		s.certStatus = "ok"
 	}
 }
 
@@ -317,8 +407,8 @@ func renderReport(sites []*site, verbose bool) error {
 		return nil
 	}
 
-	// Table — domain | type | user | status. Print only failures by
-	// default; -v shows everything.
+	// Table — domain | type | user | ssl | status. Print only failures
+	// by default; -v shows everything.
 	maxDomain, maxUser := 26, 14
 	for _, s := range sites {
 		if len(s.domain) > maxDomain {
@@ -328,7 +418,8 @@ func renderReport(sites []*site, verbose bool) error {
 			maxUser = len(s.vhostUser)
 		}
 	}
-	header := fmt.Sprintf("%-*s %-8s %-*s STATUS", maxDomain, "DOMAIN", "TYPE", maxUser, "USER")
+	header := fmt.Sprintf("%-*s %-8s %-*s %-9s STATUS",
+		maxDomain, "DOMAIN", "TYPE", maxUser, "USER", "SSL")
 	fmt.Println(header)
 	fmt.Println(strings.Repeat("─", len(header)))
 
@@ -340,7 +431,8 @@ func renderReport(sites []*site, verbose bool) error {
 		if !s.ok {
 			status = "✗"
 		}
-		fmt.Printf("%-*s %-8s %-*s %s\n", maxDomain, s.domain, s.siteType, maxUser, s.vhostUser, status)
+		fmt.Printf("%-*s %-8s %-*s %-9s %s\n",
+			maxDomain, s.domain, s.siteType, maxUser, s.vhostUser, sslCell(s), status)
 		for _, p := range s.problems {
 			fmt.Printf("    %s\n", p)
 		}
@@ -350,6 +442,22 @@ func renderReport(sites []*site, verbose bool) error {
 	fmt.Printf("%d site%s scanned · %d healthy · %d with drift\n",
 		len(sites), plural(len(sites)), good, bad)
 
+	// Hint when SSL was skipped — non-root operators should know they
+	// got partial coverage and how to get the full picture.
+	anySkipped := false
+	for _, s := range sites {
+		if s.certStatus == "skipped" {
+			anySkipped = true
+			break
+		}
+	}
+	if anySkipped {
+		fmt.Println()
+		fmt.Println("Note: SSL cert expiry was skipped for one or more sites (couldn't read")
+		fmt.Println("      /etc/auracp/ssl/ — that's mode 0700). Rerun with `sudo auracp doctor`")
+		fmt.Println("      for full coverage.")
+	}
+
 	if bad > 0 {
 		fmt.Println()
 		fmt.Println("Fix:")
@@ -358,6 +466,10 @@ func renderReport(sites []*site, verbose bool) error {
 		fmt.Println("    structurally impossible on every site created after the flag flips.")
 		fmt.Println("  - For \"pool exists in multiple versions\": pick the right version, remove the")
 		fmt.Println("    others' pool files manually, systemctl reload php<ver>-fpm.")
+		fmt.Println("  - For SSL EXPIRED / expiring: the auracpd in-process lego renewer should be")
+		fmt.Println("    refreshing certs ~30 days out. Check `journalctl -u auracpd | grep acme`")
+		fmt.Println("    — if the renewal goroutine is silent, restart auracpd; if it errors, the")
+		fmt.Println("    error text says why (often a DNS / firewall / Cloudflare-proxy issue).")
 		fmt.Println("  - For missing docroot / pool file: site was deleted but vhost survived;")
 		fmt.Println("    remove the vhost file + sites-enabled symlink, nginx -t, reload.")
 		return errDoctorDrift
@@ -370,6 +482,36 @@ func plural(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+// sslCell renders the SSL column in the human table. Short labels so
+// the layout stays compact:
+//   ok        cert valid >= 30 days out
+//   <N>d      days remaining (for ok / warn / expired-soon)
+//   EXPIRED   cert.NotAfter is in the past
+//   absent    no cert on disk (pre-issuance or not issued)
+//   skipped   couldn't read /etc/auracp/ssl/ (non-root operator)
+//   malformed PEM unreadable
+//   —         not applicable
+func sslCell(s *site) string {
+	switch s.certStatus {
+	case "ok":
+		return fmt.Sprintf("%dd", s.certDaysLeft)
+	case "warn":
+		return fmt.Sprintf("⚠ %dd", s.certDaysLeft)
+	case "expired":
+		if s.certDaysLeft < 0 {
+			return "EXPIRED"
+		}
+		return fmt.Sprintf("⚠ %dd", s.certDaysLeft)
+	case "absent":
+		return "absent"
+	case "skipped":
+		return "skipped"
+	case "malformed":
+		return "BAD"
+	}
+	return "—"
 }
 
 // errDoctorDrift is returned when the report has at least one ✗ site.
@@ -414,7 +556,14 @@ type siteJSON struct {
 	DocRoot   string   `json:"doc_root,omitempty"`
 	FPMSocket string   `json:"fpm_socket,omitempty"`
 	PoolPath  string   `json:"pool_path,omitempty"`
-	Problems  []string `json:"problems"`
+	// SSL fields. cert_status is the most useful for monitoring filters;
+	// `ok` | `warn` | `expired` | `absent` | `skipped` | `malformed`.
+	// cert_days_left is signed (negative = past expiry); 0 when status
+	// is skipped or absent. cert_expires is RFC3339 when meaningful.
+	CertStatus   string `json:"cert_status,omitempty"`
+	CertDaysLeft int    `json:"cert_days_left,omitempty"`
+	CertExpires  string `json:"cert_expires,omitempty"`
+	Problems     []string `json:"problems"`
 }
 
 type reportJSON struct {
@@ -435,17 +584,23 @@ func renderReportJSON(sites []*site) error {
 			// monitoring template can assume the field is an array.
 			problems = []string{}
 		}
-		rep.Sites = append(rep.Sites, siteJSON{
-			Domain:    s.domain,
-			Type:      s.siteType,
-			OK:        s.ok,
-			VhostUser: s.vhostUser,
-			PoolUser:  s.poolUser,
-			DocRoot:   s.docRoot,
-			FPMSocket: s.fpmSocket,
-			PoolPath:  s.poolPath,
-			Problems:  problems,
-		})
+		sj := siteJSON{
+			Domain:       s.domain,
+			Type:         s.siteType,
+			OK:           s.ok,
+			VhostUser:    s.vhostUser,
+			PoolUser:     s.poolUser,
+			DocRoot:      s.docRoot,
+			FPMSocket:    s.fpmSocket,
+			PoolPath:     s.poolPath,
+			CertStatus:   s.certStatus,
+			CertDaysLeft: s.certDaysLeft,
+			Problems:     problems,
+		}
+		if !s.certExpires.IsZero() {
+			sj.CertExpires = s.certExpires.UTC().Format(time.RFC3339)
+		}
+		rep.Sites = append(rep.Sites, sj)
 		rep.Summary.Scanned++
 		if s.ok {
 			rep.Summary.Healthy++
