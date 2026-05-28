@@ -46,10 +46,10 @@ A consistent per-site layout:
 | Tab | Function |
 |---|---|
 | **Settings** | Domain, document root, HTTPS redirect, HTTP/3, per-runtime settings (PHP/Node/Python) |
-| **Vhost** | Editable Caddyfile template; reload on save |
+| **Vhost** | Auto-generated nginx vhost; editable overrides; reload on save |
 | **Databases** | Create/manage databases & users — **choose MariaDB or PostgreSQL per database** |
-| **Cache** | Full-page cache (Souin in Caddy); TTL, purge, hit ratio |
-| **SSL/TLS** | Auto Let's Encrypt (Caddy); import cert; Cloudflare DNS-01 / wildcard |
+| **Cache** | nginx `fastcgi_cache` / `proxy_cache`; TTL, purge, hit ratio |
+| **SSL/TLS** | Auto Let's Encrypt (in-process `go-acme/lego`); import cert; Cloudflare DNS-01 / wildcard |
 | **Security** | Basic auth, block bots, block IPs, fail2ban |
 | **SSH/FTP** | Per-site SSH & SFTP users, chroot-jailed |
 | **File Manager** | Browse/edit files scoped to the site home (privilege-dropped) |
@@ -90,8 +90,8 @@ rules) · Settings.
 | Area | Traditional panels | auraCP |
 |---|---|---|
 | Control plane | Symfony 6 (PHP, runs as root-equiv user) | **Go** single binary (~15–25 MB idle) |
-| Web server | nginx + Varnish + PHP-FPM | **Caddy + FrankenPHP + Souin** |
-| SSL | hand-rolled PHP ACME client | **Caddy automatic HTTPS** |
+| Web server | nginx + Varnish + PHP-FPM | **nginx + PHP-FPM** (Varnish replaced by nginx fastcgi_cache; multi-version PHP) |
+| SSL | hand-rolled PHP ACME client | **go-acme/lego in the panel** (Go, daily renewal) |
 | Databases | MySQL/MariaDB only | **MariaDB *and* PostgreSQL, per database** |
 | Node.js | only for Node sites | **Node 24 LTS on every site by default** |
 | PHP versions | installs 7.1 → 8.5 (+~25 ext each) | **8.3+ only, on demand** |

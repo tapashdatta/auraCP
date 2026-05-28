@@ -1,17 +1,22 @@
 // Package site orchestrates the full lifecycle of a hosted site: the Linux
-// user, the backend service, the Caddy vhost, and the stored record. It is the
-// single entry point the API/CLI call; the per-step work lives in osuser,
-// runtime, and webserver. Every step validates input before touching the system.
+// user, the backend service (PHP-FPM pool, node systemd unit, gunicorn unit),
+// the nginx vhost, the TLS cert, and the stored record. It is the single entry
+// point the API/CLI call; the per-step work lives in osuser, runtime,
+// phpruntime, webserver, and acme. Every step validates input before touching
+// the system.
 package site
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 
+	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
 	"github.com/auracp/auracp/internal/paths"
+	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/runtime"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
@@ -26,15 +31,21 @@ type Manager struct {
 	web   *webserver.Manager
 	rt    *runtime.Manager
 	node  *noderuntime.Manager
+	php   *phpruntime.Manager
+	acme  *acme.Manager
 }
 
-func New(r *system.Runner, st *store.Store, node *noderuntime.Manager) *Manager {
+// New wires the orchestrator. php + acme may be nil during early dev runs;
+// non-nil in real production.
+func New(r *system.Runner, st *store.Store, node *noderuntime.Manager, php *phpruntime.Manager, ac *acme.Manager, web *webserver.Manager) *Manager {
 	return &Manager{
 		r: r, store: st,
 		os:   osuser.New(r),
-		web:  webserver.New(r),
+		web:  web,
 		rt:   runtime.New(r),
 		node: node,
+		php:  php,
+		acme: ac,
 	}
 }
 
@@ -74,7 +85,7 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		return store.Site{}, err
 	}
 
-	// resolve backend port / upstream
+	// Resolve backend port / upstream. PHP sites use a unix socket — no port.
 	var port int
 	var upstream string
 	switch {
@@ -83,12 +94,13 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 			return store.Site{}, fmt.Errorf("reverse proxy requires an upstream URL")
 		}
 		upstream = s.Upstream
-	case hasBackend(s.Type):
-		if s.Type == "php" || s.Type == "wordpress" {
-			if err := validate.PHPVersion(s.PHPVer); err != nil {
-				return store.Site{}, err
-			}
+	case s.Type == "php" || s.Type == "wordpress":
+		if err := validate.PHPVersion(s.PHPVer); err != nil {
+			return store.Site{}, err
 		}
+		// upstream stays empty; the webserver renderer wires fastcgi_pass to
+		// paths.PHPSocket(domain) based on the site type, not the upstream field.
+	case s.Type == "nodejs" || s.Type == "python":
 		p, err := m.store.NextPort()
 		if err != nil {
 			return store.Site{}, err
@@ -106,11 +118,19 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		_ = m.os.SetPassword(ctx, s.User, s.Password)
 	}
 
-	// 2) backend service (php/node/python); static & proxy have none
-	if hasBackend(s.Type) {
-		// For Node sites that opt into PM2, install pm2 globally inside the
-		// chosen Node prefix before writing the unit (idempotent).
-		if s.Type == "nodejs" && s.UsePM2 && m.node != nil {
+	// 2) backend
+	switch {
+	case s.Type == "php" || s.Type == "wordpress":
+		if m.php == nil {
+			rollback()
+			return store.Site{}, fmt.Errorf("PHP-FPM runtime manager not configured")
+		}
+		if err := m.php.WritePool(ctx, s.PHPVer, s.Domain, s.User); err != nil {
+			rollback()
+			return store.Site{}, err
+		}
+	case s.Type == "nodejs":
+		if s.UsePM2 && m.node != nil {
 			if err := m.node.EnsurePM2(ctx, s.NodeVer); err != nil {
 				rollback()
 				return store.Site{}, err
@@ -118,21 +138,26 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		}
 		if err := m.rt.Apply(ctx, runtime.Spec{
 			Type: s.Type, Domain: s.Domain, User: s.User, Port: port,
-			StartFile: s.StartFile, Module: s.Module, PHPVer: s.PHPVer,
-			NodeVer: s.NodeVer, UsePM2: s.UsePM2,
+			StartFile: s.StartFile, NodeVer: s.NodeVer, UsePM2: s.UsePM2,
+		}); err != nil {
+			rollback()
+			return store.Site{}, err
+		}
+	case s.Type == "python":
+		if err := m.rt.Apply(ctx, runtime.Spec{
+			Type: s.Type, Domain: s.Domain, User: s.User, Port: port, Module: s.Module,
 		}); err != nil {
 			rollback()
 			return store.Site{}, err
 		}
 	}
 
-	// 3) front Caddy vhost + reload (auto-HTTPS kicks in here)
+	// 3) nginx vhost + reload (HTTP-only initially; the ACME challenge location
+	//    is rendered into every vhost so the first issuance can complete here).
 	if err := m.web.Apply(ctx, webserver.Spec{
-		Type: s.Type, Domain: s.Domain, User: s.User, Upstream: upstream,
+		Type: s.Type, Domain: s.Domain, User: s.User, Upstream: upstream, PHPVer: s.PHPVer,
 	}); err != nil {
-		if hasBackend(s.Type) {
-			_ = m.rt.Remove(ctx, s.Domain)
-		}
+		m.cleanupBackend(ctx, s)
 		rollback()
 		return store.Site{}, err
 	}
@@ -158,12 +183,50 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 	if err := m.store.CreateSite(rec); err != nil {
 		return store.Site{}, err
 	}
+
+	// 5) issue cert in the background — non-fatal: site keeps working on :80
+	//    until LE comes through, and the renewal loop will retry on failure.
+	if m.acme != nil {
+		go func() {
+			bg := context.Background()
+			if err := m.acme.EnsureCert(bg, s.Domain); err != nil {
+				log.Printf("site %s: initial cert issuance failed: %v", s.Domain, err)
+				return
+			}
+			// Re-render the vhost so the HTTPS server{} block points at the new cert.
+			cert, _ := m.store.Certificate(s.Domain)
+			spec := webserver.Spec{
+				Type: rec.Type, Domain: rec.Domain, User: rec.SiteUser, Upstream: rec.Upstream,
+				PHPVer: rec.PHPVersion,
+			}
+			if cert.CertPath.Valid {
+				spec.CertPath = cert.CertPath.String
+				spec.KeyPath = cert.KeyPath.String
+			}
+			if err := m.web.Apply(bg, spec); err != nil {
+				log.Printf("site %s: vhost re-render after cert: %v", s.Domain, err)
+			}
+		}()
+	}
 	return rec, nil
 }
 
-// ReapplyRuntime re-renders & restarts a site's backend systemd unit (e.g.
-// after the operator changes its pinned Node version). No-op for site types
-// without a backend (static / reverseproxy).
+// cleanupBackend is the create-time rollback helper for the per-type backend
+// step. Best-effort; logs nothing.
+func (m *Manager) cleanupBackend(ctx context.Context, s Spec) {
+	switch s.Type {
+	case "php", "wordpress":
+		if m.php != nil {
+			_ = m.php.RemovePool(ctx, s.Domain)
+		}
+	case "nodejs", "python":
+		_ = m.rt.Remove(ctx, s.Domain)
+	}
+}
+
+// ReapplyRuntime re-renders & restarts a site's backend (e.g. after the
+// operator changes its pinned Node/PHP version, or per-site PHP settings).
+// No-op for site types without a backend (static / reverseproxy).
 func (m *Manager) ReapplyRuntime(ctx context.Context, domain string) error {
 	st, err := m.store.SiteByDomain(domain)
 	if err != nil {
@@ -172,15 +235,28 @@ func (m *Manager) ReapplyRuntime(ctx context.Context, domain string) error {
 	if !hasBackend(st.Type) {
 		return nil
 	}
-	if st.Type == "nodejs" && st.PM2Enabled && m.node != nil {
-		if err := m.node.EnsurePM2(ctx, st.NodeVersion.String); err != nil {
-			return err
+	switch st.Type {
+	case "php", "wordpress":
+		if m.php == nil {
+			return fmt.Errorf("PHP-FPM runtime manager not configured")
 		}
+		return m.php.WritePool(ctx, st.PHPVersion, st.Domain, st.SiteUser)
+	case "nodejs":
+		if st.PM2Enabled && m.node != nil {
+			if err := m.node.EnsurePM2(ctx, st.NodeVersion.String); err != nil {
+				return err
+			}
+		}
+		return m.rt.Apply(ctx, runtime.Spec{
+			Type: st.Type, Domain: domain, User: st.SiteUser, Port: st.Port,
+			NodeVer: st.NodeVersion.String, UsePM2: st.PM2Enabled,
+		})
+	case "python":
+		return m.rt.Apply(ctx, runtime.Spec{
+			Type: st.Type, Domain: domain, User: st.SiteUser, Port: st.Port,
+		})
 	}
-	return m.rt.Apply(ctx, runtime.Spec{
-		Type: st.Type, Domain: domain, User: st.SiteUser, Port: st.Port,
-		PHPVer: st.PHPVersion, NodeVer: st.NodeVersion.String, UsePM2: st.PM2Enabled,
-	})
+	return nil
 }
 
 // Delete tears a site down: vhost, backend, user, and record.
@@ -192,7 +268,12 @@ func (m *Manager) Delete(ctx context.Context, domain string) error {
 	if err := m.web.Remove(ctx, domain); err != nil {
 		return err
 	}
-	if hasBackend(st.Type) {
+	switch st.Type {
+	case "php", "wordpress":
+		if m.php != nil {
+			_ = m.php.RemovePool(ctx, domain)
+		}
+	case "nodejs", "python":
 		if err := m.rt.Remove(ctx, domain); err != nil {
 			return err
 		}
@@ -200,6 +281,8 @@ func (m *Manager) Delete(ctx context.Context, domain string) error {
 	if err := m.os.Delete(ctx, st.SiteUser); err != nil {
 		return err
 	}
+	_ = m.store.DeleteAllPHPSettings(domain)
+	_ = m.store.DeleteCertificate(domain)
 	return m.store.DeleteSite(domain)
 }
 

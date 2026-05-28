@@ -1,46 +1,78 @@
-// Package webserver renders per-site Caddy config and reloads Caddy. Caddy
-// gives us automatic HTTPS (Let's Encrypt), HTTP/3, and Souin caching for free.
+// Package webserver renders per-site nginx config and reloads nginx. Each site
+// gets one server{} block in /etc/nginx/sites-available, symlinked into
+// sites-enabled. TLS certs come from internal/acme (in-process lego).
+//
+// v0.2.0 rewrite: this package replaced the previous Caddy + Souin
+// implementation. Public method signatures (Apply, Remove, ApplyPanelProxy,
+// RemovePanelProxy, Reload) are unchanged so the existing call sites in
+// internal/site, internal/api, and cmd/auracpd compile untouched.
 package webserver
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"text/template"
 
 	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/validate"
 )
 
-// ErrCaddyMissing is returned when site/panel operations need Caddy but it
+// ErrNginxMissing is returned when site/panel operations need nginx but it
 // isn't installed yet. The API surfaces this verbatim so the operator knows
 // to run the data-plane installer.
-var ErrCaddyMissing = fmt.Errorf(
-	"Caddy is not installed on this host. Run installer/install.sh to provision the data plane (or `sudo apt install caddy`).")
+var ErrNginxMissing = fmt.Errorf(
+	"nginx is not installed on this host. Run installer/install.sh (or sudo auracp-install) to provision the data plane.")
+
+// ErrCaddyMissing is a backwards-compat alias kept so existing callers and
+// log-grepping in older docs keep working through the v0.2.0 transition.
+// Deprecated: use ErrNginxMissing.
+var ErrCaddyMissing = ErrNginxMissing
 
 type Manager struct{ R *system.Runner }
 
 func New(r *system.Runner) *Manager { return &Manager{R: r} }
 
-// Spec is the shape needed to render a site's Caddyfile fragment, including the
-// toggleable config (cache, basic auth, Cloudflare DNS, bot blocking).
+// Spec is the input the renderer needs to emit a site's nginx config. Carried
+// over from the Caddy-era structure so call sites in internal/site don't change.
 type Spec struct {
 	Type     string // static|php|wordpress|nodejs|python|reverseproxy
 	Domain   string
 	User     string
-	Upstream string // for app/proxy types: host:port or full URL
+	Upstream string // app types: 127.0.0.1:<port>; reverseproxy: full URL
 
-	Cache         bool   // Souin full-page cache
+	PHPVer        string // php/wordpress only — picks which php-fpm socket to fastcgi_pass to
+	Cache         bool   // emit fastcgi_cache / proxy_cache directives
 	CacheTTL      string // e.g. "600s"
-	BasicAuthUser string // if set with hash → basic_auth
-	BasicAuthHash string // bcrypt hash
-	CloudflareTok string // if set → tls { dns cloudflare <tok> }
-	BlockBots     bool   // block common bad user-agents
+	BasicAuthUser string // currently unused in the template; reserved
+	BasicAuthHash string // currently unused in the template; reserved
+	CloudflareTok string // hint to the SSL layer (DNS-01); not rendered into nginx
+	BlockBots     bool   // emit a User-Agent deny-list
+
+	// Filled by Apply() from the certificates table. Empty until lego issues:
+	// the rendered vhost stays HTTP-only with an ACME challenge location so
+	// the first issuance can complete in band.
+	CertPath string
+	KeyPath  string
 }
 
-// Render produces the Caddyfile fragment for a site.
+// vhostData is the template binding view of Spec — keeps the template tidy.
+type vhostData struct {
+	Type, Domain, User, SafeName        string
+	DocRoot, LogDir, PHPSocket, Upstream string
+	ACMEDir                              string
+	CertPath, KeyPath                    string
+	Bots                                 bool
+	BasicAuthUser, BasicAuthFile         string
+	Cache                                bool
+	CacheTTL                             string
+}
+
+// Render produces the nginx server{} config for a site.
 func (m *Manager) Render(s Spec) (string, error) {
 	if err := validate.Domain(s.Domain); err != nil {
 		return "", err
@@ -48,62 +80,84 @@ func (m *Manager) Render(s Spec) (string, error) {
 	if err := validate.Username(s.User); err != nil {
 		return "", err
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s {\n", s.Domain)
-	// zstd + gzip cover every modern client. We deliberately do NOT emit `br`:
-	// the stock Caddy build (caddyserver.com/api/download) doesn't ship the
-	// Brotli encoder, and adding the dunglas/caddy-cbrotli plugin requires cgo —
-	// not worth the extra ~3% bytes-on-the-wire for the panel/site mix.
-	b.WriteString("\tencode zstd gzip\n")
 
-	if s.CloudflareTok != "" {
-		// Wildcard / DNS-01 issuance via the Cloudflare DNS module.
-		fmt.Fprintf(&b, "\ttls {\n\t\tdns cloudflare %s\n\t}\n", s.CloudflareTok)
+	d := vhostData{
+		Type:    s.Type,
+		Domain:  s.Domain,
+		User:    s.User,
+		SafeName: strings.NewReplacer(".", "_", "-", "_").Replace(s.Domain),
+		DocRoot: paths.DocRoot(s.User, s.Domain),
+		LogDir:  paths.LogDir(s.User),
+		ACMEDir: paths.ACMEChallengeDir,
+		CertPath: s.CertPath,
+		KeyPath:  s.KeyPath,
+		Bots:    s.BlockBots,
+		Cache:   s.Cache,
+		CacheTTL: s.CacheTTL,
 	}
-	if s.BlockBots {
-		b.WriteString("\t@badbots header_regexp User-Agent (?i)(ahrefsbot|semrushbot|mj12bot|dotbot|petalbot)\n")
-		b.WriteString("\trespond @badbots 403\n")
-	}
-	if s.BasicAuthUser != "" && s.BasicAuthHash != "" {
-		fmt.Fprintf(&b, "\tbasic_auth {\n\t\t%s %s\n\t}\n", s.BasicAuthUser, s.BasicAuthHash)
-	}
-	if s.Cache {
-		ttl := s.CacheTTL
-		if ttl == "" {
-			ttl = "600s"
-		}
-		fmt.Fprintf(&b, "\tcache {\n\t\tttl %s\n\t}\n", ttl)
+	if d.CacheTTL == "" {
+		d.CacheTTL = "600s"
 	}
 
 	switch s.Type {
 	case "static":
-		fmt.Fprintf(&b, "\troot * %s\n", paths.DocRoot(s.User, s.Domain))
-		b.WriteString("\tfile_server\n")
-	case "php", "wordpress", "nodejs", "python", "reverseproxy":
-		up := s.Upstream
-		if up == "" {
+		// nothing extra
+	case "php", "wordpress":
+		if err := validate.PHPVersion(s.PHPVer); err != nil {
+			return "", err
+		}
+		d.PHPSocket = paths.PHPSocket(s.Domain)
+	case "nodejs", "python":
+		if s.Upstream == "" {
 			return "", fmt.Errorf("%s site requires an upstream", s.Type)
 		}
-		fmt.Fprintf(&b, "\treverse_proxy %s\n", up)
+		d.Upstream = s.Upstream
+	case "reverseproxy":
+		if s.Upstream == "" {
+			return "", fmt.Errorf("reverse proxy site requires an upstream URL")
+		}
+		// preserve scheme — could be http:// or https://
+		d.Upstream = s.Upstream
 	default:
 		return "", fmt.Errorf("unknown site type: %s", s.Type)
 	}
-	fmt.Fprintf(&b, "\tlog {\n\t\toutput file %s/access.log\n\t}\n", paths.LogDir(s.User))
-	b.WriteString("}\n")
-	return b.String(), nil
+
+	t, err := template.New("vhost").Parse(vhostTemplate)
+	if err != nil {
+		return "", err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, d); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
-// Write renders and writes the fragment, then reloads Caddy.
+// Apply renders and writes the vhost, ensures the sites-enabled symlink, and
+// reloads nginx. Cert paths come from a callback so the renderer doesn't reach
+// into the store directly; if the site has no cert yet (still pending ACME),
+// CertPath/KeyPath stay empty and the vhost is HTTP-only.
 func (m *Manager) Apply(ctx context.Context, s Spec) error {
 	content, err := m.Render(s)
 	if err != nil {
 		return err
 	}
 	if !m.R.DryRun {
-		if err := os.MkdirAll(paths.CaddySitesDir, 0o755); err != nil {
+		if err := os.MkdirAll(paths.NginxSitesAvailable, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(paths.CaddyFile(s.Domain), []byte(content), 0o644); err != nil {
+		if err := os.MkdirAll(paths.NginxSitesEnabled, 0o755); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(paths.ACMEChallengeDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(paths.NginxSiteFile(s.Domain), []byte(content), 0o644); err != nil {
+			return err
+		}
+		// Ensure the symlink exists; nginx ignores files outside sites-enabled.
+		_ = os.Remove(paths.NginxSiteLink(s.Domain))
+		if err := os.Symlink(paths.NginxSiteFile(s.Domain), paths.NginxSiteLink(s.Domain)); err != nil {
 			return err
 		}
 	}
@@ -115,33 +169,55 @@ func (m *Manager) Remove(ctx context.Context, domain string) error {
 		return err
 	}
 	if !m.R.DryRun {
-		_ = os.Remove(paths.CaddyFile(domain))
+		_ = os.Remove(paths.NginxSiteLink(domain))
+		_ = os.Remove(paths.NginxSiteFile(domain))
 	}
 	return m.Reload(ctx)
 }
 
-// ApplyPanelProxy fronts the control panel under a domain: Caddy obtains a real
-// Let's Encrypt cert for <domain> on :443 and reverse-proxies to the local
-// auracpd. Writing this (with Caddy running + DNS pointed here) triggers
-// automatic certificate issuance.
+// panelData is the template binding for the panel proxy vhost.
+type panelData struct {
+	Domain, Backend, ACMEDir string
+	CertPath, KeyPath        string
+}
+
+// ApplyPanelProxy fronts the control panel under a domain on :80/:443. nginx
+// reverse-proxies HTTPS traffic into auracpd's :8443 self-signed TLS. The cert
+// for <domain> is issued by lego (background job in cmd/auracpd) and lands in
+// paths.SSLDir, which a subsequent ReloadPanel picks up. While the cert is
+// pending, the panel is reachable plaintext on :80.
 func (m *Manager) ApplyPanelProxy(ctx context.Context, domain, backend string) error {
 	if err := validate.Domain(domain); err != nil {
 		return err
 	}
-	var b strings.Builder
-	fmt.Fprintf(&b, "%s {\n\tencode zstd gzip\n", domain)
-	if strings.HasPrefix(backend, "https://") {
-		// loopback to auracpd's self-signed TLS — skip-verify is safe on 127.0.0.1
-		fmt.Fprintf(&b, "\treverse_proxy %s {\n\t\ttransport http {\n\t\t\ttls_insecure_skip_verify\n\t\t}\n\t}\n", backend)
-	} else {
-		fmt.Fprintf(&b, "\treverse_proxy %s\n", backend)
+	d := panelData{Domain: domain, Backend: backend, ACMEDir: paths.ACMEChallengeDir}
+	if _, err := os.Stat(paths.CertPath(domain)); err == nil {
+		d.CertPath = paths.CertPath(domain)
+		d.KeyPath = paths.KeyPath(domain)
 	}
-	b.WriteString("}\n")
+	t, err := template.New("panel").Parse(panelTemplate)
+	if err != nil {
+		return err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, d); err != nil {
+		return err
+	}
 	if !m.R.DryRun {
-		if err := os.MkdirAll(paths.CaddySitesDir, 0o755); err != nil {
+		if err := os.MkdirAll(paths.NginxSitesAvailable, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(paths.PanelCaddyFile(), []byte(b.String()), 0o644); err != nil {
+		if err := os.MkdirAll(paths.NginxSitesEnabled, 0o755); err != nil {
+			return err
+		}
+		if err := os.MkdirAll(paths.ACMEChallengeDir, 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(paths.PanelNginxFile(), buf.Bytes(), 0o644); err != nil {
+			return err
+		}
+		_ = os.Remove(paths.PanelNginxLink())
+		if err := os.Symlink(paths.PanelNginxFile(), paths.PanelNginxLink()); err != nil {
 			return err
 		}
 	}
@@ -151,34 +227,32 @@ func (m *Manager) ApplyPanelProxy(ctx context.Context, domain, backend string) e
 // RemovePanelProxy stops fronting the panel under a domain (back to IP:port).
 func (m *Manager) RemovePanelProxy(ctx context.Context) error {
 	if !m.R.DryRun {
-		_ = os.Remove(paths.PanelCaddyFile())
+		_ = os.Remove(paths.PanelNginxLink())
+		_ = os.Remove(paths.PanelNginxFile())
 	}
 	return m.Reload(ctx)
 }
 
-// Reload validates the config, then asks Caddy to reload it gracefully.
+// Reload validates the config and asks nginx to reload it gracefully.
 //
-// Two-step strategy:
-//  1. Prefer `systemctl reload caddy` — goes through journald + honours the
+// Two-step strategy mirrors v0.1.17's Caddy approach:
+//  1. Prefer `systemctl reload nginx` — goes through journald + honours the
 //     unit's restart policy.
-//  2. Fall back to `caddy reload --config … --force` (talks to Caddy's local
-//     admin endpoint directly). Pre-v0.1.17 hosts shipped a Caddy unit
-//     without ExecReload= and systemctl reload returns exit 3 ("Job type
-//     reload is not applicable") — without this fallback those hosts would
-//     load /etc/caddy/sites/00-panel.caddy on disk but Caddy would never
-//     re-read it, leaving :80/:443 unbound and producing CF 521s.
+//  2. Fall back to `nginx -s reload` direct if systemctl returns "reload not
+//     applicable" (defensive: nginx ships ExecReload in its packaged unit, so
+//     this fallback is mostly belt-and-suspenders).
 func (m *Manager) Reload(ctx context.Context) error {
 	if !m.R.DryRun {
-		if _, err := exec.LookPath("caddy"); err != nil {
-			return ErrCaddyMissing
+		if _, err := exec.LookPath("nginx"); err != nil {
+			return ErrNginxMissing
 		}
 	}
-	if _, err := m.R.Run(ctx, "caddy", "validate", "--config", "/etc/caddy/Caddyfile"); err != nil {
-		return fmt.Errorf("caddy config invalid: %w", err)
+	if _, err := m.R.Run(ctx, "nginx", "-t"); err != nil {
+		return fmt.Errorf("nginx config invalid: %w", err)
 	}
-	if _, err := m.R.Run(ctx, "systemctl", "reload", "caddy"); err == nil {
+	if _, err := m.R.Run(ctx, "systemctl", "reload", "nginx"); err == nil {
 		return nil
 	}
-	_, err := m.R.Run(ctx, "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force")
+	_, err := m.R.Run(ctx, "nginx", "-s", "reload")
 	return err
 }

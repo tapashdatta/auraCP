@@ -14,8 +14,8 @@ export async function fetchSites() {
 
 export const siteTypes = [
   { type:'wordpress',    ic:'◆', name:'WordPress',    desc:'Managed WP with wp-cli, auto database & one-click SSL.' },
-  { type:'php',          ic:'php', name:'PHP',         desc:'FrankenPHP worker mode. PHP 8.3+, per-site isolation.' },
-  { type:'nodejs',       ic:'▲', name:'Node.js',       desc:'systemd-managed app behind Caddy reverse proxy.' },
+  { type:'php',          ic:'php', name:'PHP',         desc:'PHP-FPM pool per site. PHP 8.3+, isolated UID + Unix socket.' },
+  { type:'nodejs',       ic:'▲', name:'Node.js',       desc:'systemd-managed app behind nginx reverse proxy.' },
   { type:'static',       ic:'▤', name:'Static HTML',   desc:'Edge-cached file server. Zero runtime, instant loads.' },
   { type:'python',       ic:'py', name:'Python',        desc:'gunicorn/uvicorn via systemd. Python 3.12 ready.' },
   { type:'reverseproxy', ic:'⇄', name:'Reverse Proxy', desc:'Proxy any upstream with TLS termination & caching.' },

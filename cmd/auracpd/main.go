@@ -1,5 +1,5 @@
 // Command auracpd is the auraCP control-plane daemon: it serves the admin UI
-// and JSON API, and provisions sites, databases, and certs.
+// and JSON API, and provisions sites, databases, certs (in-process ACME).
 package main
 
 import (
@@ -11,12 +11,14 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/api"
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
+	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
@@ -28,11 +30,12 @@ import (
 func main() {
 	addr := flag.String("addr", ":8443", "listen address")
 	dbPath := flag.String("db", "auracp.db", "path to the SQLite state database")
-	etcDir := flag.String("etc", "/etc/auracp", "config dir (holds the secret key + panel cert)")
+	etcDir := flag.String("etc", "/etc/auracp", "config dir (holds the secret key + ACME state)")
 	provision := flag.Bool("provision", runtime.GOOS == "linux",
-		"actually provision the OS (users/services/caddy); off = record-only (dev)")
+		"actually provision the OS (users/services/nginx); off = record-only (dev)")
 	useTLS := flag.Bool("tls", true, "serve HTTPS with a self-signed cert (panel.crt/key in -etc); off = plain HTTP")
-	panelDomain := flag.String("panel-domain", "", "front the panel under this domain via Caddy (real Let's Encrypt cert on :443)")
+	panelDomain := flag.String("panel-domain", "", "front the panel under this domain via nginx (real Let's Encrypt cert on :443)")
+	acmeStaging := flag.Bool("acme-staging", false, "use Let's Encrypt staging endpoint (no rate limits; certs are not browser-trusted)")
 	flag.Parse()
 
 	st, err := store.Open(*dbPath)
@@ -52,7 +55,7 @@ func main() {
 		log.Printf("provisioning DISABLED (record-only mode); OS commands are logged, not run")
 	}
 
-	// Loopback URL Caddy proxies to when the panel is fronted under a domain.
+	// Loopback URL nginx proxies to when the panel is fronted under a domain.
 	scheme := "https"
 	if !*useTLS {
 		scheme = "http"
@@ -66,30 +69,50 @@ func main() {
 	web := webserver.New(runner)
 	node := noderuntime.New(runner, st)
 	node.Reconcile()
+	php := phpruntime.New(runner, st)
+	php.Reconcile()
 
-	// Reconcile the panel domain: persist the flag (if given), then (re)apply the
-	// Caddy front for whatever domain is configured — this triggers Caddy's
-	// automatic Let's Encrypt issuance once DNS points here.
+	// ACME owns LE issuance + renewal; nginx reload happens after each issuance.
+	rootCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ac := acme.New(st, *etcDir, web.Reload)
+	ac.SetStaging(*acmeStaging)
+	ac.StartRenewalLoop(rootCtx)
+
+	// Reconcile the panel domain: persist the flag (if given), then (re)apply
+	// the nginx front for whatever domain is configured + kick off cert issuance.
 	if *panelDomain != "" {
 		_ = st.SetSetting("panel_domain", *panelDomain)
 	}
 	if d, ok := st.GetSetting("panel_domain"); ok && d != "" {
-		if err := web.ApplyPanelProxy(context.Background(), d, panelBackend); err != nil {
+		if err := web.ApplyPanelProxy(rootCtx, d, panelBackend); err != nil {
 			log.Printf("panel domain %q: %v", d, err)
 		} else {
-			log.Printf("panel fronted at https://%s (Caddy will obtain its certificate)", d)
+			log.Printf("panel fronted at https://%s (auracpd will obtain its Let's Encrypt cert)", d)
 		}
+		// Background cert issuance for the panel itself.
+		go func() {
+			if err := ac.EnsureCert(rootCtx, d); err != nil {
+				log.Printf("panel domain %q: cert: %v", d, err)
+				return
+			}
+			if err := web.ApplyPanelProxy(rootCtx, d, panelBackend); err != nil {
+				log.Printf("panel domain %q: re-render after cert: %v", d, err)
+			}
+		}()
 	}
 
 	mux := http.NewServeMux()
 	api.Register(mux, st, api.Deps{
-		Sites:        site.New(runner, st, node),
+		Sites:        site.New(runner, st, node, php, ac, web),
 		DBs:          db.New(runner, st, sec),
 		Cron:         cron.New(runner, st),
 		Backups:      backup.New(runner, st),
 		Web:          web,
 		OS:           osuser.New(runner),
 		Node:         node,
+		PHP:          php,
+		ACME:         ac,
 		Secret:       sec,
 		Runner:       runner,
 		PanelBackend: panelBackend,

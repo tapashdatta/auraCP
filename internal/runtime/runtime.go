@@ -1,6 +1,10 @@
-// Package runtime writes and manages the per-site systemd unit that runs the
-// application backend (FrankenPHP for PHP/WordPress, node for Node.js, gunicorn
-// for Python). Each unit runs as the site's own user behind the front Caddy.
+// Package runtime writes and manages the per-site systemd unit that runs an
+// application backend for Node.js and Python sites (gunicorn / node /
+// pm2-runtime). Each unit runs as the site's own user behind nginx.
+//
+// v0.2.0: PHP sites no longer get a per-site systemd unit — they're served
+// by a per-site pool inside the shared php<ver>-fpm service, owned by the
+// internal/phpruntime package. Apply() returns nil (no-op) for php/wordpress.
 package runtime
 
 import (
@@ -19,22 +23,33 @@ type Manager struct{ R *system.Runner }
 
 func New(r *system.Runner) *Manager { return &Manager{R: r} }
 
-// Spec describes a backend service for one site.
+// Spec describes a backend service for one site. Carried over from the
+// FrankenPHP era; PHPVer is no longer used here (handled in phpruntime).
 type Spec struct {
-	Type      string // php|wordpress|nodejs|python
+	Type      string // nodejs|python (php/wordpress short-circuit; static/reverseproxy never reach here)
 	Domain    string
 	User      string
 	Port      int
 	StartFile string // nodejs: app.js
 	Module    string // python: main:app
-	PHPVer    string // php: 8.3/8.4/8.5
+	PHPVer    string // retained for source compat; ignored
 	NodeVer   string // nodejs: "" or "default" → /opt/auracp/node/default; else /opt/auracp/node/<ver>
 	UsePM2    bool   // nodejs: run app via pm2-runtime (foreground), not plain node
 }
 
-// Apply writes the unit file and (re)starts it. Static & reverse-proxy sites
-// have no backend and never call this.
+// Apply writes the unit file and (re)starts it. PHP/WordPress sites are
+// handled by phpruntime.WritePool — we no-op here so existing callers stay
+// unchanged.
 func (m *Manager) Apply(ctx context.Context, s Spec) error {
+	switch s.Type {
+	case "php", "wordpress":
+		return nil // owned by internal/phpruntime
+	case "nodejs", "python":
+		// continue below
+	default:
+		return fmt.Errorf("type %q has no backend", s.Type)
+	}
+
 	if err := validate.Username(s.User); err != nil {
 		return err
 	}
@@ -44,7 +59,7 @@ func (m *Manager) Apply(ctx context.Context, s Spec) error {
 	if err := validate.Port(s.Port); err != nil {
 		return err
 	}
-	exec, err := execStart(s)
+	execLine, err := execStart(s)
 	if err != nil {
 		return err
 	}
@@ -68,7 +83,7 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 `, s.Domain, s.Type, s.User, s.User,
-		paths.DocRoot(s.User, s.Domain), exec, paths.SiteHome(s.User))
+		paths.DocRoot(s.User, s.Domain), execLine, paths.SiteHome(s.User))
 
 	name := paths.UnitName(s.Domain)
 	if !m.R.DryRun {
@@ -83,6 +98,8 @@ WantedBy=multi-user.target
 	return err
 }
 
+// Remove tears down a site's per-site systemd unit. PHP/WordPress site removal
+// is handled by phpruntime.RemovePool — this is a no-op for those types.
 func (m *Manager) Remove(ctx context.Context, domain string) error {
 	if err := validate.Domain(domain); err != nil {
 		return err
@@ -100,12 +117,6 @@ func execStart(s Spec) (string, error) {
 	root := paths.DocRoot(s.User, s.Domain)
 	port := strconv.Itoa(s.Port)
 	switch s.Type {
-	case "php", "wordpress":
-		if err := validate.PHPVersion(s.PHPVer); err != nil {
-			return "", err
-		}
-		// FrankenPHP serving the docroot, listening on the site's loopback port.
-		return fmt.Sprintf("/usr/bin/frankenphp php-server --listen 127.0.0.1:%s --root %s", port, root), nil
 	case "nodejs":
 		start := s.StartFile
 		if start == "" {

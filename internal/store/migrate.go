@@ -102,6 +102,35 @@ var migrations = []string{
 		created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		expires_at  TIMESTAMP NOT NULL
 	)`,
+	// v0.2.0: ACME state — auracpd's in-process lego owns issuance/renewal,
+	// nginx serves the resulting cert. One row per domain (panel + every site).
+	`CREATE TABLE IF NOT EXISTS certificates (
+		domain      TEXT PRIMARY KEY,
+		issuer      TEXT NOT NULL DEFAULT 'letsencrypt',
+		cert_path   TEXT,
+		key_path    TEXT,
+		issued_at   INTEGER,                          -- unix ts
+		expires_at  INTEGER,                          -- unix ts
+		status      TEXT NOT NULL DEFAULT 'pending',  -- pending|issued|failed|renewing
+		last_error  TEXT NOT NULL DEFAULT '',
+		attempts    INTEGER NOT NULL DEFAULT 0
+	)`,
+	// v0.2.0: php-fpm versions installed side-by-side (8.3 / 8.4 / 8.5) via
+	// deb.sury.org. Mirrors node_runtimes shape so the UI is symmetric.
+	`CREATE TABLE IF NOT EXISTS php_runtimes (
+		version    TEXT PRIMARY KEY,             -- "8.4"
+		installed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		is_default INTEGER NOT NULL DEFAULT 0
+	)`,
+	// v0.2.0: per-site PHP runtime overrides written into the FPM pool config.
+	// Triple (domain, key, value); allows the panel to tune memory_limit /
+	// upload_max_filesize / etc. per site without touching the pool template.
+	`CREATE TABLE IF NOT EXISTS php_settings (
+		domain TEXT NOT NULL,
+		key    TEXT NOT NULL,
+		value  TEXT NOT NULL,
+		PRIMARY KEY (domain, key)
+	)`,
 }
 
 func (s *Store) migrate() error {

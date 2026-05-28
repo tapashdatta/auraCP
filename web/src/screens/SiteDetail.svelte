@@ -190,12 +190,14 @@
     </div>
 
   {:else if active === 'vhost'}
-    <div class="section fade"><div class="section-h"><div><h3>Caddyfile</h3><p>Auto-generated; reloads on save</p></div></div><div class="section-b">
-      <div class="code">{site.domain} {'{'}
-  encode zstd br gzip
-  <span class="c"># automatic HTTPS via Let's Encrypt / Cloudflare</span>
-  root * {site.root}
-  log {'{'} output file /home/{site.user}/logs/access.log {'}'}
+    <div class="section fade"><div class="section-h"><div><h3>nginx vhost</h3><p>Auto-generated; reloads on save</p></div></div><div class="section-b">
+      <div class="code">server {'{'}
+  listen 80;
+  listen 443 ssl;
+  server_name {site.domain};
+  root {site.root};
+  <span class="c"># auracpd manages the Let's Encrypt cert via lego (HTTP-01)</span>
+  access_log /home/{site.user}/logs/access.log;
 {'}'}</div>
     </div></div>
 
@@ -225,13 +227,13 @@
     </div>
 
   {:else if active === 'cache'}
-    <div class="section fade"><div class="section-h"><div><h3>Cache</h3><p>Souin full-page cache (in Caddy)</p></div></div><div class="section-b" style="padding-top:4px">
+    <div class="section fade"><div class="section-h"><div><h3>Cache</h3><p>nginx fastcgi_cache / proxy_cache (per-site, opt-in)</p></div></div><div class="section-b" style="padding-top:4px">
       <div class="kv"><span class="k">Full-page cache</span><div class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></div></div>
       <div class="kv"><span class="k">Default TTL</span><span class="v">{config.cache_ttl || '600s'}</span></div>
     </div></div>
 
   {:else if active === 'ssl'}
-    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Managed automatically by Caddy (Let's Encrypt)</p></div>
+    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Managed automatically by auracpd (Let's Encrypt via lego)</p></div>
       {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}</div>
       <div class="section-b" style="padding-top:4px">
         {#if sslStatus && sslStatus.status === 'active'}

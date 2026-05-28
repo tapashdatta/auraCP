@@ -4,8 +4,8 @@
 
   const META = {
     wordpress:    { title: 'New WordPress Site', sub: 'Managed WordPress · wp-cli · automatic database' },
-    php:          { title: 'New PHP Site', sub: 'FrankenPHP worker mode · isolated site user' },
-    nodejs:       { title: 'New Node.js Site', sub: 'systemd-managed app behind Caddy' },
+    php:          { title: 'New PHP Site', sub: 'PHP-FPM pool · isolated site user' },
+    nodejs:       { title: 'New Node.js Site', sub: 'systemd-managed app behind nginx' },
     python:       { title: 'New Python Site', sub: 'gunicorn/uvicorn via systemd' },
     static:       { title: 'New Static HTML Site', sub: 'Edge-cached file server · zero runtime' },
     reverseproxy: { title: 'New Reverse Proxy', sub: 'TLS termination in front of any upstream' },

@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/auth"
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
+	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
 	"github.com/auracp/auracp/internal/store"
@@ -29,6 +31,8 @@ type Server struct {
 	web          *webserver.Manager
 	osu          *osuser.Manager
 	node         *noderuntime.Manager
+	php          *phpruntime.Manager
+	acme         *acme.Manager
 	secret       *secret.Box
 	runner       *system.Runner
 	panelBackend string
@@ -43,6 +47,8 @@ type Deps struct {
 	Web          *webserver.Manager
 	OS           *osuser.Manager
 	Node         *noderuntime.Manager
+	PHP          *phpruntime.Manager
+	ACME         *acme.Manager
 	Secret       *secret.Box
 	Runner       *system.Runner
 	PanelBackend string
@@ -51,7 +57,8 @@ type Deps struct {
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	srv := &Server{store: s, sites: d.Sites, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
-		web: d.Web, osu: d.OS, node: d.Node, secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
+		web: d.Web, osu: d.OS, node: d.Node, php: d.PHP, acme: d.ACME,
+		secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
 
 	// public
 	mux.HandleFunc("GET /api/health", srv.health)
@@ -117,6 +124,19 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("DELETE /api/instance/node-versions/{version}", srv.requirePerm("settings", "update", srv.deleteNodeRuntime))
 	mux.Handle("PUT /api/sites/{domain}/node-version", srv.requirePerm("sites", "update", srv.setSiteNodeVersion))
 	mux.Handle("PUT /api/sites/{domain}/pm2", srv.requirePerm("sites", "update", srv.setSitePM2))
+
+	// PHP runtime management (parallel to node-versions). v0.2.0+.
+	mux.Handle("GET /api/instance/php-versions", srv.requirePerm("settings", "read", srv.listPHPRuntimes))
+	mux.Handle("POST /api/instance/php-versions", srv.requirePerm("settings", "update", srv.installPHPRuntime))
+	mux.Handle("POST /api/instance/php-versions/{version}/default", srv.requirePerm("settings", "update", srv.setDefaultPHPRuntime))
+	mux.Handle("DELETE /api/instance/php-versions/{version}", srv.requirePerm("settings", "update", srv.deletePHPRuntime))
+	mux.Handle("PUT /api/sites/{domain}/php-version", srv.requirePerm("sites", "update", srv.setSitePHPVersion))
+	mux.Handle("GET /api/sites/{domain}/php-settings", srv.requirePerm("sites", "read", srv.getPHPSettings))
+	mux.Handle("PUT /api/sites/{domain}/php-settings", srv.requirePerm("sites", "update", srv.setPHPSettings))
+
+	// Certificates listing (read-only; issuance happens automatically).
+	mux.Handle("GET /api/certificates", srv.requirePerm("settings", "read", srv.listCertificates))
+	mux.Handle("POST /api/certificates/{domain}/renew", srv.requirePerm("settings", "update", srv.renewCertificate))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

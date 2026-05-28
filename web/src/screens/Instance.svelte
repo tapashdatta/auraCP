@@ -56,7 +56,7 @@
   }
 
   async function savePanelDomain() {
-    panelMsg = 'Applying… (Caddy will obtain the certificate)'
+    panelMsg = 'Applying… (auracpd will obtain the Let\'s Encrypt cert)'
     const r = await apiFetch('/api/settings/panel-domain', { method: 'POST', body: JSON.stringify({ domain: panel.input.trim() }) })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) { panelMsg = d.error || 'Failed'; return }
@@ -121,7 +121,7 @@
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Access the panel at a domain (Caddy gets a real SSL cert; no port needed)</p></div>
+  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Access the panel at a domain (auracpd issues a Let's Encrypt SSL cert; no port needed)</p></div>
     <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
     <div class="section-b">
       <div class="field"><label>Domain / subdomain <span class="hint">point its DNS A record to this server first</span></label>

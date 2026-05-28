@@ -21,9 +21,11 @@ and leaves the server's resources for the sites it hosts.
   its own Linux user with a chroot-jailed SFTP account.
 - **PostgreSQL *and* MariaDB** — choose the engine **per database**.
 - **Node.js 24 LTS** preinstalled on every site.
-- **Automatic HTTPS** (Caddy + Let's Encrypt), HTTP/3, Brotli/zstd, Souin full-page cache, and
-  **Cloudflare** DNS-01 for wildcard certs.
-- **FrankenPHP** worker mode for PHP (PHP 8.3+ only).
+- **Automatic HTTPS** (in-process **go-acme/lego** in auracpd) — HTTP-01 by default, **Cloudflare**
+  DNS-01 for wildcards or proxied domains, daily renewal scheduler.
+- **PHP-FPM, one pool per site** with a per-site Unix socket and isolated UID; **multiple PHP
+  versions side-by-side** (8.3 / 8.4 / 8.5) from `deb.sury.org`, pin per site.
+- **nginx fastcgi_cache + proxy_cache** for full-page caching; **Redis** for object cache.
 - Per-site tabs: Settings · Vhost · Databases · Cache · SSL/TLS · Security · SSH/FTP · File Manager ·
   Cron · Logs · Backups.
 - **Security-first** — no-shell command execution, validated input, encrypted secrets, sessions +
@@ -37,10 +39,14 @@ and leaves the server's resources for the sites it hosts.
 |---|---|
 | Control plane | **Go** (single static binary, pure-Go SQLite — no cgo) |
 | Admin UI | **Svelte** SPA, compiled and embedded via `go:embed` |
-| Web server / SSL | **Caddy** (auto-HTTPS, HTTP/3) + **Souin** cache |
-| PHP runtime | **FrankenPHP** |
-| Databases | **MariaDB** + **PostgreSQL** |
-| State | **SQLite** |
+| Web server | **nginx** (1.30 mainline) with `fastcgi_cache` + `proxy_cache` |
+| Auto-HTTPS | **go-acme/lego** in auracpd (in-process, HTTP-01 + Cloudflare DNS-01) |
+| PHP runtime | **PHP-FPM, pool per site** (Unix socket, isolated UID) — multi-version via `deb.sury.org` |
+| Node.js | per-site **systemd** unit running `node` directly (PM2 opt-in via `pm2-runtime`) |
+| Python | **gunicorn / uvicorn** via per-site systemd unit |
+| Object cache | **Redis** (per-site DB or shared) |
+| Databases | **MariaDB** + **PostgreSQL** (choose per database) |
+| State | **SQLite** (pure-Go, WAL) |
 
 ## Install
 
@@ -51,7 +57,7 @@ clone needed — the `.deb` bundles the installer and exposes it as the `auracp-
 # 1) download the package for your arch (plain curl — repo is public)
 ARCH=$(dpkg --print-architecture)        # → amd64 or arm64
 curl -fL -o auracp.deb \
-  "https://github.com/tapashdatta/auraCP/releases/download/v0.1.18/auracp_0.1.18_${ARCH}.deb"
+  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.0/auracp_0.2.0_${ARCH}.deb"
 
 # 2) install the panel
 sudo dpkg -i ./auracp.deb
@@ -64,7 +70,7 @@ sudo auracp-install
 
 ```bash
 ARCH=$(dpkg --print-architecture) && \
-curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.1.18/auracp_0.1.18_${ARCH}.deb" && \
+curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.0/auracp_0.2.0_${ARCH}.deb" && \
 sudo dpkg -i /tmp/auracp.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
@@ -72,9 +78,13 @@ sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.ex
 Then open the panel — `https://panel.example.com` if you set a domain, otherwise
 `https://<server-ip>:8443` (self-signed) — and **create your admin account** on the first-run setup screen.
 
-`auracp-install` locks the required packages (auracpd, Caddy) and lets you choose optional ones:
-MariaDB, PostgreSQL, Node.js, PHP/FrankenPHP, Python, Redis, Typesense, Docker, UFW + fail2ban.
-Run with `--dry-run` first to preview the plan. To remove everything: `sudo auracp-uninstall`.
+`auracp-install` locks the required packages (auracpd, nginx) and lets you choose optional ones:
+MariaDB, PostgreSQL, Node.js, PHP-FPM (multi-version), Python, Redis, Typesense, Docker, UFW +
+fail2ban. Run with `--dry-run` first to preview the plan. To remove everything:
+`sudo auracp-uninstall` (returns the host to baseline — no orphan apt sources or service users).
+
+**Upgrading from v0.1.x?** The data plane changed (Caddy → nginx, FrankenPHP → PHP-FPM); see
+[docs/UPGRADE-v0.2.md](docs/UPGRADE-v0.2.md) for the destructive upgrade path.
 
 ## Build from source
 

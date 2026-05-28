@@ -2,7 +2,12 @@
 #
 # auraCP uninstaller — removes the panel, the data-plane packages it installed,
 # and all panel-created artifacts (site users, vhosts, per-site services, data),
-# so you can start from a clean host.
+# so the host returns to its baseline.
+#
+# v0.2.0 stack: removes nginx + PHP-FPM (multi-version) + Node + MariaDB +
+# PostgreSQL + Redis + Typesense + Docker + UFW + fail2ban as installed.
+# (Pre-v0.2.0 hosts: residual Caddy / FrankenPHP / Souin artifacts are also
+# scrubbed by the content-based apt sweep + the legacy keyring entries below.)
 #
 # Usage:
 #   sudo ./installer/uninstall.sh                 # interactive confirm
@@ -36,8 +41,6 @@ msg(){ printf '%s\n' "${C}::${Z} $*"; }
 ok(){ printf '%s\n' "${G}✓${Z} $*"; }
 run(){ if [ "$DRY" -eq 1 ]; then printf '%s\n' "${D}[dry-run]${Z} $*"; else eval "$@" || true; fi; }
 
-# Quietly stop+disable a systemd unit only if it actually exists — avoids the
-# scary "Failed to disable unit: …does not exist" message on partial installs.
 stop_unit() {
   local svc="$1"
   if [ "$DRY" -eq 1 ]; then
@@ -69,8 +72,9 @@ cat <<EOF
 ${Y}This will remove auraCP and everything it installed:${Z}
   • auracpd panel (package, service, /opt/auracp, /etc/auracp, /var/lib/auracp)
   • all hosted sites: their Linux users, /home dirs, vhosts, per-site services
-  • Caddy, FrankenPHP, Node.js
+  • nginx, PHP-FPM (all installed versions), Node.js
   • Redis, Typesense, Docker, UFW + fail2ban (if installed)
+  • legacy v0.1.x residue: Caddy, FrankenPHP, Souin keyrings + sources
 $( [ "$KEEP_DB" -eq 1 ] && echo "  • (keeping MariaDB / PostgreSQL and their data)" || echo "  ${R}• MariaDB and PostgreSQL — including ALL database data${Z}" )
   (base tools like curl/cron and system python3 are left untouched)
 EOF
@@ -83,13 +87,13 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 
 # ── 0. apt-source preflight ──────────────────────────────────────────────────
-# Strip any third-party apt source that earlier auraCP versions might have
-# installed BEFORE we start running apt-get (purge, update). This is content-
-# based, not filename-based, so it catches deb822 .sources files, any-named
-# .list files, and files in /etc/apt/sources.list itself — exactly the cases
-# where filename-only cleanups in older uninstallers silently missed leftovers.
+# Strip third-party apt sources installed by any auraCP version BEFORE we run
+# apt-get. Content-based so it catches deb822 .sources files, renamed .list
+# files, and entries inside /etc/apt/sources.list itself. Includes both v0.2.0
+# additions (packages.sury.org, nginx.org) and v0.1.x leftovers (NodeSource,
+# pkg.dunglas.dev/static-php/frankenphp).
 msg "Sweeping apt for third-party sources auraCP-versions installed…"
-sweep_pat='deb\.nodesource\.com|mirror\.mariadb\.org|apt\.postgresql\.org|download\.docker\.com|pkg\.dunglas\.dev|static-php|frankenphp|dl\.typesense\.org'
+sweep_pat='deb\.nodesource\.com|mirror\.mariadb\.org|apt\.postgresql\.org|download\.docker\.com|pkg\.dunglas\.dev|static-php|frankenphp|dl\.typesense\.org|packages\.sury\.org|nginx\.org/packages'
 for src in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
   [ -e "$src" ] || continue
   if grep -qE "$sweep_pat" "$src" 2>/dev/null; then
@@ -97,12 +101,11 @@ for src in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
     run "rm -f '$src'"
   fi
 done
-# Strip matching lines from /etc/apt/sources.list (rare, but possible).
 if [ -e /etc/apt/sources.list ] && grep -qE "$sweep_pat" /etc/apt/sources.list 2>/dev/null; then
   printf '  %s\n' "scrubbing matching lines from /etc/apt/sources.list"
   run "sed -i.bak -E '/${sweep_pat}/d' /etc/apt/sources.list"
 fi
-# Orphaned keyrings (safe glob — these names are all auraCP-specific).
+# Orphaned keyrings — current (v0.2.0) and legacy (v0.1.x).
 for kr in /etc/apt/keyrings/nodesource.gpg \
           /usr/share/keyrings/nodesource.gpg \
           /etc/apt/keyrings/nodesource-keyring.gpg \
@@ -115,26 +118,24 @@ for kr in /etc/apt/keyrings/nodesource.gpg \
           /usr/share/keyrings/mariadb.asc \
           /usr/share/keyrings/pgdg.gpg \
           /etc/apt/keyrings/docker.gpg \
-          /etc/apt/keyrings/docker-archive-keyring.gpg; do
+          /etc/apt/keyrings/docker-archive-keyring.gpg \
+          /usr/share/keyrings/sury-php.gpg \
+          /usr/share/keyrings/nginx-archive-keyring.gpg; do
   [ -e "$kr" ] && run "rm -f '$kr'"
 done
 
 # ── 0c. auraCP-laid config snippets in shared /etc subdirs ──────────────────
-# Catch any auraCP-named file in the standard "snippet dirs" — defensive sweep
-# so future versions that drop, say, a logrotate or sudoers snippet are cleaned
-# without uninstall.sh needing a per-snippet entry. Glob fails silently when a
-# directory has no matches, which is exactly what we want.
 msg "Removing auraCP-laid config snippets…"
 for d in /etc/apt/preferences.d /etc/sudoers.d /etc/cron.d /etc/cron.daily \
          /etc/cron.hourly /etc/cron.weekly /etc/logrotate.d /etc/rsyslog.d \
          /etc/profile.d /etc/security/limits.d /etc/sysctl.d \
-         /etc/fail2ban/jail.d /etc/fail2ban/filter.d /etc/modules-load.d; do
+         /etc/fail2ban/jail.d /etc/fail2ban/filter.d /etc/modules-load.d \
+         /etc/tmpfiles.d; do
   [ -d "$d" ] || continue
   for f in "$d"/auracp* "$d"/*auracp*; do
     [ -e "$f" ] && run "rm -f '$f'"
   done
 done
-# Strip any `# auracp` … lines from /etc/hosts (no-op when none present).
 if [ -e /etc/hosts ] && grep -q '# auracp' /etc/hosts 2>/dev/null; then
   run "sed -i '/# auracp/d' /etc/hosts"
 fi
@@ -162,50 +163,44 @@ run "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null"
 
 msg "Removing auracpd panel…"
 stop_unit auracpd
-# Belt-and-suspenders: kill any leftover process and ensure :8443 is free.
 run "pkill -9 -f /opt/auracp/bin/auracpd 2>/dev/null"
 run "pkill -9 -x auracpd 2>/dev/null"
-# Purge any installed auracp* packages (no globs into apt — we enumerate first).
 auracp_pkgs=$(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'auracp*' 2>/dev/null \
               | awk '$2=="installed"{print $1}' | tr '\n' ' ')
 [ -n "$auracp_pkgs" ] && run "apt-get purge -y $auracp_pkgs"
 run "rm -f /etc/systemd/system/auracpd.service"
-run "rm -rf /etc/systemd/system/auracpd.service.d"   # panel-domain drop-in et al
+run "rm -rf /etc/systemd/system/auracpd.service.d"
 run "rm -rf /opt/auracp /etc/auracp /var/lib/auracp"
-# bundled-installer command symlinks (from the .deb postinst)
 run "rm -f /usr/local/bin/auracp /usr/local/bin/auracpd /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall"
 run "systemctl daemon-reload"
 ok "Panel removed."
 
-# ── 2. web server + PHP + node ──────────────────────────────────────────────
-msg "Removing Caddy…"
-stop_unit caddy
-run "pkill -9 -x caddy 2>/dev/null"          # ensure :80 and :443 are free
-run "rm -f /etc/systemd/system/caddy.service"
+# ── 2. nginx + PHP-FPM + Node ──────────────────────────────────────────────
+msg "Removing nginx…"
+stop_unit nginx
+run "pkill -9 -x nginx 2>/dev/null"
+purge_installed nginx nginx-common nginx-mod-http-cache-purge libnginx-mod-cache-purge
+run "rm -rf /etc/nginx /var/lib/nginx /var/log/nginx /var/cache/nginx /run/php-fpm"
+# Legacy v0.1.x Caddy residue (idempotent — won't error if absent).
+run "rm -rf /etc/systemd/system/caddy.service /etc/systemd/system/caddy.service.d"
 run "rm -f /usr/bin/caddy"
-run "rm -rf /etc/caddy /var/lib/caddy"
-# Caddy run as root also stashes auto-managed certs/state under /root by default.
-run "rm -rf /root/.local/share/caddy /root/.config/caddy"
+run "rm -rf /etc/caddy /var/lib/caddy /root/.local/share/caddy /root/.config/caddy"
 run "id caddy >/dev/null 2>&1 && userdel -rf caddy"
 run "systemctl daemon-reload"
 
-msg "Removing FrankenPHP…"
+msg "Removing PHP-FPM (all versions)…"
+# Enumerate installed php*-fpm packages and purge them all.
+php_pkgs=$(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'php*' 2>/dev/null \
+           | awk '$2=="installed"{print $1}' | tr '\n' ' ')
+[ -n "$php_pkgs" ] && run "apt-get purge -y $php_pkgs"
+run "rm -rf /etc/php /var/lib/php /var/log/php*"
+# Legacy v0.1.x FrankenPHP residue.
 run "rm -f /usr/bin/frankenphp"
-# The FrankenPHP installer (frankenphp.dev/install.sh) adds an apt source for
-# static PHP builds (pkg.dunglas.dev → /etc/apt/sources.list.d/static-php*.list)
-# and a keyring under /etc/apt/keyrings or /usr/share/keyrings. Scrub the lot —
-# its names have varied across versions, so glob both common locations.
-run "rm -f /etc/apt/sources.list.d/static-php*.list /etc/apt/sources.list.d/frankenphp*.list"
-run "rm -f /etc/apt/keyrings/static-php*.gpg /etc/apt/keyrings/frankenphp*.gpg /etc/apt/keyrings/pkg-dunglas*.gpg"
-run "rm -f /usr/share/keyrings/static-php*.gpg /usr/share/keyrings/frankenphp*.gpg /usr/share/keyrings/pkg-dunglas*.gpg"
 
 msg "Removing Node.js…"
-# Legacy NodeSource leftovers from older installers (apt-managed nodejs).
 purge_installed nodejs
 run "rm -f /etc/apt/sources.list.d/nodesource.list"
 run "rm -f /etc/apt/keyrings/nodesource.gpg /usr/share/keyrings/nodesource.gpg"
-# auraCP-managed Node lives under /opt/auracp/node (removed with the panel above);
-# also clean the system-PATH symlinks the installer added.
 run "rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx"
 
 # ── 3. databases ────────────────────────────────────────────────────────────
@@ -214,18 +209,14 @@ if [ "$KEEP_DB" -eq 0 ]; then
   stop_unit mariadb
   purge_installed mariadb-server mariadb-client mariadb-common
   run "rm -rf /var/lib/mysql /etc/mysql"
-  # third-party apt source/keyring added by the installer for mariadb.org
   run "rm -f /etc/apt/sources.list.d/mariadb.list /usr/share/keyrings/mariadb.asc"
 
   msg "Removing PostgreSQL (+ data)…"
   stop_unit postgresql
-  # Enumerate installed postgresql* packages — avoids apt's glob match against
-  # every postgresql-* package in your apt sources (hundreds of "not installed").
   pg_pkgs=$(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'postgresql*' 2>/dev/null \
             | awk '$2=="installed"{print $1}' | tr '\n' ' ')
   [ -n "$pg_pkgs" ] && run "apt-get purge -y $pg_pkgs"
   run "rm -rf /var/lib/postgresql /etc/postgresql"
-  # third-party apt source/keyring added by the installer for apt.postgresql.org
   run "rm -f /etc/apt/sources.list.d/pgdg.list /usr/share/keyrings/pgdg.gpg"
 else
   msg "Keeping databases (--keep-databases)."
@@ -257,11 +248,6 @@ fi
 purge_installed ufw fail2ban
 
 # ── 5. service users + groups that apt-purge keeps for re-install rebinding ─
-# Packages like mariadb-server, postgresql, redis-server and the docker
-# install script create system users/groups (`mysql`, `postgres`, `redis`,
-# `docker` group) and leave them behind on purge — by design, so a re-install
-# can rebind to existing data directories. We've just removed those data
-# directories, so those accounts are now dead weight. Drop them.
 msg "Removing service users + groups left behind by purged packages…"
 if [ "$KEEP_DB" -eq 0 ]; then
   for u in mysql postgres; do
@@ -279,9 +265,7 @@ fi
 msg "Cleaning installer temp files…"
 run "rm -f /tmp/nodesource_setup.sh /tmp/get-docker.sh /tmp/typesense-server.deb"
 run "rm -f /tmp/auracp-cron-* 2>/dev/null"
-# .bak files our own sed -i.bak edits may have left in earlier sections
 run "rm -f /etc/apt/sources.list.bak /etc/hosts.bak"
-# any backup tarballs the panel produced
 run "rm -rf /var/lib/auracp/backups"
 
 msg "Refreshing apt (sources we removed are now gone)…"

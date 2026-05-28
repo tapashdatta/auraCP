@@ -4,9 +4,12 @@
 # Supported: Debian 12 (bookworm), Debian 13 (trixie),
 #            Ubuntu 22.04 (jammy), Ubuntu 24.04 (noble) — on amd64 + arm64.
 #
-# Required packages are always installed; everything else is the admin's choice
-# (MariaDB and/or PostgreSQL, Node.js, PHP, Python, Redis, security hardening).
-# Install only what you'll use — that's the whole point of auraCP.
+# v0.2.0 stack (replaces v0.1.x Caddy + FrankenPHP):
+#   - nginx (1.30 mainline, with cache_purge module)
+#   - PHP-FPM (multiple versions side-by-side from deb.sury.org)
+#   - go-acme/lego in auracpd (in-process ACME — no certbot)
+#   - Node.js from nodejs.org tarballs, optional pm2-runtime in systemd
+#   - MariaDB / PostgreSQL / Redis / Typesense / Docker / UFW + fail2ban — optional
 #
 # Usage:
 #   sudo ./install.sh                 # interactive
@@ -15,22 +18,22 @@
 #
 # Selection flags (override defaults; imply --non-interactive when given):
 #   --db=mariadb|postgres|both|none   --node=yes|no      --php=yes|no
-#   --python=yes|no                   --redis=yes|no
+#   --php-version=8.3|8.4|8.5         --python=yes|no    --redis=yes|no
 #   --mariadb-version=10.11|11.4|11.8 --postgres-version=16|17|18
 #   --node-version=20|22|24
 #   --typesense=yes|no                --docker=yes|no
 #   --security=yes|no                 --port=8443
-#   --panel-domain=panel.example.com  (front the panel; Caddy issues its SSL cert)
+#   --panel-domain=panel.example.com  (front the panel via nginx; auracpd issues its LE cert)
 #
 # Or via env: AURACP_MARIADB, AURACP_POSTGRES, AURACP_NODE, AURACP_PHP,
-#   AURACP_PYTHON, AURACP_REDIS, AURACP_SECURITY, AURACP_PORT
+#   AURACP_PHP_VERSION, AURACP_PYTHON, AURACP_REDIS, AURACP_SECURITY, AURACP_PORT
 #
 set -euo pipefail
 
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.18"
+AURACP_VERSION="0.2.0"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -41,10 +44,7 @@ INTERACTIVE=1                           # auto-disabled when selection flags are
 
 # optional components (yes/no); defaults chosen for a typical PHP+DB host
 OPT_PHP="${AURACP_PHP:-yes}"
-# NOTE: there's no PHP version knob. FrankenPHP statically embeds the PHP
-# runtime — its installer ignores any version argument and ships whatever the
-# latest FrankenPHP release bundles. Exposing a choice that the underlying
-# tool doesn't honour would just deceive the user.
+PHP_VERSION="${AURACP_PHP_VERSION:-8.4}"   # 8.3 | 8.4 | 8.5 from deb.sury.org
 OPT_NODE="${AURACP_NODE:-yes}"
 OPT_PYTHON="${AURACP_PYTHON:-no}"
 OPT_MARIADB="${AURACP_MARIADB:-yes}"
@@ -63,7 +63,7 @@ POSTGRES_VERSION="${AURACP_POSTGRES_VERSION:-18}"     # 18 | 17 | 16
 PREFIX="/opt/auracp"
 DATA_DIR="/var/lib/auracp"
 ETC_DIR="/etc/auracp"
-CADDY_ARCH=""
+ARCH=""
 OS_ID=""           # debian | ubuntu
 OS_CODENAME=""     # trixie | bookworm | noble | jammy …
 
@@ -128,26 +128,25 @@ preflight() {
   esac
 
   case "$(uname -m)" in
-    x86_64|amd64) CADDY_ARCH="amd64" ;;
-    aarch64|arm64) CADDY_ARCH="arm64" ;;
-    *) [ "$DRY_RUN" -eq 1 ] || die "Unsupported architecture: $(uname -m)" ; CADDY_ARCH="amd64" ;;
+    x86_64|amd64) ARCH="amd64" ;;
+    aarch64|arm64) ARCH="arm64" ;;
+    *) [ "$DRY_RUN" -eq 1 ] || die "Unsupported architecture: $(uname -m)" ; ARCH="amd64" ;;
   esac
 
   if [ "$DRY_RUN" -eq 0 ] && command -v ss >/dev/null 2>&1; then
-    check_port_or_own 80    caddy
-    check_port_or_own 443   caddy
+    check_port_or_own 80    nginx
+    check_port_or_own 443   nginx
     check_port_or_own "$PANEL_PORT" auracpd
   fi
-  ok "Preflight passed (arch: ${CADDY_ARCH}, panel port: ${PANEL_PORT})."
+  ok "Preflight passed (arch: ${ARCH}, panel port: ${PANEL_PORT})."
 }
 
 # check_port_or_own PORT EXPECTED_PROCESS — dies if PORT is held by anything
-# other than the named auraCP service. This lets you re-run the installer on a
-# host where the panel/Caddy is already up (e.g. after `dpkg -i auracp.deb`).
+# other than the named auraCP service. Allows re-running on a host where the
+# panel/nginx is already up (e.g. after `dpkg -i auracp.deb`).
 check_port_or_own() {
   local port="$1" expected="$2"
   ss -ltn "( sport = :$port )" 2>/dev/null | grep -q LISTEN || return 0
-  # something is listening — find out what
   local who
   who=$(ss -ltnpH "( sport = :$port )" 2>/dev/null | sed -n 's/.*users:((\"\([^\"]*\)\".*/\1/p' | head -1)
   if [ -z "$who" ] || [ "$who" = "$expected" ]; then
@@ -180,6 +179,7 @@ parse_args() {
         esac ;;
       --node=*)        sawSelection=1; OPT_NODE="${arg#*=}" ;;
       --php=*)         sawSelection=1; OPT_PHP="${arg#*=}" ;;
+      --php-version=*) PHP_VERSION="${arg#*=}" ;;
       --mariadb-version=*)  MARIADB_VERSION="${arg#*=}" ;;
       --postgres-version=*) POSTGRES_VERSION="${arg#*=}" ;;
       --node-version=*)     NODE_MAJOR="${arg#*=}" ;;
@@ -192,6 +192,7 @@ parse_args() {
       *) die "Unknown option: $arg (try --help)" ;;
     esac
   done
+  case "$PHP_VERSION"     in 8.3|8.4|8.5) ;;     *) die "--php-version must be 8.3 / 8.4 / 8.5";; esac
   case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
   case "$POSTGRES_VERSION" in 16|17|18) ;;       *) die "--postgres-version must be 16 / 17 / 18";; esac
   case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
@@ -223,8 +224,6 @@ mariadb_available() {
   echo "$_MARIADB_AVAILABLE"
 }
 
-# apt.postgresql.org keeps a single -pgdg repo per codename with every current
-# major in it — so we probe codename support once and report all current majors.
 _POSTGRES_PROBED=0; _POSTGRES_AVAILABLE=""
 postgres_available() {
   if [ "$_POSTGRES_PROBED" -eq 0 ]; then
@@ -237,8 +236,20 @@ postgres_available() {
   echo "$_POSTGRES_AVAILABLE"
 }
 
-# Snap $1's current value to one of the space-separated values in $2; if it
-# isn't a member, fall back to the first (newest) one. Echoes the chosen value.
+# PHP — deb.sury.org publishes one repo per codename. We probe it once.
+_PHP_PROBED=0; _PHP_AVAILABLE=""
+php_available() {
+  if [ "$_PHP_PROBED" -eq 0 ]; then
+    local base="https://packages.sury.org"
+    local repo="php"; [ "$OS_ID" = "ubuntu" ] && repo="php"
+    if curl -fsI -o /dev/null --max-time 5 "${base}/${repo}/dists/${OS_CODENAME}/InRelease" 2>/dev/null; then
+      _PHP_AVAILABLE="8.5 8.4 8.3"
+    fi
+    _PHP_PROBED=1
+  fi
+  echo "$_PHP_AVAILABLE"
+}
+
 snap_to_available() {
   local want="$1" list="$2"
   case " $list " in
@@ -251,8 +262,6 @@ snap_to_available() {
 # interactive selection
 # ──────────────────────────────────────────────────────────────────────────
 select_components() {
-  # Interactive unless a selection flag forced preset mode, or there's no
-  # terminal at all. Use /dev/tty (not stdin) so `curl … | bash` still prompts.
   if [ "$INTERACTIVE" -eq 0 ] || [ ! -r /dev/tty ]; then
     msg "Using preset selection (non-interactive)."
     return
@@ -264,14 +273,12 @@ select_components() {
   fi
 }
 
-# Asked for the panel domain regardless of whether other selection flags forced
-# the package menu to be skipped — this is its own decision.
 prompt_panel_domain() {
-  [ -n "$PANEL_DOMAIN" ] && return 0   # already set via flag / env
-  [ "$ASSUME_YES" -eq 1 ] && return 0  # honour --yes (no interactive bits)
+  [ -n "$PANEL_DOMAIN" ] && return 0
+  [ "$ASSUME_YES" -eq 1 ] && return 0
   [ -r /dev/tty ] || return 0
   printf '\n%s\n' "${C_B}Panel domain (optional)${C_RESET}"
-  printf '%s\n' "  Setting a domain lets Caddy issue a real Let's Encrypt cert for the panel."
+  printf '%s\n' "  Setting a domain lets auracpd issue a real Let's Encrypt cert for the panel."
   printf '%s\n' "  Point its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}."
   read -r -p "  Panel domain: " PANEL_DOMAIN < /dev/tty || true
 }
@@ -279,16 +286,16 @@ prompt_panel_domain() {
 select_whiptail() {
   local chosen
   chosen=$(whiptail --title "auraCP — optional components" \
-    --checklist "Space to toggle, Enter to confirm.\nRequired (auracpd, Caddy) are always installed." \
-    20 74 7 \
-    MARIADB "MariaDB database engine"          "$(onoff "$OPT_MARIADB")" \
+    --checklist "Space to toggle, Enter to confirm.\nRequired (auracpd, nginx) are always installed." \
+    20 74 9 \
+    MARIADB "MariaDB database engine"            "$(onoff "$OPT_MARIADB")" \
     POSTGRES "PostgreSQL database engine"        "$(onoff "$OPT_POSTGRES")" \
-    NODE    "Node.js ${NODE_MAJOR} LTS runtime" "$(onoff "$OPT_NODE")" \
-    PHP     "PHP (FrankenPHP, embedded)"        "$(onoff "$OPT_PHP")" \
+    NODE    "Node.js ${NODE_MAJOR} LTS runtime"  "$(onoff "$OPT_NODE")" \
+    PHP     "PHP ${PHP_VERSION}-FPM (deb.sury.org)" "$(onoff "$OPT_PHP")" \
     PYTHON  "Python 3 (gunicorn/uvicorn)"        "$(onoff "$OPT_PYTHON")" \
     REDIS   "Redis (object cache)"               "$(onoff "$OPT_REDIS")" \
-    TYPESENSE "Typesense search server"           "$(onoff "$OPT_TYPESENSE")" \
-    DOCKER  "Docker engine"                       "$(onoff "$OPT_DOCKER")" \
+    TYPESENSE "Typesense search server"          "$(onoff "$OPT_TYPESENSE")" \
+    DOCKER  "Docker engine"                      "$(onoff "$OPT_DOCKER")" \
     SECURITY "UFW firewall + fail2ban"           "$(onoff "$OPT_SECURITY")" \
     3>&1 1>&2 2>&3 < /dev/tty) || die "Installation cancelled."
 
@@ -303,6 +310,24 @@ select_whiptail() {
   case "$chosen" in *DOCKER*) OPT_DOCKER=yes;; esac
   case "$chosen" in *SECURITY*) OPT_SECURITY=yes;; esac
 
+  if yesno "$OPT_PHP"; then
+    local pver_list pver_args=() pver_count=0 v
+    pver_list=$(php_available)
+    if [ -z "$pver_list" ]; then
+      whiptail --title "PHP unavailable" --msgbox \
+        "deb.sury.org publishes no PHP repo for ${OS_ID} ${OS_CODENAME}.\nPHP will be skipped." 10 60 < /dev/tty || true
+      OPT_PHP=no
+    else
+      PHP_VERSION=$(snap_to_available "$PHP_VERSION" "$pver_list")
+      for v in $pver_list; do
+        pver_args+=("$v" "PHP $v" "$(req "$PHP_VERSION" "$v")")
+        pver_count=$((pver_count + 1))
+      done
+      PHP_VERSION=$(whiptail --title "PHP version" --radiolist \
+        "Available from deb.sury.org (additional versions can be added later from the panel):" 12 64 "$pver_count" \
+        "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || PHP_VERSION="${pver_list%% *}"
+    fi
+  fi
   if yesno "$OPT_MARIADB"; then
     local mver_list mver_args=() mver_count=0 v
     mver_list=$(mariadb_available)
@@ -349,7 +374,7 @@ select_whiptail() {
   fi
   if yesno "$OPT_NODE"; then
     NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
-      "Pick the system-wide Node.js LTS (from NodeSource):" 12 60 3 \
+      "Pick the system-wide Node.js LTS:" 12 60 3 \
       24 "Node 24 LTS (recommended)" "$(req "$NODE_MAJOR" 24)" \
       22 "Node 22 LTS"               "$(req "$NODE_MAJOR" 22)" \
       20 "Node 20 LTS"               "$(req "$NODE_MAJOR" 20)" \
@@ -357,7 +382,7 @@ select_whiptail() {
   fi
   if [ -z "$PANEL_DOMAIN" ]; then
     PANEL_DOMAIN=$(whiptail --title "Panel domain (optional)" --inputbox \
-      "Setting a domain lets Caddy issue a real Let's Encrypt cert for the panel.\nPoint its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}." \
+      "Setting a domain lets auracpd issue a real Let's Encrypt cert for the panel.\nPoint its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}." \
       12 70 "$PANEL_DOMAIN" 3>&1 1>&2 2>&3 < /dev/tty) || PANEL_DOMAIN=""
   fi
 }
@@ -368,7 +393,19 @@ select_readline() {
   OPT_MARIADB=$(ask "Install MariaDB?"   "$OPT_MARIADB")
   OPT_POSTGRES=$(ask "Install PostgreSQL?" "$OPT_POSTGRES")
   OPT_NODE=$(ask "Install Node.js ${NODE_MAJOR} LTS?" "$OPT_NODE")
-  OPT_PHP=$(ask "Install PHP (FrankenPHP, embedded)?" "$OPT_PHP")
+  OPT_PHP=$(ask "Install PHP-FPM (deb.sury.org)?" "$OPT_PHP")
+  if yesno "$OPT_PHP"; then
+    local pver_list
+    pver_list=$(php_available)
+    if [ -z "$pver_list" ]; then
+      warn "deb.sury.org has no PHP repo for ${OS_ID} ${OS_CODENAME} — skipping PHP."
+      OPT_PHP=no
+    else
+      PHP_VERSION=$(snap_to_available "$PHP_VERSION" "$pver_list")
+      read -r -p "  PHP version [$(echo "$pver_list" | tr ' ' '/')] (${PHP_VERSION}): " v < /dev/tty || true
+      case " $pver_list " in *" ${v:-$PHP_VERSION} "*) PHP_VERSION="${v:-$PHP_VERSION}";; esac
+    fi
+  fi
   if yesno "$OPT_MARIADB"; then
     local mver_list
     mver_list=$(mariadb_available)
@@ -424,14 +461,15 @@ print_plan() {
   printf '%s\n' "${C_B}auraCP ${AURACP_VERSION} — installation plan${C_RESET}"
   printf '%s\n' "${C_DIM}────────────────────────────────────────────${C_RESET}"
   printf '  %-22s %s\n' "auracpd + CLI" "${C_GRN}required${C_RESET}"
-  printf '  %-22s %s\n' "Caddy (HTTP/3, SSL)" "${C_GRN}required${C_RESET}"
+  printf '  %-22s %s\n' "nginx (1.30 mainline)" "${C_GRN}required${C_RESET}"
   m="$(mark "$OPT_MARIADB")";  yesno "$OPT_MARIADB"  && m="$m ${C_DIM}(${MARIADB_VERSION})${C_RESET}"
   printf '  %-22s %s\n' "MariaDB" "$m"
   m="$(mark "$OPT_POSTGRES")"; yesno "$OPT_POSTGRES" && m="$m ${C_DIM}(${POSTGRES_VERSION})${C_RESET}"
   printf '  %-22s %s\n' "PostgreSQL" "$m"
   m="$(mark "$OPT_NODE")";     yesno "$OPT_NODE"     && m="$m ${C_DIM}(${NODE_MAJOR})${C_RESET}"
   printf '  %-22s %s\n' "Node.js" "$m"
-  printf '  %-22s %s\n' "PHP / FrankenPHP" "$(mark "$OPT_PHP")"
+  m="$(mark "$OPT_PHP")";      yesno "$OPT_PHP"      && m="$m ${C_DIM}(${PHP_VERSION})${C_RESET}"
+  printf '  %-22s %s\n' "PHP-FPM" "$m"
   printf '  %-22s %s\n' "Python 3" "$(mark "$OPT_PYTHON")"
   printf '  %-22s %s\n' "Redis" "$(mark "$OPT_REDIS")"
   printf '  %-22s %s\n' "Typesense" "$(mark "$OPT_TYPESENSE")"
@@ -447,16 +485,13 @@ print_plan() {
 }
 mark() { yesno "$1" && echo "${C_GRN}install${C_RESET}" || echo "${C_DIM}skip${C_RESET}"; }
 
-# Plain-text version of the plan for embedding inside whiptail's --yesno box
-# (whiptail strips ANSI). Same content as print_plan, no colour, dot-leader
-# alignment for legibility in the dialog's monospaced render.
 build_plan() {
   local mariadb_l postgres_l node_l php_l python_l redis_l \
         typesense_l docker_l security_l panel_l
   yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"  || mariadb_l="skip"
   yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})" || postgres_l="skip"
   yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"           || node_l="skip"
-  yesno "$OPT_PHP"       && php_l="install"     || php_l="skip"
+  yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSION})"           || php_l="skip"
   yesno "$OPT_PYTHON"    && python_l="install"  || python_l="skip"
   yesno "$OPT_REDIS"     && redis_l="install"   || redis_l="skip"
   yesno "$OPT_TYPESENSE" && typesense_l="install" || typesense_l="skip"
@@ -465,14 +500,14 @@ build_plan() {
   if [ -n "$PANEL_DOMAIN" ]; then panel_l="https://${PANEL_DOMAIN}"
   else panel_l="https://<server-ip>:${PANEL_PORT}"; fi
   cat <<EOF
-auraCP ${AURACP_VERSION} on ${OS_ID:-?} ${OS_CODENAME:-?} (${CADDY_ARCH})
+auraCP ${AURACP_VERSION} on ${OS_ID:-?} ${OS_CODENAME:-?} (${ARCH})
 
   auracpd + CLI .......  required
-  Caddy ...............  required
+  nginx ...............  required (1.30 mainline)
   MariaDB .............  ${mariadb_l}
   PostgreSQL ..........  ${postgres_l}
   Node.js .............  ${node_l}
-  PHP / FrankenPHP ....  ${php_l}
+  PHP-FPM .............  ${php_l}
   Python 3 ............  ${python_l}
   Redis ...............  ${redis_l}
   Typesense ...........  ${typesense_l}
@@ -486,14 +521,10 @@ EOF
 }
 
 confirm() {
-  # Non-interactive paths still want the plan in the log, so print it then go.
   [ "$DRY_RUN" -eq 1 ]    && { print_plan; return 0; }
   [ "$ASSUME_YES" -eq 1 ] && { print_plan; return 0; }
   [ -r /dev/tty ]         || { print_plan; return 0; }
 
-  # TUI path: plan + confirm both inside one whiptail dialog. Consistent with
-  # the rest of the installer's TUI; "Install" / "Cancel" buttons make intent
-  # clearer than the generic Yes/No, and Esc/Cancel aborts.
   if [ "$INTERACTIVE" -ne 0 ] && command -v whiptail >/dev/null 2>&1; then
     if whiptail --title "auraCP installer — review" \
         --yes-button "Install" --no-button "Cancel" \
@@ -503,7 +534,6 @@ confirm() {
     die "Aborted."
   fi
 
-  # Fallback (no whiptail / preset mode): colour plan on stdout + readline.
   print_plan
   local a; read -r -p "Proceed with this plan? [Y/n]: " a < /dev/tty || true
   case "${a:-y}" in y|Y|"") ;; *) die "Aborted." ;; esac
@@ -519,39 +549,107 @@ apt_refresh() {
 
 install_base() { # required
   msg "Installing base packages…"
-  run "apt-get install -y --no-install-recommends ca-certificates curl gnupg cron logrotate rsync unzip"
+  run "apt-get install -y --no-install-recommends ca-certificates curl gnupg cron logrotate rsync unzip lsb-release apt-transport-https"
   ok "Base packages ready."
 }
 
-install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
-  msg "Installing Caddy (Cloudflare DNS + Souin cache)…"
-  # No-build custom binary from the Caddy download API (keeps Go off the server).
-  local url="https://caddyserver.com/api/download?os=linux&arch=${CADDY_ARCH}"
-  url+="&p=github.com/caddy-dns/cloudflare&p=github.com/darkweak/souin/plugins/caddy"
-  run "curl -fsSL '${url}' -o /usr/bin/caddy"
-  run "chmod +x /usr/bin/caddy"
-  run "id caddy >/dev/null 2>&1 || useradd --system --home /var/lib/caddy --shell /usr/sbin/nologin caddy"
-  run "mkdir -p /etc/caddy/sites /var/lib/caddy"
-  # /var/lib/caddy is Caddy's state dir (autosaved config, ACME cache); it must
-  # be writable by the caddy service user or you get "permission denied" spam.
-  run "chown -R caddy:caddy /var/lib/caddy"
-  run "[ -f /etc/caddy/Caddyfile ] || printf 'import sites/*\\n' > /etc/caddy/Caddyfile"
-  # AmbientCapabilities is what lets the unprivileged caddy user bind :80/:443.
-  # Without it the unit fails on startup with `bind: permission denied` —
-  # Caddy's own packaging includes this directive for the same reason.
-  install_unit caddy "Caddy web server" \
-    "/usr/bin/caddy run --config /etc/caddy/Caddyfile" \
-    caddy \
-    "/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force" \
-    "AmbientCapabilities=CAP_NET_BIND_SERVICE"
-  ok "Caddy ready."
+install_nginx() { # required — nginx 1.30 mainline from nginx.org
+  msg "Installing nginx (mainline, from nginx.org)…"
+  run "install -d -m 0755 /usr/share/keyrings"
+  run "curl -fsSL https://nginx.org/keys/nginx_signing.key | gpg --dearmor -o /usr/share/keyrings/nginx-archive-keyring.gpg"
+  # nginx.org publishes per-distro repos at /packages/mainline/{debian,ubuntu}/.
+  local distro="${OS_ID:-debian}"
+  echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/${distro} ${OS_CODENAME} nginx" \
+    | run "tee /etc/apt/sources.list.d/nginx.list >/dev/null"
+  run "apt-get update -y"
+  run "apt-get install -y nginx"
+  # Bootstrap nginx.conf with auraCP includes (FastCGI + proxy cache zones,
+  # gzip on, server_tokens off, plus the sites-enabled include line so all
+  # vhosts auracpd writes to /etc/nginx/sites-available + symlinks become live.)
+  if [ "$DRY_RUN" -eq 0 ]; then
+    install -d -m 0755 /etc/nginx/sites-available /etc/nginx/sites-enabled \
+                       /var/cache/nginx/auracp /var/lib/auracp/acme \
+                       /etc/auracp/ssl /run/php-fpm
+    cat > /etc/nginx/nginx.conf <<'EOF'
+# auraCP-managed nginx.conf — do not edit by hand.
+user www-data;
+worker_processes auto;
+pid /run/nginx.pid;
+
+events {
+    worker_connections 4096;
+    use epoll;
+    multi_accept on;
+}
+
+http {
+    server_tokens off;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    gzip on;
+    gzip_vary on;
+    gzip_proxied any;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml application/json application/javascript application/xml+rss image/svg+xml;
+
+    # auraCP cache zones — used opt-in per site via fastcgi_cache / proxy_cache directives.
+    fastcgi_cache_path /var/cache/nginx/auracp levels=1:2 keys_zone=auracp_fastcgi:10m max_size=512m inactive=60m use_temp_path=off;
+    fastcgi_cache_key  "$scheme$request_method$host$request_uri";
+    proxy_cache_path   /var/cache/nginx/auracp_proxy levels=1:2 keys_zone=auracp_proxy:10m max_size=512m inactive=60m use_temp_path=off;
+    proxy_cache_key    "$scheme$request_method$host$request_uri";
+
+    # Per-site vhosts live under sites-available and are symlinked in.
+    include /etc/nginx/conf.d/*.conf;
+    include /etc/nginx/sites-enabled/*;
+}
+EOF
+    # Disable the default vhost shipped by the nginx.org package.
+    rm -f /etc/nginx/conf.d/default.conf
+    # tmpfiles entry so /run/php-fpm survives reboots.
+    cat > /etc/tmpfiles.d/auracp.conf <<'EOF'
+d /run/php-fpm 0755 root root -
+EOF
+    systemd-tmpfiles --create /etc/tmpfiles.d/auracp.conf >/dev/null 2>&1 || true
+  fi
+  run "systemctl enable --now nginx"
+  ok "nginx ready."
+}
+
+install_php_fpm() {
+  msg "Installing PHP ${PHP_VERSION}-FPM (from deb.sury.org)…"
+  local distro="${OS_ID:-debian}"
+  # deb.sury.org publishes one signing key for the whole project (works on
+  # Debian + Ubuntu); the per-distro path is /php/ for both.
+  run "install -d -m 0755 /usr/share/keyrings"
+  run "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg"
+  echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
+    | run "tee /etc/apt/sources.list.d/sury-php.list >/dev/null"
+  run "apt-get update -y"
+  local v="$PHP_VERSION"
+  run "apt-get install -y --no-install-recommends \
+       php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl \
+       php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl php${v}-mysql \
+       php${v}-pgsql php${v}-redis php${v}-opcache"
+  # auraCP owns all PHP-FPM pools — disable the default `www` pool the package
+  # auto-creates so it doesn't conflict with per-site pools the panel writes.
+  if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then
+    mv -f "/etc/php/${v}/fpm/pool.d/www.conf" "/etc/php/${v}/fpm/pool.d/www.conf.disabled"
+  fi
+  run "systemctl enable --now php${v}-fpm"
+  ok "PHP ${v}-FPM ready (additional versions can be added later from the panel)."
 }
 
 install_mariadb() {
   # Belt-and-suspenders: the TUI path already snaps MARIADB_VERSION to an
   # available value, but a user passing --mariadb-version= reaches here with
-  # the raw value. Re-validate against the probe so we don't write a doomed
-  # apt source that 404s on the very next apt-get update.
+  # the raw value. Re-validate against the probe.
   local available
   available=$(mariadb_available)
   if [ -z "$available" ]; then
@@ -607,10 +705,8 @@ install_postgres() {
 install_node() {
   msg "Installing Node.js ${NODE_MAJOR} (latest patch, from nodejs.org)…"
   local arch="x64"
-  [ "$CADDY_ARCH" = "arm64" ] && arch="arm64"
+  [ "$ARCH" = "arm64" ] && arch="arm64"
 
-  # Resolve the latest patch for the chosen major from nodejs.org/dist/index.json.
-  # Python3 is on every Debian/Ubuntu base image; cheap one-shot parse.
   local ver
   ver=$(curl -fsSL https://nodejs.org/dist/index.json 2>/dev/null \
         | python3 -c "
@@ -622,9 +718,6 @@ for r in data:
         print(r['version'][1:]); break
 " 2>/dev/null || true)
   if [ -z "$ver" ]; then
-    # Don't silently guess at ${NODE_MAJOR}.0.0 — that's a years-old initial
-    # release and may have been pruned. Bail loud so the operator notices and
-    # retries (transient DNS / proxy hiccup is the usual cause).
     die "Could not resolve latest Node ${NODE_MAJOR}.x from nodejs.org/dist. Check connectivity and re-run."
   fi
 
@@ -634,21 +727,11 @@ for r in data:
   run "tar -xJf /tmp/node-${ver}.tar.xz -C ${dir} --strip-components=1"
   run "rm -f /tmp/node-${ver}.tar.xz"
 
-  # Default symlink + system PATH symlinks so npm/wp-cli/etc. find `node`.
   run "ln -sfn ${dir} ${PREFIX}/node/default"
   run "ln -sf  ${PREFIX}/node/default/bin/node /usr/local/bin/node"
   run "ln -sf  ${PREFIX}/node/default/bin/npm  /usr/local/bin/npm"
   run "ln -sf  ${PREFIX}/node/default/bin/npx  /usr/local/bin/npx"
-  ok "Node.js ${ver} installed at ${dir} (and /usr/local/bin/{node,npm,npx}); auracpd registers it on next start."
-}
-
-install_php() {
-  msg "Installing FrankenPHP (PHP statically embedded)…"
-  # FrankenPHP's upstream install.sh ships a static binary with PHP embedded —
-  # the bundled PHP version is fixed per FrankenPHP release (currently 8.5).
-  run "curl -fsSL https://frankenphp.dev/install.sh | sh"
-  run "mv -f frankenphp /usr/bin/frankenphp 2>/dev/null || true"
-  ok "FrankenPHP ready."
+  ok "Node.js ${ver} installed at ${dir} (and /usr/local/bin/{node,npm,npx})."
 }
 
 install_python() {
@@ -667,7 +750,7 @@ install_redis() {
 install_typesense() {
   msg "Installing Typesense ${TYPESENSE_VERSION} (search server)…"
   local deb="/tmp/typesense-server.deb"
-  run "curl -fsSL 'https://dl.typesense.org/releases/${TYPESENSE_VERSION}/typesense-server-${TYPESENSE_VERSION}-${CADDY_ARCH}.deb' -o ${deb}"
+  run "curl -fsSL 'https://dl.typesense.org/releases/${TYPESENSE_VERSION}/typesense-server-${TYPESENSE_VERSION}-${ARCH}.deb' -o ${deb}"
   run "apt-get install -y ${deb}"
   run "rm -f ${deb}"
   run "systemctl enable --now typesense-server 2>/dev/null || true"
@@ -676,7 +759,6 @@ install_typesense() {
 
 install_docker() {
   msg "Installing Docker engine…"
-  # Official convenience script — supports Debian + Ubuntu on amd64 + arm64.
   run "curl -fsSL https://get.docker.com -o /tmp/get-docker.sh"
   run "sh /tmp/get-docker.sh"
   run "rm -f /tmp/get-docker.sh"
@@ -709,12 +791,10 @@ install_auracpd() { # required — the control plane
 
   local repo deb=""
   repo="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)"
-  # Find a prebuilt .deb without `ls` (which exits non-zero on no-match under set -e).
-  for f in "$repo"/dist/auracp_*_"${CADDY_ARCH}".deb; do
+  for f in "$repo"/dist/auracp_*_"${ARCH}".deb; do
     [ -f "$f" ] && { deb="$f"; break; }
   done
 
-  # Preferred: install the prebuilt .deb (handles binary + systemd unit + enable).
   if [ -n "$deb" ]; then
     run "apt-get install -y '$deb'"
     ok "auracpd installed from $(basename "$deb")."
@@ -727,7 +807,7 @@ install_auracpd() { # required — the control plane
     run "install -m 0755 '$repo/bin/auracp'  ${PREFIX}/bin/auracp 2>/dev/null || true"
   else
     warn "no .deb or local binary found — downloading the latest release."
-    run "curl -fsSL https://github.com/auracp/auracp/releases/latest/download/auracpd-linux-${CADDY_ARCH} -o ${PREFIX}/bin/auracpd"
+    run "curl -fsSL https://github.com/auracp/auracp/releases/latest/download/auracpd-linux-${ARCH} -o ${PREFIX}/bin/auracpd"
     run "chmod +x ${PREFIX}/bin/auracpd"
   fi
   run "ln -sf ${PREFIX}/bin/auracp /usr/local/bin/auracp"
@@ -737,12 +817,6 @@ install_auracpd() { # required — the control plane
 }
 
 # install_unit NAME DESC EXECSTART USER [EXECRELOAD] [EXTRA_SERVICE_DIRECTIVES]
-# Optional ExecReload lets `systemctl reload <name>` succeed — required for
-# Caddy so auracpd can apply a new panel domain / site config without
-# restarting the whole web server (which would drop in-flight connections).
-# Optional extra-directives is a raw multi-line string injected into [Service]
-# — used by Caddy for AmbientCapabilities=CAP_NET_BIND_SERVICE so the
-# unprivileged caddy user can bind :80 and :443.
 install_unit() {
   local name="$1" desc="$2" exec="$3" user="$4" reload="${5:-}" extra="${6:-}"
   if [ "$DRY_RUN" -eq 1 ]; then
@@ -762,11 +836,9 @@ install_unit() {
   systemctl enable --now "${name}"
 }
 
-# setup_panel_domain runs LAST — after Caddy and everything else is ready — so
-# Caddy can immediately obtain the Let's Encrypt certificate for the panel domain.
 setup_panel_domain() {
   [ -n "$PANEL_DOMAIN" ] || return 0
-  msg "Configuring panel domain ${PANEL_DOMAIN} (Caddy will issue its Let's Encrypt cert)…"
+  msg "Configuring panel domain ${PANEL_DOMAIN} (auracpd issues its Let's Encrypt cert)…"
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "${C_DIM}[dry-run]${C_RESET} systemd drop-in adds -panel-domain=${PANEL_DOMAIN}; restart auracpd"
     return
@@ -779,7 +851,7 @@ ExecStart=${PREFIX}/bin/auracpd -addr :${PANEL_PORT} -db ${DATA_DIR}/auracp.db -
 EOF
   systemctl daemon-reload
   systemctl restart auracpd
-  ok "Panel domain set. Point a DNS A record for ${PANEL_DOMAIN} at this server; Caddy issues the cert automatically."
+  ok "Panel domain set. Point a DNS A record for ${PANEL_DOMAIN} at this server; auracpd issues the cert automatically."
 }
 
 finalize() {
@@ -788,7 +860,7 @@ finalize() {
   echo
   if [ -n "$PANEL_DOMAIN" ]; then
     printf '%s\n' "  Open ${C_B}https://${PANEL_DOMAIN}${C_RESET} and create your admin account (first-run setup)."
-    printf '%s\n' "  ${C_DIM}Caddy issues a real Let's Encrypt cert once ${PANEL_DOMAIN} resolves to this server.${C_RESET}"
+    printf '%s\n' "  ${C_DIM}auracpd issues a real Let's Encrypt cert once ${PANEL_DOMAIN} resolves to this server.${C_RESET}"
   else
     printf '%s\n' "  Open ${C_B}https://<server-ip>:${PANEL_PORT}${C_RESET} and create your admin account (first-run setup)."
     printf '%s\n' "  ${C_DIM}Self-signed cert — accept the browser warning, or set a Panel Domain in Settings.${C_RESET}"
@@ -805,15 +877,15 @@ main() {
   preflight
   select_components
   prompt_panel_domain
-  confirm                 # whiptail dialog (plan + Install/Cancel) or readline fallback
+  confirm
 
   apt_refresh
   install_base
-  install_caddy
+  install_nginx
   yesno "$OPT_MARIADB"  && install_mariadb
   yesno "$OPT_POSTGRES" && install_postgres
   yesno "$OPT_NODE"     && install_node
-  yesno "$OPT_PHP"      && install_php
+  yesno "$OPT_PHP"      && install_php_fpm
   yesno "$OPT_PYTHON"   && install_python
   yesno "$OPT_REDIS"    && install_redis
   yesno "$OPT_TYPESENSE" && install_typesense
