@@ -68,7 +68,7 @@
 </script>
 
 <div class="wrap fade">
-  <span class="back" onclick={() => go('sites')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</span>
+  <button type="button" class="back" onclick={() => go('sites')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</button>
   <div class="ph"><div><h1>Users</h1><div class="sub">Panel accounts, roles &amp; permissions</div></div></div>
 
   <div class="card" style="margin-bottom:18px">
@@ -78,7 +78,10 @@
         {#each users as u}
           <tr><td><span class="mono">{u.email}</span></td><td>{roleLabel[u.role] || u.role}</td>
             <td><span class="status"><span class="sdot {u.mfaEnabled ? 's-up' : 's-down'}"></span>{u.mfaEnabled ? 'On' : 'Off'}</span></td>
-            <td style="text-align:right"><span class="manage" onclick={() => edit(u)}>Edit</span> <span class="manage" onclick={() => del(u.email)}>Delete</span></td></tr>
+            <td style="text-align:right">
+              <button type="button" class="manage" onclick={() => edit(u)}>Edit</button>
+              <button type="button" class="manage" onclick={() => del(u.email)}>Delete</button>
+            </td></tr>
         {/each}
       </tbody></table>
     {/if}
@@ -88,27 +91,38 @@
     {#if editing}<button class="btn btn-ghost" style="padding:7px 13px" onclick={resetForm}>Cancel</button>{/if}</div>
     <div class="section-b">
       <div class="two">
-        {#if !editing}<div class="field"><label>Email</label><input class="input" bind:value={f.email} placeholder="user@example.com"></div>{/if}
-        <div class="field"><label>Role</label><select class="select ui" bind:value={f.role} onchange={onRole}>
-          <option value="ROLE_ADMIN">Admin</option><option value="ROLE_SITE_MANAGER">Site Manager</option><option value="ROLE_USER">User</option>
-        </select></div>
+        {#if !editing}<div class="field"><label>
+          <span class="label-text">Email</span>
+          <input class="input" bind:value={f.email} placeholder="user@example.com">
+        </label></div>{/if}
+        <div class="field"><label>
+          <span class="label-text">Role</span>
+          <select class="select ui" bind:value={f.role} onchange={onRole}>
+            <option value="ROLE_ADMIN">Admin</option><option value="ROLE_SITE_MANAGER">Site Manager</option><option value="ROLE_USER">User</option>
+          </select>
+        </label></div>
       </div>
-      {#if !editing}<div class="field"><label>Password <span class="hint">blank = auto-generate</span></label><input class="input" bind:value={f.password}></div>{/if}
+      {#if !editing}<div class="field"><label>
+        <span class="label-text">Password <span class="hint">blank = auto-generate</span></span>
+        <input class="input" bind:value={f.password}>
+      </label></div>{/if}
 
       {#if f.role === 'ROLE_ADMIN'}
         <div class="note"><div>Admins have full access to every resource.</div></div>
       {:else}
-        <label style="font-weight:600;font-size:13px;display:block;margin:6px 0 10px">Permissions</label>
-        <div style="overflow-x:auto"><table class="perm-grid">
-          <thead><tr><th>Resource</th>{#each ACT as a}<th style="text-align:center;text-transform:capitalize">{a}</th>{/each}</tr></thead>
-          <tbody>
-            {#each RES as r}
-              <tr><td><span class="mono">{r}</span></td>
-                {#each ACT as a}<td style="text-align:center"><input type="checkbox" bind:checked={perms[r][a]}></td>{/each}
-              </tr>
-            {/each}
-          </tbody>
-        </table></div>
+        <fieldset class="perm-fieldset">
+          <legend>Permissions</legend>
+          <div style="overflow-x:auto"><table class="perm-grid">
+            <thead><tr><th>Resource</th>{#each ACT as a}<th style="text-align:center;text-transform:capitalize">{a}</th>{/each}</tr></thead>
+            <tbody>
+              {#each RES as r}
+                <tr><td><span class="mono">{r}</span></td>
+                  {#each ACT as a}<td style="text-align:center"><label class="sr-only"><span>{r} {a}</span><input type="checkbox" aria-label="{r} {a}" bind:checked={perms[r][a]}></label></td>{/each}
+                </tr>
+              {/each}
+            </tbody>
+          </table></div>
+        </fieldset>
       {/if}
 
       <div class="form-actions">
@@ -123,4 +137,7 @@
 <style>
   .perm-grid td, .perm-grid th { padding: 9px 12px; }
   .perm-grid input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--aura); cursor: pointer; }
+  /* fieldset + legend replace the orphan <label> for the permissions matrix. */
+  .perm-fieldset { border: 0; padding: 0; margin: 0 0 18px; }
+  .perm-fieldset legend { font-weight: 600; font-size: 13px; margin: 6px 0 10px; padding: 0; }
 </style>

@@ -29,12 +29,18 @@
       <h2>Create your admin account</h2>
       <p class="login-sub">First-time setup — this becomes the panel administrator</p>
       <form onsubmit={submitSetup}>
-        <div class="field"><label>Email</label>
-          <input class="input" type="email" autocomplete="username" bind:value={email} placeholder="you@example.com"></div>
-        <div class="field"><label>Password <span class="hint">min 8 characters</span></label>
-          <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder="••••••••"></div>
-        <div class="field"><label>Confirm password</label>
-          <input class="input" type="password" autocomplete="new-password" bind:value={confirm} placeholder="••••••••"></div>
+        <div class="field"><label>
+          <span class="label-text">Email</span>
+          <input class="input" type="email" autocomplete="username" bind:value={email} placeholder="you@example.com">
+        </label></div>
+        <div class="field"><label>
+          <span class="label-text">Password <span class="hint">min 8 characters</span></span>
+          <input class="input" type="password" autocomplete="new-password" bind:value={password} placeholder="••••••••">
+        </label></div>
+        <div class="field"><label>
+          <span class="label-text">Confirm password</span>
+          <input class="input" type="password" autocomplete="new-password" bind:value={confirm} placeholder="••••••••">
+        </label></div>
         {#if session.error}<div class="login-err">{session.error}</div>{/if}
         <button class="btn btn-primary login-btn" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
       </form>
@@ -42,10 +48,14 @@
       <h2>Sign in</h2>
       <p class="login-sub">Control panel access</p>
       <form onsubmit={submit}>
-        <div class="field"><label>Email</label>
-          <input class="input" type="email" autocomplete="username" bind:value={email} placeholder="you@example.com"></div>
-        <div class="field"><label>Password</label>
-          <input class="input" type="password" autocomplete="current-password" bind:value={password} placeholder="••••••••"></div>
+        <div class="field"><label>
+          <span class="label-text">Email</span>
+          <input class="input" type="email" autocomplete="username" bind:value={email} placeholder="you@example.com">
+        </label></div>
+        <div class="field"><label>
+          <span class="label-text">Password</span>
+          <input class="input" type="password" autocomplete="current-password" bind:value={password} placeholder="••••••••">
+        </label></div>
         {#if session.error}<div class="login-err">{session.error}</div>{/if}
         <button class="btn btn-primary login-btn" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
       </form>
@@ -54,7 +64,8 @@
       <p class="login-sub">Enter the 6-digit code from your authenticator app</p>
       <form onsubmit={submitCode}>
         <div class="field">
-          <input class="input" inputmode="numeric" maxlength="6" bind:value={code}
+          <label class="sr-only" for="mfa-code">Two-factor verification code</label>
+          <input id="mfa-code" class="input" inputmode="numeric" maxlength="6" bind:value={code}
             placeholder="000000" style="text-align:center;font-size:22px;letter-spacing:.4em">
         </div>
         {#if session.error}<div class="login-err">{session.error}</div>{/if}

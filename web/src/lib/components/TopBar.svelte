@@ -21,13 +21,15 @@
 </script>
 
 <div class="topbar">
-  <div class="brand" onclick={() => go('sites')} style="cursor:pointer">
+  <button class="brand" type="button" onclick={() => go('sites')} aria-label="auraCP — home">
     <span class="gem"></span>aura<span>CP</span>
-  </div>
-  <nav class="nav">
-    <a class:active={ui.view === 'sites'} onclick={() => go('sites')}>Sites</a>
-    {#if isAdmin}<a class:active={ui.view === 'users'} onclick={() => go('users')}>Users</a>{/if}
-    <a class:active={ui.view === 'instance'} onclick={() => go('instance')}>Instance</a>
+  </button>
+  <nav class="nav" aria-label="Primary">
+    <button type="button" class:active={ui.view === 'sites'}    onclick={() => go('sites')}>Sites</button>
+    {#if isAdmin}
+      <button type="button" class:active={ui.view === 'users'}  onclick={() => go('users')}>Users</button>
+    {/if}
+    <button type="button" class:active={ui.view === 'instance'} onclick={() => go('instance')}>Instance</button>
   </nav>
   <div class="spacer"></div>
   {#if host}<div class="instance-pill"><span class="sdot s-up"></span><span class="mono">{host}</span></div>{/if}

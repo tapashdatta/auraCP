@@ -3,12 +3,12 @@
   import { apiFetch } from '../lib/api.js'
 
   const META = {
-    wordpress:    { title: 'New WordPress Site', sub: 'Managed WordPress · wp-cli · automatic database' },
-    php:          { title: 'New PHP Site', sub: 'PHP-FPM pool · isolated site user' },
-    nodejs:       { title: 'New Node.js Site', sub: 'systemd-managed app behind nginx' },
-    python:       { title: 'New Python Site', sub: 'gunicorn/uvicorn via systemd' },
-    static:       { title: 'New Static HTML Site', sub: 'Edge-cached file server · zero runtime' },
-    reverseproxy: { title: 'New Reverse Proxy', sub: 'TLS termination in front of any upstream' },
+    wordpress:    { title: 'New WordPress Site', sub: 'WordPress via wp-cli with database provisioning' },
+    php:          { title: 'New PHP Site',       sub: 'PHP-FPM pool, dedicated UID, Unix socket' },
+    nodejs:       { title: 'New Node.js Site',   sub: 'Per-site systemd unit behind nginx' },
+    python:       { title: 'New Python Site',    sub: 'gunicorn or uvicorn as a systemd unit' },
+    static:       { title: 'New Static HTML Site', sub: 'nginx file server with optional response caching' },
+    reverseproxy: { title: 'New Reverse Proxy',  sub: 'TLS termination in front of any upstream' },
   }
   const type = ui.createType
   const meta = META[type] || META.php
@@ -84,22 +84,25 @@
 </script>
 
 <div class="wrap form-wrap fade">
-  <span class="back" onclick={() => go('add')}>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back
-  </span>
+  <button type="button" class="back" onclick={() => go('add')}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back
+  </button>
   <div class="ph"><div><h1>{meta.title}</h1><div class="sub">{meta.sub}</div></div></div>
 
   <div class="card"><div class="section-b">
     <form onsubmit={submit}>
-      <div class="field"><label>Domain Name</label>
-        <input class="input" bind:value={m.domain} placeholder="example.com"></div>
+      <div class="field"><label>
+        <span class="label-text">Domain Name</span>
+        <input class="input" bind:value={m.domain} placeholder="example.com">
+      </label></div>
 
       {#if type === 'php' || type === 'wordpress'}
-        <div class="field"><label>PHP Version <span class="hint">8.3+ only · only installed versions are listed</span></label>
+        <div class="field"><label>
+          <span class="label-text">PHP Version <span class="hint">8.3+; only installed versions listed</span></span>
           {#if phpVersions.length === 0}
             <div class="hint" style="margin-left:0">
               No PHP-FPM versions are installed on this host.
-              Install one from <a href="#" onclick={(e) => { e.preventDefault(); go('instance') }}>Settings → PHP Versions</a> before creating PHP sites.
+              Install one from <button type="button" class="linkish" onclick={() => go('instance')}>Settings → PHP Versions</button> before creating PHP sites.
             </div>
           {:else}
             <select class="select" bind:value={m.phpVersion}>
@@ -108,15 +111,21 @@
               {/each}
             </select>
           {/if}
-        </div>
+        </label></div>
       {/if}
       {#if type === 'nodejs'}
         <div class="two">
-          <div class="field"><label>App Port</label><input class="input" bind:value={m.port}></div>
-          <div class="field"><label>Startup File</label><input class="input" bind:value={m.startFile}></div>
+          <div class="field"><label>
+            <span class="label-text">App Port</span>
+            <input class="input" bind:value={m.port}>
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">Startup File</span>
+            <input class="input" bind:value={m.startFile}>
+          </label></div>
         </div>
         <div class="field">
-          <label>Process supervision</label>
+          <span class="label-text" style="display:block;font-weight:600;font-size:13px;margin-bottom:7px">Process supervision</span>
           <div class="runner-choice">
             <label class="runner-opt" class:selected={m.runner === 'systemd'}>
               <input type="radio" name="runner" value="systemd" bind:group={m.runner}>
@@ -137,25 +146,37 @@
       {/if}
       {#if type === 'python'}
         <div class="two">
-          <div class="field"><label>App Port</label><input class="input" bind:value={m.port}></div>
-          <div class="field"><label>App Module <span class="hint">WSGI/ASGI</span></label><input class="input" bind:value={m.module}></div>
+          <div class="field"><label>
+            <span class="label-text">App Port</span>
+            <input class="input" bind:value={m.port}>
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">App Module <span class="hint">WSGI/ASGI</span></span>
+            <input class="input" bind:value={m.module}>
+          </label></div>
         </div>
       {/if}
       {#if type === 'reverseproxy'}
-        <div class="field"><label>Reverse Proxy URL <span class="hint">upstream</span></label>
-          <input class="input" bind:value={m.upstream}></div>
+        <div class="field"><label>
+          <span class="label-text">Reverse Proxy URL <span class="hint">upstream</span></span>
+          <input class="input" bind:value={m.upstream}>
+        </label></div>
       {/if}
 
-      <div class="field"><label>Site User <span class="hint">auto-generated from the domain · editable</span></label>
+      <div class="field"><label>
+        <span class="label-text">Site User <span class="hint">auto-generated from the domain · editable</span></span>
         <div class="input-row">
           <input class="input" bind:value={m.user} oninput={() => userTouched = true} placeholder="siteuser">
           <button type="button" class="gen" onclick={() => { userTouched = false; m.user = deriveSiteUser(m.domain) }}>Regenerate</button>
-        </div></div>
-      <div class="field"><label>Site User Password</label>
+        </div>
+      </label></div>
+      <div class="field"><label>
+        <span class="label-text">Site User Password</span>
         <div class="input-row">
           <input class="input" bind:value={m.password}>
           <button type="button" class="gen" onclick={() => m.password = randPw()}>Generate</button>
-        </div></div>
+        </div>
+      </label></div>
 
       {#if error}<div class="login-err">{error}</div>{/if}
       <div class="form-actions">

@@ -91,7 +91,7 @@
 </script>
 
 <div class="wrap fade">
-  <span class="back" onclick={() => go('sites')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</span>
+  <button type="button" class="back" onclick={() => go('sites')}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites</button>
   <div class="ph"><div><h1>Instance</h1><div class="sub">{info?.os || ''} · {info?.hostname || ''}</div></div></div>
 
   {#if info}
@@ -114,18 +114,22 @@
   <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge</p></div>
     <span class="status"><span class="sdot {cf.configured ? 's-up' : 's-down'}"></span>{cf.configured ? 'Configured' : 'Not set'}</span></div>
     <div class="section-b">
-      <div class="field"><label>API Token <span class="hint">stored encrypted</span></label>
-        <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}></div>
+      <div class="field"><label>
+        <span class="label-text">API Token <span class="hint">stored encrypted</span></span>
+        <input class="input" type="password" bind:value={cf.token} placeholder={cf.configured ? '•••••••• (replace)' : 'cloudflare API token'}>
+      </label></div>
       <button class="btn btn-primary" onclick={saveCf} disabled={!cf.token}>Save Token</button>
       {#if cfMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{cfMsg}</span>{/if}
     </div>
   </div>
 
-  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Access the panel at a domain (auracpd issues a Let's Encrypt SSL cert; no port needed)</p></div>
+  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Panel Domain</h3><p>Front the panel on a domain; auracpd issues a Let's Encrypt certificate automatically.</p></div>
     <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
     <div class="section-b">
-      <div class="field"><label>Domain / subdomain <span class="hint">point its DNS A record to this server first</span></label>
-        <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com"></div>
+      <div class="field"><label>
+        <span class="label-text">Domain / subdomain <span class="hint">point its DNS A record to this server first</span></span>
+        <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com">
+      </label></div>
       <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
       {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
       {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
@@ -136,14 +140,22 @@
     <span class="status"><span class="sdot {remote.configured ? 's-up' : 's-down'}"></span>{remote.configured ? remote.type || 'configured' : 'Not set'}</span></div>
     <div class="section-b">
       <div class="two">
-        <div class="field"><label>Provider</label><select class="select ui" bind:value={remote.kind}>
-          <option value="s3">Amazon S3</option><option value="b2">Backblaze B2</option><option value="dropbox">Dropbox</option>
-          <option value="drive">Google Drive</option><option value="sftp">SFTP</option><option value="swift">OpenStack Swift</option>
-        </select></div>
-        <div class="field"><label>Target <span class="hint">remote:path</span></label><input class="input" bind:value={remote.target} placeholder="auracp:my-bucket/backups"></div>
+        <div class="field"><label>
+          <span class="label-text">Provider</span>
+          <select class="select ui" bind:value={remote.kind}>
+            <option value="s3">Amazon S3</option><option value="b2">Backblaze B2</option><option value="dropbox">Dropbox</option>
+            <option value="drive">Google Drive</option><option value="sftp">SFTP</option><option value="swift">OpenStack Swift</option>
+          </select>
+        </label></div>
+        <div class="field"><label>
+          <span class="label-text">Target <span class="hint">remote:path</span></span>
+          <input class="input" bind:value={remote.target} placeholder="auracp:my-bucket/backups">
+        </label></div>
       </div>
-      <div class="field"><label>Parameters <span class="hint">one "key value" per line (e.g. access_key_id AKIA…)</span></label>
-        <textarea class="input" rows="4" style="font-family:var(--fs-mono)" bind:value={remote.params}></textarea></div>
+      <div class="field"><label>
+        <span class="label-text">Parameters <span class="hint">one "key value" per line (e.g. access_key_id AKIA…)</span></span>
+        <textarea class="input" rows="4" style="font-family:var(--fs-mono)" bind:value={remote.params}></textarea>
+      </label></div>
       <button class="btn btn-primary" onclick={saveRemote} disabled={!remote.target}>Save Remote</button>
       {#if remoteMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{remoteMsg}</span>{/if}
     </div>
@@ -158,16 +170,18 @@
           <tr><td><span class="mono">{n.version}</span></td>
             <td><span class="status"><span class="sdot {n.isDefault ? 's-up' : 's-down'}"></span>{n.isDefault ? 'default' : '—'}</span></td>
             <td style="text-align:right">
-              {#if !n.isDefault}<span class="manage" onclick={() => makeDefaultNode(n.version)}>Make default</span>{/if}
-              <span class="manage" onclick={() => removeNode(n.version)}>Remove</span>
+              {#if !n.isDefault}<button type="button" class="manage" onclick={() => makeDefaultNode(n.version)}>Make default</button>{/if}
+              <button type="button" class="manage" onclick={() => removeNode(n.version)}>Remove</button>
             </td></tr>
         {/each}
       </tbody></table>
     {/if}
     <div class="section-b" style="border-top:1px solid var(--line)">
       <div class="two">
-        <div class="field"><label>Install Node version <span class="hint">e.g. 22.11.0, 20.18.0, 18.20.4</span></label>
-          <input class="input" bind:value={newNode.version} placeholder="22.11.0"></div>
+        <div class="field"><label>
+          <span class="label-text">Install Node version <span class="hint">e.g. 22.11.0, 20.18.0, 18.20.4</span></span>
+          <input class="input" bind:value={newNode.version} placeholder="22.11.0">
+        </label></div>
         <div class="field" style="display:flex;align-items:end"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" bind:checked={newNode.makeDefault}> Make this the default</label></div>
       </div>
       <button class="btn btn-primary" onclick={installNode} disabled={!newNode.version}>Install</button>

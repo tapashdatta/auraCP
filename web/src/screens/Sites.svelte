@@ -73,7 +73,7 @@
     <div class="hero-greet">
       <div class="avatar hero-avatar">{(session.user?.email || 'A').charAt(0).toUpperCase()}</div>
       <div>
-        <h1>Hi, {greetingName()}<span class="wave">👋</span></h1>
+        <h1>Welcome, {greetingName()}</h1>
         <span class="pill-cat {health().tone}">
           <span class="sdot s-{health().tone === 'ok' ? 'up' : health().tone === 'warn' ? 'warn' : 'down'}"></span>
           {health().text}
@@ -100,7 +100,7 @@
           </div>
         {/each}
         {#if allSites.length === 0}
-          <span class="hint" style="margin-left:0">No sites yet — click <b>Add Site</b> to create one.</span>
+          <span class="hint" style="margin-left:0">No sites yet. Use <b>Add Site</b> to provision one.</span>
         {/if}
       </div>
     </div>
@@ -161,7 +161,7 @@
         <input placeholder="Filter by domain or user…" bind:value={filter}>
       </div>
       {#each tabs as t}
-        <span class="chip" class:on={active === t} onclick={() => active = t}>{t}</span>
+        <button type="button" class="chip" class:on={active === t} onclick={() => active = t}>{t}</button>
       {/each}
       <span class="spacer"></span>
       <span class="mono" style="color:var(--txt-3);font-size:12.5px">{filtered.length} shown</span>
@@ -182,9 +182,9 @@
             </td>
             <td><span class="status"><span class="sdot s-{s.status}"></span>{s.statusText}</span></td>
             <td style="text-align:right">
-              <span class="manage" onclick={() => openSite(s)}>Manage
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6"/></svg>
-              </span>
+              <button type="button" class="manage" onclick={() => openSite(s)}>Manage
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+              </button>
             </td>
           </tr>
         {/each}
@@ -194,13 +194,11 @@
 </div>
 
 <style>
-  /* Lisso-style hero strip — local to the Sites landing. */
+  /* Hero greeting + metrics strip — dashboard landing only. */
   .hero{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin:6px 0 22px}
   .hero-greet{display:flex;align-items:center;gap:18px;min-width:0}
   .hero-avatar{width:54px;height:54px;font-size:20px;border-radius:50%}
   .hero h1{font-family:var(--fs-display);font-weight:700;font-size:34px;letter-spacing:-.03em;line-height:1.1;margin-bottom:8px}
-  .hero h1 .wave{margin-left:8px;font-size:.7em;display:inline-block;animation:wave 1.8s ease-in-out infinite;transform-origin:70% 70%}
-  @keyframes wave{0%,100%{transform:rotate(0)}10%,30%{transform:rotate(14deg)}20%{transform:rotate(-8deg)}40%{transform:rotate(10deg)}50%{transform:rotate(0)}}
 
   .hero-grid{display:grid;grid-template-columns:1.3fr 1fr 1fr;gap:14px;margin-bottom:26px}
   .hero-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);padding:18px 20px;box-shadow:var(--shadow);min-width:0;display:flex;flex-direction:column;gap:12px}

@@ -118,9 +118,9 @@
 </script>
 
 <div class="wrap fade">
-  <span class="back" onclick={() => go('sites')}>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites
-  </span>
+  <button type="button" class="back" onclick={() => go('sites')}>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg> Back to Sites
+  </button>
 
   <div class="site-head">
     <div class="fav">{site.ic || '◆'}</div>
@@ -139,15 +139,15 @@
     <div class="m"><span class="k">Document Root</span><span class="v">{site.root}</span></div>
   </div>
 
-  <div class="tabs">
+  <div class="tabs" role="tablist">
     {#each detailTabs as t}
-      <span class="tab" class:active={active === t.id} onclick={() => setTab(t.id)}>{t.label}</span>
+      <button type="button" role="tab" aria-selected={active === t.id} class="tab" class:active={active === t.id} onclick={() => setTab(t.id)}>{t.label}</button>
     {/each}
   </div>
 
   {#if active === 'settings'}
     <div class="fade">
-      <div class="section"><div class="section-h"><div><h3>General</h3><p>Core configuration</p></div></div><div class="section-b" style="padding-top:4px">
+      <div class="section"><div class="section-h"><div><h3>General</h3><p>Domain, runtime, and HTTPS</p></div></div><div class="section-b" style="padding-top:4px">
         <div class="kv"><span class="k">Domain</span><span class="v">{site.domain}</span></div>
         <div class="kv"><span class="k">Application</span><span class="v">{site.app}</span></div>
         <div class="kv"><span class="k">Document root</span><span class="v">{site.root}</span></div>
@@ -160,22 +160,24 @@
           <div class="section-b">
             <div class="kv"><span class="k">Current</span><span class="v">{site.node || 'default'}</span></div>
             <div class="two">
-              <div class="field"><label>Use Node version</label>
+              <div class="field"><label>
+                <span class="label-text">Node version</span>
                 <select class="select ui" bind:value={nodePick}>
                   <option value="default">default (auracp-managed)</option>
                   {#each nodeRuntimes as n}<option value={n.version}>{n.version}{n.isDefault ? ' (default)' : ''}</option>{/each}
-                </select></div>
+                </select>
+              </label></div>
             </div>
             <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply &amp; restart backend</button>
             <div class="kv" style="margin-top:14px">
               <span class="k">Run via PM2 (pm2-runtime)</span>
-              <div class="toggle" class:on={!!site.pm2} onclick={() => togglePM2(!site.pm2)}></div>
+              <button type="button" role="switch" aria-checked={!!site.pm2} aria-label="Toggle PM2" class="toggle" class:on={!!site.pm2} onclick={() => togglePM2(!site.pm2)}></button>
             </div>
             <span class="hint" style="display:block;margin-top:-4px">PM2 process name = the domain (<span class="mono">{site.domain}</span>). systemd unit stays <span class="mono">auracp-site-{site.domain}</span>.</span>
           </div>
         </div>
       {/if}
-      <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Local site archive (document root + databases)</p></div>
+      <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Document root + databases, stored locally</p></div>
         <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
         {#if backups.length === 0}
           <div class="empty">No backups yet.</div>
@@ -216,10 +218,19 @@
         {/if}
         <div class="section-b" style="border-top:1px solid var(--line)">
           <div class="two">
-            <div class="field"><label>Engine</label><select class="select ui" bind:value={newDb.engine}><option value="mariadb">MariaDB</option><option value="postgres">PostgreSQL</option></select></div>
-            <div class="field"><label>Database name</label><input class="input" bind:value={newDb.name} placeholder="app_db"></div>
+            <div class="field"><label>
+              <span class="label-text">Engine</span>
+              <select class="select ui" bind:value={newDb.engine}><option value="mariadb">MariaDB</option><option value="postgres">PostgreSQL</option></select>
+            </label></div>
+            <div class="field"><label>
+              <span class="label-text">Database name</span>
+              <input class="input" bind:value={newDb.name} placeholder="app_db">
+            </label></div>
           </div>
-          <div class="field"><label>Database user</label><input class="input" bind:value={newDb.user} placeholder="app_user"></div>
+          <div class="field"><label>
+            <span class="label-text">Database user</span>
+            <input class="input" bind:value={newDb.user} placeholder="app_user">
+          </label></div>
           <button class="btn btn-primary" onclick={addDb} disabled={busy || !newDb.name || !newDb.user}>Add Database</button>
           {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
         </div>
@@ -228,7 +239,7 @@
 
   {:else if active === 'cache'}
     <div class="section fade"><div class="section-h"><div><h3>Cache</h3><p>nginx fastcgi_cache / proxy_cache (per-site, opt-in)</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Full-page cache</span><div class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></div></div>
+      <div class="kv"><span class="k">Full-page cache</span><button type="button" role="switch" aria-checked={isOn('cache')} aria-label="Toggle full-page cache" class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></button></div>
       <div class="kv"><span class="k">Default TTL</span><span class="v">{config.cache_ttl || '600s'}</span></div>
     </div></div>
 
@@ -244,21 +255,27 @@
           <div class="kv"><span class="k">Status</span><span class="v">{sslStatus?.message || 'checking…'}</span></div>
           <div class="kv"><span class="k">Provider</span><span class="v">Let's Encrypt (auto)</span></div>
         {/if}
-        <div class="kv"><span class="k">Cloudflare DNS-01 (wildcard)</span><div class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></div></div>
+        <div class="kv"><span class="k">Cloudflare DNS-01 (wildcard)</span><button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></div>
         <div class="note" style="margin-top:6px"><div>DNS-01 requires a Cloudflare API token under <b>Instance → Cloudflare</b>.</div></div>
       </div></div>
 
   {:else if active === 'security'}
     <div class="section fade"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Basic authentication</span><div class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></div></div>
+      <div class="kv"><span class="k">Basic authentication</span><button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></div>
       {#if isOn('basic_auth')}
         <div class="two" style="margin-top:8px">
-          <div class="field"><label>Username</label><input class="input" bind:value={basicAuth.user}></div>
-          <div class="field"><label>Password</label><input class="input" type="password" bind:value={basicAuth.password}></div>
+          <div class="field"><label>
+            <span class="label-text">Username</span>
+            <input class="input" bind:value={basicAuth.user}>
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">Password</span>
+            <input class="input" type="password" bind:value={basicAuth.password}>
+          </label></div>
         </div>
         <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
       {/if}
-      <div class="kv"><span class="k">Block bad bots</span><div class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></div></div>
+      <div class="kv"><span class="k">Block bad bots</span><button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></div>
     </div></div>
 
   {:else if active === 'sshftp'}
@@ -267,15 +284,24 @@
         <tr><td><span class="mono">{site.user}</span></td><td><span class="badge b-node">owner · SSH+SFTP</span></td><td></td></tr>
         {#each sshUsers as u}
           <tr><td><span class="mono">{u.username}</span></td><td><span class="badge b-proxy">{u.type === 'ssh' ? 'SSH + SFTP' : 'SFTP only'}</span></td>
-            <td style="text-align:right"><span class="manage" onclick={() => delSSH(u.username)}>Delete</span></td></tr>
+            <td style="text-align:right"><button type="button" class="manage" onclick={() => delSSH(u.username)}>Delete</button></td></tr>
         {/each}
       </tbody></table>
       <div class="section-b" style="border-top:1px solid var(--line)">
         <div class="two">
-          <div class="field"><label>Username</label><input class="input" bind:value={newSSH.username} placeholder="editor"></div>
-          <div class="field"><label>Access</label><select class="select ui" bind:value={newSSH.type}><option value="sftp">SFTP only</option><option value="ssh">SSH + SFTP</option></select></div>
+          <div class="field"><label>
+            <span class="label-text">Username</span>
+            <input class="input" bind:value={newSSH.username} placeholder="editor">
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">Access</span>
+            <select class="select ui" bind:value={newSSH.type}><option value="sftp">SFTP only</option><option value="ssh">SSH + SFTP</option></select>
+          </label></div>
         </div>
-        <div class="field"><label>Password <span class="hint">blank = auto-generate</span></label><input class="input" bind:value={newSSH.password}></div>
+        <div class="field"><label>
+          <span class="label-text">Password <span class="hint">blank = auto-generate</span></span>
+          <input class="input" bind:value={newSSH.password}>
+        </label></div>
         <button class="btn btn-primary" onclick={addSSH} disabled={busy || !newSSH.username}>Add User</button>
         {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
       </div>
@@ -289,7 +315,17 @@
         {:else}
           {#each files as f}
             <div class="kv" style="padding:12px 18px">
-              <span class="k" style="cursor:{f.dir ? 'pointer' : 'default'}" onclick={() => f.dir && openDir(f.name)}>{f.dir ? '📁' : '📄'} {f.name}</span>
+              {#if f.dir}
+                <button type="button" class="file-row k" onclick={() => openDir(f.name)}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+                  {f.name}
+                </button>
+              {:else}
+                <span class="k file-row">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
+                  {f.name}
+                </span>
+              {/if}
               <span class="v" style="color:var(--txt-3)">{f.mode} · {fmtSize(f.size)}</span>
             </div>
           {/each}
@@ -304,14 +340,20 @@
         {:else}
           <table><thead><tr><th>Schedule</th><th>Command</th><th></th></tr></thead><tbody>
             {#each cron as c}
-              <tr><td><span class="mono" style="color:var(--aura-strong)">{c.schedule}</span></td><td><span class="mono" style="color:var(--txt-2)">{c.command}</span></td><td style="text-align:right"><span class="manage" onclick={() => delCron(c.id)}>Delete</span></td></tr>
+              <tr><td><span class="mono" style="color:var(--aura-strong)">{c.schedule}</span></td><td><span class="mono" style="color:var(--txt-2)">{c.command}</span></td><td style="text-align:right"><button type="button" class="manage" onclick={() => delCron(c.id)}>Delete</button></td></tr>
             {/each}
           </tbody></table>
         {/if}
         <div class="section-b" style="border-top:1px solid var(--line)">
           <div class="two">
-            <div class="field"><label>Schedule</label><input class="input" bind:value={newCron.schedule} placeholder="*/5 * * * *"></div>
-            <div class="field"><label>Command</label><input class="input" bind:value={newCron.command} placeholder="php /htdocs/cron.php"></div>
+            <div class="field"><label>
+              <span class="label-text">Schedule</span>
+              <input class="input" bind:value={newCron.schedule} placeholder="*/5 * * * *">
+            </label></div>
+            <div class="field"><label>
+              <span class="label-text">Command</span>
+              <input class="input" bind:value={newCron.command} placeholder="php /htdocs/cron.php">
+            </label></div>
           </div>
           <button class="btn btn-primary" onclick={addCron} disabled={busy || !newCron.schedule || !newCron.command}>Add Cron Job</button>
         </div>
@@ -321,7 +363,7 @@
   {:else if active === 'logs'}
     <div class="section fade"><div class="section-h"><div><h3>Logs</h3><p>Last lines</p></div>
       <div style="display:flex;gap:8px">
-        {#each ['access','error','app'] as k}<span class="chip" class:on={logKind === k} onclick={() => setLogKind(k)}>{k}</span>{/each}
+        {#each ['access','error','app'] as k}<button type="button" class="chip" class:on={logKind === k} onclick={() => setLogKind(k)}>{k}</button>{/each}
       </div></div>
       <div class="section-b">
         {#if logs.length === 0}<div class="empty">No log entries.</div>
