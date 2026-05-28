@@ -240,20 +240,29 @@
         </label></div>
       {/if}
 
-      <div class="field"><label>
-        <span class="label-text">Site User <span class="hint">auto-generated from the domain · editable</span></span>
-        <div class="input-row">
-          <input class="input" bind:value={m.user} oninput={() => userTouched = true} placeholder="siteuser">
-          <button type="button" class="gen" onclick={() => { userTouched = false; m.user = deriveSiteUser(m.domain) }}>Regenerate</button>
-        </div>
-      </label></div>
-      <div class="field"><label>
-        <span class="label-text">Site User Password</span>
-        <div class="input-row">
-          <input class="input" bind:value={m.password}>
-          <button type="button" class="gen" onclick={() => m.password = randPw()}>Generate</button>
-        </div>
-      </label></div>
+      <!-- v0.2.36: Site User + Site User Password paired into a 2-col row,
+           and the Regenerate buttons now use the icon variant (the previous
+           text "Regenerate" overflowed the .gen class's fixed 38 px box). -->
+      <div class="two">
+        <div class="field"><label>
+          <span class="label-text">Site User <span class="hint">from domain · editable</span></span>
+          <div class="input-row">
+            <input class="input" bind:value={m.user} oninput={() => userTouched = true} placeholder="siteuser">
+            <button type="button" class="gen" onclick={() => { userTouched = false; m.user = deriveSiteUser(m.domain) }} title="Regenerate from domain" aria-label="Regenerate site user">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+          </div>
+        </label></div>
+        <div class="field"><label>
+          <span class="label-text">Site User Password</span>
+          <div class="input-row">
+            <input class="input" bind:value={m.password}>
+            <button type="button" class="gen" onclick={() => m.password = randPw()} title="Generate new password" aria-label="Generate site user password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+          </div>
+        </label></div>
+      </div>
 
       {#if error}<div class="login-err">{error}</div>{/if}
       <div class="form-actions">

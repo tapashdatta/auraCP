@@ -64,16 +64,17 @@
 }
 
 :root[data-theme="dark"] {
-  /* v0.2.34: true-dark body so elevated cards read as elevated. Surface
-     ladder rebalanced — was mid-gray on mid-gray; now near-black body
-     with cards lifted clearly above it. Each surface stop is ~5 lightness
-     points above the last, so hover/active states stay legible without
-     blowing out. AA verified against --txt on every surface. */
+  /* v0.2.34 / v0.2.36: near-black body, lifted card surfaces. The body
+     stays at #0a0b0f (true dark, almost OLED-black); cards bumped UP a
+     full stop from v0.2.34 so they read as proper elevated panels rather
+     than dim slabs. Each surface step is ~6 lightness points above the
+     last — hover/active are visually distinct without looking neon.
+     AA verified against --txt on every surface. */
   --ink:#0a0b0f;
-  --surface-0:#181b21;
-  --surface-1:#23262d;
-  --surface-2:#2d313a;
-  --surface-3:#383d47;
+  --surface-0:#222630;
+  --surface-1:#2c3039;
+  --surface-2:#363b46;
+  --surface-3:#414754;
   --line:rgba(255,255,255,.06);
   --line-2:rgba(255,255,255,.13);
   --txt:#eef0f4;
