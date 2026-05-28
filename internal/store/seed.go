@@ -1,43 +1,9 @@
 package store
 
-import (
-	"log"
-
-	"github.com/auracp/auracp/internal/auth"
-)
-
-// seed runs first-run setup: an initial admin user and the available DB engines.
-// No demo/sample sites are created — the panel starts empty.
+// seed runs first-run setup. No admin is auto-created — the panel starts with
+// zero users and the UI shows a first-run "create admin" form. No demo sites.
 func (s *Store) seed() error {
-	if err := s.seedAdmin(); err != nil {
-		return err
-	}
 	return s.seedDatabaseServers()
-}
-
-// seedAdmin creates the first admin user with a random password, printed once.
-func (s *Store) seedAdmin() error {
-	n, err := s.CountUsers()
-	if err != nil || n > 0 {
-		return err
-	}
-	pw, err := auth.RandomPassword()
-	if err != nil {
-		return err
-	}
-	hash, err := auth.HashPassword(pw)
-	if err != nil {
-		return err
-	}
-	const email = "admin@localhost"
-	if _, err := s.CreateUser(email, hash, "ROLE_ADMIN", ""); err != nil {
-		return err
-	}
-	log.Printf("┌─ initial admin account created ─────────────────────────────")
-	log.Printf("│  email:    %s", email)
-	log.Printf("│  password: %s", pw)
-	log.Printf("└─ change it after first login (this is shown only once) ─────")
-	return nil
 }
 
 // seedDatabaseServers records the two supported local engines so the

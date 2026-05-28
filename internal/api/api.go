@@ -50,6 +50,8 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 
 	// public
 	mux.HandleFunc("GET /api/health", srv.health)
+	mux.HandleFunc("GET /api/auth/setup", srv.setupStatus)
+	mux.HandleFunc("POST /api/auth/setup", srv.setupAdmin)
 	mux.HandleFunc("POST /api/auth/login", srv.login)
 	mux.HandleFunc("POST /api/auth/mfa/verify", srv.mfaVerify)
 	mux.HandleFunc("POST /api/auth/logout", srv.logout)

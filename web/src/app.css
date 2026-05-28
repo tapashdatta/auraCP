@@ -5,33 +5,34 @@
    ============================================================ */
 
 :root {
-  /* light theme (default) */
-  --ink:#f5f7f9;
+  /* light theme (default) — refined cool-slate palette */
+  --ink:#eceff4;
   --surface-0:#ffffff;
-  --surface-1:#fbfcfe;
-  --surface-2:#f1f4f8;
-  --surface-3:#e7ecf2;
-  --line:rgba(16,22,33,.10);
-  --line-2:rgba(16,22,33,.17);
-  --txt:#10131a;
-  --txt-2:#4b566a;
-  --txt-3:#8a94a4;
+  --surface-1:#f8fafc;
+  --surface-2:#eef2f7;
+  --surface-3:#e2e8f0;
+  --line:rgba(15,23,42,.08);
+  --line-2:rgba(15,23,42,.14);
+  --txt:#0f172a;
+  --txt-2:#475569;
+  --txt-3:#94a3b8;
   --aura:#10b981;
   --aura-strong:#059669;
   --aura-ink:#ffffff;
-  --aura-glow:rgba(16,185,129,.16);
-  --warn:#c77a18;
-  --down:#dc4b4e;
-  --info:#2f7ed8;
-  --shadow:0 1px 2px rgba(16,22,33,.05), 0 6px 20px -10px rgba(16,22,33,.18);
-  --grid-dot:rgba(16,22,33,.045);
+  --aura-glow:rgba(16,185,129,.15);
+  --warn:#d97706;
+  --down:#e11d48;
+  --info:#2563eb;
+  --shadow:0 1px 2px rgba(15,23,42,.04), 0 8px 24px -14px rgba(15,23,42,.18);
+  --shadow-lg:0 4px 14px rgba(15,23,42,.06), 0 24px 48px -20px rgba(15,23,42,.24);
+  --grid-dot:rgba(15,23,42,.04);
   --aura-rgb:16,185,129;
-  --warn-rgb:199,122,24;
-  --down-rgb:220,75,78;
-  --info-rgb:47,126,216;
+  --warn-rgb:217,119,6;
+  --down-rgb:225,29,72;
+  --info-rgb:37,99,235;
 
-  --radius:13px;
-  --radius-sm:9px;
+  --radius:14px;
+  --radius-sm:10px;
   --fs-display:"Bricolage Grotesque",sans-serif;
   --fs-ui:"Hanken Grotesk",sans-serif;
   --fs-mono:"JetBrains Mono",monospace;
@@ -55,7 +56,8 @@
   --warn:#f5b75a;
   --down:#ff6063;
   --info:#5bc0ff;
-  --shadow:0 2px 10px rgba(0,0,0,.35);
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 32px -16px rgba(0,0,0,.6);
+  --shadow-lg:0 8px 40px -12px rgba(0,0,0,.7);
   --grid-dot:rgba(255,255,255,.035);
   --aura-rgb:56,227,163;
   --warn-rgb:245,183,90;
@@ -112,16 +114,18 @@ input,select{font-family:inherit}
 .ph{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:24px;gap:20px}
 .ph h1{font-family:var(--fs-display);font-weight:700;font-size:30px;letter-spacing:-.025em}
 .ph .sub{color:var(--txt-3);font-size:13.5px;margin-top:3px}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:10px;font-weight:600;font-size:13.5px;transition:.15s;border:1px solid transparent;white-space:nowrap}
-.btn-primary{background:var(--aura);color:var(--aura-ink);box-shadow:0 6px 18px -8px var(--aura)}
-.btn-primary:hover{filter:brightness(1.06);transform:translateY(-1px)}
-.btn-ghost{background:var(--surface-1);border-color:var(--line);color:var(--txt)}
-.btn-ghost:hover{background:var(--surface-2);border-color:var(--line-2)}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 17px;border-radius:10px;font-weight:600;font-size:13.5px;letter-spacing:-.01em;transition:transform .12s ease, box-shadow .15s ease, filter .15s ease, background .15s ease;border:1px solid transparent;white-space:nowrap}
+.btn:active{transform:translateY(0) scale(.985)}
+.btn-primary{background:linear-gradient(180deg, color-mix(in srgb, var(--aura) 88%, white), var(--aura));color:var(--aura-ink);box-shadow:0 1px 2px rgba(0,0,0,.12), 0 10px 22px -10px var(--aura)}
+.btn-primary:hover{filter:brightness(1.04);transform:translateY(-1px);box-shadow:0 2px 4px rgba(0,0,0,.14), 0 14px 28px -10px var(--aura)}
+.btn-ghost{background:var(--surface-0);border-color:var(--line);color:var(--txt);box-shadow:var(--shadow)}
+.btn-ghost:hover{background:var(--surface-1);border-color:var(--line-2);transform:translateY(-1px)}
 .btn svg{width:15px;height:15px}
 
 /* ---------- stat strip ---------- */
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:26px}
-.stat{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);padding:15px 17px;box-shadow:var(--shadow)}
+.stat{border:1px solid var(--line);border-radius:var(--radius);background:linear-gradient(180deg,var(--surface-0),var(--surface-1));padding:16px 18px;box-shadow:var(--shadow);transition:transform .15s, box-shadow .15s}
+.stat:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
 .stat .lbl{font-size:11.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--txt-3);font-weight:600}
 .stat .val{font-family:var(--fs-display);font-weight:700;font-size:25px;margin-top:7px;letter-spacing:-.02em}
 .stat .val small{font-size:13px;color:var(--txt-3);font-weight:600;font-family:var(--fs-ui)}
@@ -138,10 +142,10 @@ input,select{font-family:inherit}
 .chip.on{color:var(--aura-strong);border-color:var(--aura);background:var(--aura-glow)}
 
 table{width:100%;border-collapse:collapse}
-thead th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line)}
+thead th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--txt-3);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--surface-1)}
 tbody td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:middle}
-tbody tr{transition:.12s}
-tbody tr:hover{background:var(--surface-2)}
+tbody tr{transition:background .12s}
+tbody tr:hover{background:var(--surface-1)}
 tbody tr:last-child td{border-bottom:none}
 .domain{display:flex;align-items:center;gap:12px}
 .domain .fav{width:34px;height:34px;border-radius:9px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);flex:none;font-size:15px}
@@ -191,8 +195,9 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .field{margin-bottom:18px}
 .field label{display:block;font-weight:600;font-size:13px;margin-bottom:7px}
 .field .hint{color:var(--txt-3);font-weight:400;font-size:12px;margin-left:6px}
-.input,.select{width:100%;padding:11px 13px;border:1px solid var(--line);border-radius:9px;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;transition:.15s}
-.input:focus,.select:focus{border-color:var(--aura);box-shadow:0 0 0 3px var(--aura-glow)}
+.input,.select{width:100%;padding:11px 14px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;transition:border-color .15s, box-shadow .15s}
+.input:hover,.select:hover{border-color:var(--txt-3)}
+.input:focus,.select:focus{border-color:var(--aura);box-shadow:0 0 0 3.5px var(--aura-glow)}
 .input::placeholder{color:var(--txt-3)}
 .input-row{display:flex;gap:10px}
 .input-row .input{flex:1}

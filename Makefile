@@ -42,7 +42,7 @@ fmt:
 	$(GO) fmt ./...
 
 run:
-	$(GO) run ./cmd/auracpd -provision=false
+	$(GO) run ./cmd/auracpd -provision=false -tls=false
 
 clean:
 	rm -rf bin dist

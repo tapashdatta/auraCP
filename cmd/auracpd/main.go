@@ -25,9 +25,10 @@ import (
 func main() {
 	addr := flag.String("addr", ":8443", "listen address")
 	dbPath := flag.String("db", "auracp.db", "path to the SQLite state database")
-	etcDir := flag.String("etc", "/etc/auracp", "config dir (holds the secret key)")
+	etcDir := flag.String("etc", "/etc/auracp", "config dir (holds the secret key + panel cert)")
 	provision := flag.Bool("provision", runtime.GOOS == "linux",
 		"actually provision the OS (users/services/caddy); off = record-only (dev)")
+	useTLS := flag.Bool("tls", true, "serve HTTPS with a self-signed cert (panel.crt/key in -etc); off = plain HTTP")
 	flag.Parse()
 
 	st, err := store.Open(*dbPath)
@@ -58,7 +59,7 @@ func main() {
 		Secret:  sec,
 		Runner:  runner,
 	}) // /api/*
-	mux.Handle("/", webui.Handler())      // embedded SPA (catch-all)
+	mux.Handle("/", webui.Handler()) // embedded SPA (catch-all)
 
 	srv := &http.Server{
 		Addr:              *addr,
@@ -66,7 +67,18 @@ func main() {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	log.Printf("auracpd listening on %s (db: %s)", *addr, *dbPath)
+	if *useTLS {
+		certPath, keyPath, err := webui.EnsureSelfSignedCert(*etcDir)
+		if err != nil {
+			log.Fatalf("tls cert: %v", err)
+		}
+		log.Printf("auracpd listening on https://%s (db: %s)", *addr, *dbPath)
+		if err := srv.ListenAndServeTLS(certPath, keyPath); err != nil {
+			log.Fatalf("server: %v", err)
+		}
+		return
+	}
+	log.Printf("auracpd listening on http://%s (db: %s)", *addr, *dbPath)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server: %v", err)
 	}

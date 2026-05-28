@@ -5,6 +5,7 @@ export const session = $state({
   user: null,
   loading: true,
   mfaRequired: false,
+  setupRequired: false,
   error: '',
 })
 
@@ -16,12 +17,30 @@ export async function checkAuth() {
   session.loading = true
   try {
     const r = await apiFetch('/api/auth/me')
-    session.user = r.ok ? (await readJSON(r)).user : null
+    if (r.ok) {
+      session.user = (await readJSON(r)).user
+    } else {
+      session.user = null
+      const s = await apiFetch('/api/auth/setup')
+      session.setupRequired = s.ok ? (await readJSON(s)).setupRequired : false
+    }
   } catch {
     session.user = null
   } finally {
     session.loading = false
   }
+}
+
+export async function setupAdmin(email, password) {
+  session.error = ''
+  const r = await apiFetch('/api/auth/setup', {
+    method: 'POST', body: JSON.stringify({ email, password }),
+  })
+  const d = await readJSON(r)
+  if (!r.ok) { session.error = d.error || 'Setup failed'; return false }
+  session.user = d.user
+  session.setupRequired = false
+  return true
 }
 
 export async function login(email, password) {

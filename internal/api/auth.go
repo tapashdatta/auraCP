@@ -26,6 +26,55 @@ func view(u store.User) userView {
 	return userView{Email: u.Email, Role: u.Role, MFAEnabled: u.MFAEnabled()}
 }
 
+// GET /api/auth/setup — is first-run admin creation still required?
+func (s *Server) setupStatus(w http.ResponseWriter, r *http.Request) {
+	n, _ := s.store.CountUsers()
+	writeJSON(w, http.StatusOK, map[string]bool{"setupRequired": n == 0})
+}
+
+// POST /api/auth/setup — create the first admin (only allowed when no users
+// exist yet), then log them in. Public, but self-disables after first use.
+func (s *Server) setupAdmin(w http.ResponseWriter, r *http.Request) {
+	n, err := s.store.CountUsers()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if n > 0 {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "setup already completed"})
+		return
+	}
+	var in struct{ Email, Password string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.Email == "" || len(in.Password) < 8 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email and a password of at least 8 characters are required"})
+		return
+	}
+	hash, err := auth.HashPassword(in.Password)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	id, err := s.store.CreateUser(in.Email, hash, "ROLE_ADMIN", "")
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	token, err := auth.RandomToken()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	_ = s.store.CreateSession(token, id, false, sessionTTL)
+	setSessionCookie(w, r, token)
+	u, _ := s.store.UserByID(id)
+	s.audit(r, "setup.admin-created", in.Email)
+	writeJSON(w, http.StatusCreated, map[string]any{"user": view(u)})
+}
+
 // POST /api/auth/login — verify password; if MFA is enabled, start a pending session.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Email, Password string }

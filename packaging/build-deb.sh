@@ -57,8 +57,7 @@ if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
   systemctl enable auracpd >/dev/null 2>&1 || true
   systemctl restart auracpd || true
-  echo "auraCP started. Find the initial admin login with:"
-  echo "  journalctl -u auracpd | grep -A2 'initial admin'"
+  echo "auraCP started on https://<server-ip>:8443 — open it to create your admin account."
 fi
 exit 0
 EOF

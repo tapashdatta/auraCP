@@ -168,8 +168,12 @@ parse_args() {
 # interactive selection
 # ──────────────────────────────────────────────────────────────────────────
 select_components() {
-  [ "$INTERACTIVE" -eq 1 ] && [ -t 0 ] || { msg "Using preset selection (non-interactive)."; return; }
-
+  # Interactive unless a selection flag forced preset mode, or there's no
+  # terminal at all. Use /dev/tty (not stdin) so `curl … | bash` still prompts.
+  if [ "$INTERACTIVE" -eq 0 ] || [ ! -r /dev/tty ]; then
+    msg "Using preset selection (non-interactive)."
+    return
+  fi
   if command -v whiptail >/dev/null 2>&1; then
     select_whiptail
   else
@@ -191,7 +195,7 @@ select_whiptail() {
     TYPESENSE "Typesense search server"           "$(onoff "$OPT_TYPESENSE")" \
     DOCKER  "Docker engine"                       "$(onoff "$OPT_DOCKER")" \
     SECURITY "UFW firewall + fail2ban"           "$(onoff "$OPT_SECURITY")" \
-    3>&1 1>&2 2>&3) || die "Installation cancelled."
+    3>&1 1>&2 2>&3 < /dev/tty) || die "Installation cancelled."
 
   OPT_MARIADB=no OPT_POSTGRES=no OPT_NODE=no OPT_PHP=no OPT_PYTHON=no OPT_REDIS=no OPT_TYPESENSE=no OPT_DOCKER=no OPT_SECURITY=no
   case "$chosen" in *MARIADB*) OPT_MARIADB=yes;; esac
@@ -209,7 +213,7 @@ select_whiptail() {
       8.5 "PHP 8.5" "$(req "$PHP_VERSION" 8.5)" \
       8.4 "PHP 8.4" "$(req "$PHP_VERSION" 8.4)" \
       8.3 "PHP 8.3" "$(req "$PHP_VERSION" 8.3)" \
-      3>&1 1>&2 2>&3) || PHP_VERSION=8.4
+      3>&1 1>&2 2>&3 < /dev/tty) || PHP_VERSION=8.4
   fi
 }
 
@@ -439,9 +443,9 @@ finalize() {
   echo
   ok "auraCP installation complete."
   echo
-  printf '%s\n' "  Panel:  ${C_B}https://<server-ip>:${PANEL_PORT}${C_RESET}"
-  printf '%s\n' "  Login:  printed by auracpd on first start —"
-  printf '%s\n' "          ${C_DIM}journalctl -u auracpd | grep -A2 'initial admin'${C_RESET}"
+  printf '%s\n' "  Open ${C_B}https://<server-ip>:${PANEL_PORT}${C_RESET} and create your admin account (first-run setup)."
+  printf '%s\n' "  ${C_DIM}Self-signed certificate — accept the browser warning, or replace${C_RESET}"
+  printf '%s\n' "  ${C_DIM}/etc/auracp/panel.{crt,key} with your own.${C_RESET}"
   echo
 }
 
