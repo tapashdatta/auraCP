@@ -194,11 +194,23 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 				log.Printf("site %s: initial cert issuance failed: %v", s.Domain, err)
 				return
 			}
-			// Re-render the vhost so the HTTPS server{} block points at the new cert.
+			// Re-render the vhost so the HTTPS server{} block points at the new
+			// cert. v0.2.23: also read site_config so the user's vhost_override
+			// (and any feature toggles like cache/basic_auth) survive the
+			// cert-issuance re-render — previously this Spec only had Type+Domain
+			// fields and would wipe edits made between Create and the first cert.
 			cert, _ := m.store.Certificate(s.Domain)
+			cfg, _ := m.store.SiteConfig(s.Domain)
 			spec := webserver.Spec{
-				Type: rec.Type, Domain: rec.Domain, User: rec.SiteUser, Upstream: rec.Upstream,
-				PHPVer: rec.PHPVersion,
+				Type: rec.Type, Domain: rec.Domain, User: rec.SiteUser,
+				Root: rec.RootPath, Upstream: rec.Upstream, PHPVer: rec.PHPVersion,
+				Cache: cfg["cache"] == "true", CacheTTL: cfg["cache_ttl"],
+				BlockBots: cfg["block_bots"] == "true",
+				Override:  cfg["vhost_override"],
+			}
+			if cfg["basic_auth"] == "true" {
+				spec.BasicAuthUser = cfg["basic_auth_user"]
+				spec.BasicAuthHash = cfg["basic_auth_hash"]
 			}
 			if cert.CertPath.Valid {
 				spec.CertPath = cert.CertPath.String

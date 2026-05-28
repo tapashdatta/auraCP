@@ -27,7 +27,7 @@
   let sshUsers = $state([])
   let nodeRuntimes = $state([])
   let nodePick = $state(site.node || 'default')
-  let newSSH = $state({ username: '', type: 'sftp', password: '' })
+  let newSSH = $state({ username: '', type: 'sftp', password: randPw() })
   let basicAuth = $state({ user: '', password: '' })
   let vhost = $state({ content: '', path: '', loaded: false, dirty: false })
   let docRoot = $state(site.root || '')
@@ -102,6 +102,15 @@
     site.root = docRoot
   }
 
+  // v0.2.23: per-toggle save indicator. savedFlash[key] becomes true for
+  // ~1.6s after a successful save; the UI shows a small green ✓ next to that
+  // toggle. Lets the operator confirm a save without parsing a notice strip.
+  let savedFlash = $state({})
+  function flashSaved(key) {
+    savedFlash = { ...savedFlash, [key]: true }
+    setTimeout(() => { savedFlash = { ...savedFlash, [key]: false } }, 1600)
+  }
+
   async function setConfig(patch) {
     busy = true
     // Optimistic: flip the local state immediately so the toggle feels snappy
@@ -115,6 +124,9 @@
       // an upstream is missing, or basic_auth without credentials).
       const d = await r.json().catch(() => ({}))
       notice = d.error || `Could not save: ${r.status}`
+    } else {
+      // Per-key flash so the operator sees confirmation at the toggle itself.
+      for (const k of Object.keys(patch)) flashSaved(k)
     }
     // Re-fetch authoritative state regardless of success.
     const fresh = await getJSON(`${base}/config`, null)
@@ -129,6 +141,26 @@
     if (!notice) notice = `Basic auth credentials saved. Visitors will now be prompted as ${basicAuth.user}.`
     basicAuth = { user: '', password: '' }
   }
+  // v0.2.23: drop a database + its user from the engine and the store.
+  async function deleteDb(engine, name) {
+    if (!confirm(`Drop the ${engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'} database "${name}" and its user? This cannot be undone.`)) return
+    const r = await apiFetch(`${base}/databases/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { notice = d.error || 'Could not drop database'; return }
+    notice = `Dropped ${name}.`
+    load('databases')
+  }
+  // v0.2.23: site delete from Settings tab. Confirms by typing the domain.
+  async function deleteSite() {
+    const typed = prompt(`Type the domain to confirm deletion:\n${site.domain}\n\nThis will:\n- Remove the nginx vhost\n- Remove the site's PHP-FPM pool / Node systemd unit\n- Delete the site user (and their docroot + SFTP access)\n- Delete the SSL certificate record\nDatabases are kept (drop them on the Databases tab first if needed).`)
+    if (typed !== site.domain) {
+      if (typed !== null) alert('Domain did not match. Site not deleted.')
+      return
+    }
+    const r = await apiFetch(`/api/sites/${encodeURIComponent(site.domain)}`, { method: 'DELETE' })
+    if (!r.ok) { const d = await r.json().catch(() => ({})); notice = d.error || 'Delete failed'; return }
+    go('sites')
+  }
   async function addSSH() {
     busy = true
     const r = await apiFetch(`${base}/ssh-users`, { method: 'POST', body: JSON.stringify(newSSH) })
@@ -136,10 +168,11 @@
     busy = false
     if (!r.ok) { notice = d.error || 'Failed'; return }
     notice = `Created ${d.username}. Password: ${d.password}`
-    newSSH = { username: '', type: 'sftp', password: '' }
+    newSSH = { username: '', type: 'sftp', password: randPw() }
     load('sshftp')
   }
   async function delSSH(username) {
+    if (!confirm(`Delete SSH/FTP user "${username}"? This revokes their access immediately.`)) return
     await apiFetch(`${base}/ssh-users/${encodeURIComponent(username)}`, { method: 'DELETE' })
     load('sshftp')
   }
@@ -231,16 +264,59 @@
     return (n/(1<<30)).toFixed(2) + ' GB'
   }
 
-  async function uploadFiles(fileList) {
-    if (!fileList || fileList.length === 0) return
-    const list = Array.from(fileList)
-    const total = list.reduce((s, f) => s + f.size, 0)
+  // v0.2.23: recursive folder upload. When the drop's DataTransferItemList is
+  // available with webkitGetAsEntry, walk every dropped item depth-first and
+  // collect {file, relPath} pairs. Subdirectories show up in relPath as
+  // 'parent/child/file.ext'; the server splits on '/' and creates intermediate
+  // directories before saving each file.
+  async function walkEntry(entry, prefix, out) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej))
+      out.push({ file, relPath: prefix + entry.name })
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader()
+      // readEntries returns ≤ ~100 per call; loop until it returns empty.
+      while (true) {
+        const batch = await new Promise((res, rej) => reader.readEntries(res, rej))
+        if (batch.length === 0) break
+        for (const child of batch) await walkEntry(child, prefix + entry.name + '/', out)
+      }
+    }
+  }
+
+  async function flattenDataTransfer(dt) {
+    if (dt?.items?.length && dt.items[0].webkitGetAsEntry) {
+      const out = []
+      for (const item of dt.items) {
+        const e = item.webkitGetAsEntry?.()
+        if (e) await walkEntry(e, '', out)
+        else { const f = item.getAsFile?.(); if (f) out.push({ file: f, relPath: f.name }) }
+      }
+      return out
+    }
+    return Array.from(dt?.files || []).map(f => ({ file: f, relPath: f.name }))
+  }
+
+  // Accept either a FileList (from <input type=file>) or an array of
+  // {file, relPath} from the folder walker. Normalises to the second shape.
+  async function uploadFiles(input) {
+    let list = []
+    if (input instanceof FileList) {
+      list = Array.from(input).map(f => ({ file: f, relPath: f.name }))
+    } else if (Array.isArray(input)) {
+      list = input
+    } else {
+      return
+    }
+    if (list.length === 0) return
+
+    const total = list.reduce((s, x) => s + x.file.size, 0)
     const fd = new FormData()
     fd.append('path', filePath)
-    for (const f of list) fd.append('files', f, f.name)
+    for (const { file, relPath } of list) fd.append('files', file, relPath)
 
     uploadBusy = true
-    uploadProg = { active: true, loaded: 0, total, files: list.length, name: list[0].name }
+    uploadProg = { active: true, loaded: 0, total, files: list.length, name: list[0].relPath }
     uploadMsg = ''
 
     await new Promise((resolve) => {
@@ -348,9 +424,10 @@
       fetchDirs('').then(c => { tree.children = c; tree.loading = false })
     }
   })
-  function onDrop(e) {
+  async function onDrop(e) {
     e.preventDefault(); dragOver = false
-    uploadFiles(e.dataTransfer?.files)
+    const list = await flattenDataTransfer(e.dataTransfer)
+    uploadFiles(list)
   }
   function onDragOver(e) { e.preventDefault(); dragOver = true }
   function onDragLeave() { dragOver = false }
@@ -663,6 +740,29 @@
           </tbody></table>
         {/if}
       </div>
+
+      <!-- v0.2.23: Danger Zone — destructive site removal, guarded by a
+           type-the-domain confirm prompt. Databases aren't dropped here
+           (they belong to the engine, not the site); drop them on the
+           Databases tab first if you want a clean teardown. -->
+      <div class="section danger-zone">
+        <div class="section-h"><div>
+          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px;color:var(--down)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Danger Zone</h3>
+          <p>Permanent actions for this site</p>
+        </div></div>
+        <div class="section-b">
+          <div class="danger-row">
+            <div>
+              <b>Delete this site</b>
+              <p>Removes the nginx vhost, PHP-FPM pool / systemd unit, site user, document root, and SFTP access. Databases are NOT dropped — drop them on the Databases tab first if you want a complete teardown.</p>
+            </div>
+            <button class="btn btn-danger" onclick={deleteSite}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              Delete site
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
 
   {:else if active === 'vhost'}
@@ -692,16 +792,33 @@
 
   {:else if active === 'databases'}
     <div class="fade">
-      <div class="section"><div class="section-h"><div><h3>Databases</h3><p>Choose MariaDB or PostgreSQL per database</p></div></div>
-        {#if dbs.length === 0}<div class="empty">No databases yet.</div>
+      <div class="section"><div class="section-h"><div><h3>Databases</h3><p>Choose MariaDB or PostgreSQL per database · each gets its own user</p></div></div>
+        {#if dbs.length === 0}<div class="empty">No databases yet. Add one below — auracpd creates the database AND a dedicated user with a strong password.</div>
         {:else}
-          <table><thead><tr><th>Name</th><th>Engine</th><th>User</th></tr></thead><tbody>
-            {#each dbs as d}
-              <tr><td><span class="mono">{d.name}</span></td>
-                <td><span class="pill-eng {d.engine === 'postgres' ? 'eng-pg' : 'eng-maria'}">{d.engine === 'postgres' ? '⬢ PostgreSQL' : '⬡ MariaDB'}</span></td>
-                <td><span class="mono" style="color:var(--txt-2)">{d.user}</span></td></tr>
-            {/each}
-          </tbody></table>
+          <table class="db-list">
+            <thead><tr><th>Database</th><th>Engine</th><th>User</th><th style="text-align:right">Actions</th></tr></thead>
+            <tbody>
+              {#each dbs as d}
+                <tr>
+                  <td>
+                    <div class="db-name-cell">
+                      <span class="db-ic {d.engine === 'postgres' ? 'db-ic-pg' : 'db-ic-maria'}" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6"/></svg>
+                      </span>
+                      <span class="mono db-name">{d.name}</span>
+                    </div>
+                  </td>
+                  <td><span class="pill-eng {d.engine === 'postgres' ? 'eng-pg' : 'eng-maria'}">{d.engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'}</span></td>
+                  <td><span class="mono" style="color:var(--txt-2);font-size:12.5px">{d.user}</span></td>
+                  <td style="text-align:right">
+                    <button type="button" class="file-del" onclick={() => deleteDb(d.engine, d.name)} title="Drop database" aria-label="Delete {d.name}">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                    </button>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         {/if}
         <!-- v0.2.21: condensed two-row layout. Row 1: Engine + Database name.
              Row 2: Database user + password (with regenerate). Visually
@@ -747,7 +864,7 @@
 
   {:else if active === 'cache'}
     <div class="section fade"><div class="section-h"><div><h3>Cache</h3><p>nginx fastcgi_cache / proxy_cache (per-site, opt-in)</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Full-page cache</span><button type="button" role="switch" aria-checked={isOn('cache')} aria-label="Toggle full-page cache" class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></button></div>
+      <div class="kv"><span class="k">Full-page cache</span><span class="kv-right">{#if savedFlash['cache']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cache')} aria-label="Toggle full-page cache" class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></button></span></div>
       <div class="kv"><span class="k">Default TTL</span><span class="v">{config.cache_ttl || '600s'}</span></div>
     </div></div>
 
@@ -773,13 +890,13 @@
         <div style="margin-top:14px;display:flex;gap:8px">
           <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check now</button>
         </div>
-        <div class="kv" style="margin-top:14px"><span class="k">Cloudflare DNS-01 (wildcard / proxied)</span><button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></div>
+        <div class="kv" style="margin-top:14px"><span class="k">Cloudflare DNS-01 (wildcard / proxied)</span><span class="kv-right">{#if savedFlash['cloudflare_dns']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></span></div>
         <div class="hint" style="margin-left:0">Requires a Cloudflare API token under <b>Instance → Cloudflare</b>. Use this for wildcards, or when CF orange-cloud is blocking HTTP-01.</div>
       </div></div>
 
   {:else if active === 'security'}
     <div class="section fade"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Basic authentication</span><button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></div>
+      <div class="kv"><span class="k">Basic authentication</span><span class="kv-right">{#if savedFlash['basic_auth']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></span></div>
       {#if isOn('basic_auth')}
         <div class="two" style="margin-top:8px">
           <div class="field"><label>
@@ -793,7 +910,7 @@
         </div>
         <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
       {/if}
-      <div class="kv"><span class="k">Block bad bots</span><button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></div>
+      <div class="kv"><span class="k">Block bad bots</span><span class="kv-right">{#if savedFlash['block_bots']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></span></div>
       <div class="hint" style="margin-left:0">
         Blocks the SEO scraper set by User-Agent: <span class="mono">AhrefsBot</span>, <span class="mono">SemrushBot</span>, <span class="mono">MJ12bot</span>, <span class="mono">DotBot</span>, <span class="mono">PetalBot</span>.
         Returns <span class="mono">403</span> at the nginx layer — no PHP / app workload spent on them.
@@ -801,30 +918,53 @@
     </div></div>
 
   {:else if active === 'sshftp'}
-    <div class="section fade"><div class="section-h"><div><h3>SSH / FTP Users</h3><p>Chroot-jailed to the site home</p></div></div>
-      <table><thead><tr><th>User</th><th>Type</th><th></th></tr></thead><tbody>
-        <tr><td><span class="mono">{site.user}</span></td><td><span class="badge b-node">owner · SSH+SFTP</span></td><td></td></tr>
+    <div class="section fade"><div class="section-h"><div><h3>SSH / FTP Users</h3><p>Chroot-jailed to the site home — extra accounts get their own credentials</p></div></div>
+      <table class="ssh-table"><thead><tr><th>User</th><th>Type</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+        <tr>
+          <td><span class="mono">{site.user}</span> <span class="role-tag">owner</span></td>
+          <td><span class="acc-pill acc-ssh">SSH + SFTP</span></td>
+          <td style="text-align:right;color:var(--txt-3);font-size:12px">primary account</td>
+        </tr>
         {#each sshUsers as u}
-          <tr><td><span class="mono">{u.username}</span></td><td><span class="badge b-proxy">{u.type === 'ssh' ? 'SSH + SFTP' : 'SFTP only'}</span></td>
-            <td style="text-align:right"><button type="button" class="manage" onclick={() => delSSH(u.username)}>Delete</button></td></tr>
+          <tr>
+            <td><span class="mono">{u.username}</span></td>
+            <td><span class="acc-pill {u.type === 'ssh' ? 'acc-ssh' : 'acc-sftp'}">{u.type === 'ssh' ? 'SSH + SFTP' : 'SFTP only'}</span></td>
+            <td style="text-align:right">
+              <button type="button" class="file-del" onclick={() => delSSH(u.username)} title="Delete user" aria-label="Delete {u.username}">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              </button>
+            </td>
+          </tr>
         {/each}
       </tbody></table>
       <div class="section-b" style="border-top:1px solid var(--line)">
-        <div class="two">
+        <h4 class="db-add-h"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg> New SSH/FTP user</h4>
+        <div class="db-grid">
           <div class="field"><label>
             <span class="label-text">Username</span>
             <input class="input" bind:value={newSSH.username} placeholder="editor">
           </label></div>
           <div class="field"><label>
             <span class="label-text">Access</span>
-            <select class="select ui" bind:value={newSSH.type}><option value="sftp">SFTP only</option><option value="ssh">SSH + SFTP</option></select>
+            <select class="select ui" bind:value={newSSH.type}>
+              <option value="sftp">SFTP only</option>
+              <option value="ssh">SSH + SFTP</option>
+            </select>
           </label></div>
         </div>
         <div class="field"><label>
-          <span class="label-text">Password <span class="hint">blank = auto-generate</span></span>
-          <input class="input" bind:value={newSSH.password}>
+          <span class="label-text">Password <span class="hint">auto-generated, editable</span></span>
+          <div class="input-row">
+            <input class="input" bind:value={newSSH.password}>
+            <button type="button" class="gen" onclick={() => newSSH.password = randPw()} title="Regenerate password" aria-label="Regenerate password">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+            </button>
+          </div>
         </label></div>
-        <button class="btn btn-primary" onclick={addSSH} disabled={busy || !newSSH.username}>Add User</button>
+        <button class="btn btn-primary" onclick={addSSH} disabled={busy || !newSSH.username || !newSSH.password}>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg>
+          Add User
+        </button>
         {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
       </div>
     </div>
@@ -974,8 +1114,8 @@
               <input type="checkbox" class="file-check" checked={!!selected[f.name]}
                      onchange={() => toggleSel(f.name)} aria-label="Select {f.name}">
               {#if f.dir}
-                <button type="button" class="file-row k" onclick={() => openDir(f.name)} title="Open folder">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+                <button type="button" class="file-row k folder" onclick={() => openDir(f.name)} title="Open folder">
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="file-ic file-ic-folder"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.382a1.5 1.5 0 0 1 1.06.44L11.5 6.5h8A1.5 1.5 0 0 1 21 8v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11z"/></svg>
                   {f.name}
                 </button>
               {:else if isTextish(f.name)}

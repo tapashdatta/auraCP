@@ -174,12 +174,45 @@ func (m *Manager) Apply(ctx context.Context, s Spec) error {
 		if err := os.MkdirAll(paths.ACMEChallengeDir, 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(paths.NginxSiteFile(s.Domain), []byte(content), 0o644); err != nil {
+		// v0.2.23: atomic write — stage the new content next to dst, point the
+		// live sites-enabled symlink at the staged file, run `nginx -t`. If the
+		// test passes we rename tmp→dst (atomic) and re-point the symlink at
+		// the canonical name. If it fails we roll back the symlink to the prior
+		// target and delete the staging file. Net effect: nginx never observes
+		// a broken file on disk via the live symlink, so a future restart can't
+		// suddenly fail because of a save we did half an hour ago.
+		dst := paths.NginxSiteFile(s.Domain)
+		link := paths.NginxSiteLink(s.Domain)
+		tmp := dst + ".new"
+		if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
 			return err
 		}
-		// Ensure the symlink exists; nginx ignores files outside sites-enabled.
-		_ = os.Remove(paths.NginxSiteLink(s.Domain))
-		if err := os.Symlink(paths.NginxSiteFile(s.Domain), paths.NginxSiteLink(s.Domain)); err != nil {
+		// Snapshot the prior link target for rollback (empty = no prior link).
+		var prevTarget string
+		if li, _ := os.Lstat(link); li != nil && li.Mode()&os.ModeSymlink != 0 {
+			if t, e := os.Readlink(link); e == nil {
+				prevTarget = t
+			}
+		}
+		// Point the live symlink at tmp; nginx -t now scans the new content.
+		_ = os.Remove(link)
+		if err := os.Symlink(tmp, link); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+		if _, err := m.R.Run(ctx, "nginx", "-t"); err != nil {
+			_ = os.Remove(link)
+			if prevTarget != "" {
+				_ = os.Symlink(prevTarget, link)
+			}
+			_ = os.Remove(tmp)
+			return fmt.Errorf("nginx config invalid: %w", err)
+		}
+		if err := os.Rename(tmp, dst); err != nil {
+			return err
+		}
+		_ = os.Remove(link)
+		if err := os.Symlink(dst, link); err != nil {
 			return err
 		}
 		// htpasswd for basic_auth — nginx supports the bcrypt $2y$ format that

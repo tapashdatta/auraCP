@@ -27,7 +27,8 @@ type Entry struct {
 }
 
 // List returns the entries of <docroot>/<sub>, rejecting any path that resolves
-// outside the document root.
+// outside the document root. v0.2.23: sorted folders-first, then files, with
+// case-insensitive alphabetical ordering inside each group.
 func List(user, domain, sub string) ([]Entry, error) {
 	if err := validate.Username(user); err != nil {
 		return nil, err
@@ -52,18 +53,34 @@ func List(user, domain, sub string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Entry, 0, len(des))
+	var dirs, files []Entry
 	for _, de := range des {
 		fi, err := de.Info()
 		if err != nil {
 			continue
 		}
-		out = append(out, Entry{
-			Name: de.Name(), Dir: de.IsDir(),
-			Size: fi.Size(), Mode: fi.Mode().String(),
-		})
+		e := Entry{Name: de.Name(), Dir: de.IsDir(), Size: fi.Size(), Mode: fi.Mode().String()}
+		if e.Dir {
+			dirs = append(dirs, e)
+		} else {
+			files = append(files, e)
+		}
 	}
-	return out, nil
+	byNameCI := func(a, b Entry) int { return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)) }
+	sortEntries(dirs, byNameCI)
+	sortEntries(files, byNameCI)
+	return append(dirs, files...), nil
+}
+
+// sortEntries — tiny stable insertion sort to avoid importing slices/sort just
+// for one call. Directory listings rarely exceed a few hundred entries; O(n²)
+// is fine in practice and keeps the dependency surface small.
+func sortEntries(es []Entry, less func(a, b Entry) int) {
+	for i := 1; i < len(es); i++ {
+		for j := i; j > 0 && less(es[j-1], es[j]) > 0; j-- {
+			es[j-1], es[j] = es[j], es[j-1]
+		}
+	}
 }
 
 // resolve returns the absolute, contained target path, refusing any input that
@@ -81,6 +98,54 @@ func resolve(user, domain, sub string) (string, string, error) {
 		return "", "", fmt.Errorf("path escapes site root")
 	}
 	return root, target, nil
+}
+
+// SaveAt is like Save but accepts a name that may contain forward-slashes,
+// treating the leading components as subdirectories under <base>. Creates any
+// missing intermediate directories and chowns them to the site user. Used by
+// the folder drag-and-drop upload path so a dropped tree lands as a tree on
+// disk, not a flat directory.
+//
+// base + relPath are both relative to the docroot. relPath '..', '\', or
+// absolute components are rejected.
+func SaveAt(siteUser, domain, base, relPath string, body io.Reader) error {
+	if relPath == "" {
+		return fmt.Errorf("empty path")
+	}
+	rp := filepath.ToSlash(relPath)
+	if strings.HasPrefix(rp, "/") || strings.Contains(rp, "\\") {
+		return fmt.Errorf("invalid relative path: %q", relPath)
+	}
+	parts := strings.Split(rp, "/")
+	for _, p := range parts {
+		if p == "" || p == "." || p == ".." {
+			return fmt.Errorf("invalid path component: %q", p)
+		}
+	}
+	name := parts[len(parts)-1]
+	subParts := parts[:len(parts)-1]
+	fullSub := base
+	if len(subParts) > 0 {
+		joined := strings.Join(subParts, "/")
+		if fullSub == "" {
+			fullSub = joined
+		} else {
+			fullSub = fullSub + "/" + joined
+		}
+		// Resolve to get the absolute target dir and ensure it exists.
+		_, dir, err := resolve(siteUser, domain, fullSub)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		// chown each intermediate directory to the site user — walking from
+		// the deepest new dir up to the docroot, stopping when we hit an
+		// existing site-user-owned directory.
+		_ = chownToUser(dir, siteUser)
+	}
+	return Save(siteUser, domain, fullSub, name, body)
 }
 
 // Save streams an uploaded file into <docroot>/<sub>/<name>, chowning it to

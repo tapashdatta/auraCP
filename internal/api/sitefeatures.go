@@ -93,7 +93,11 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 				_ = part.Close()
 				continue
 			}
-			if err := files.Save(st.SiteUser, domain, sub, name, part); err != nil {
+			// v0.2.23: filename may contain forward-slashes when the browser
+			// drops a folder (the recursive walk uses relPath = "sub/file.ext").
+			// SaveAt handles both the flat case (no slashes → basename → Save)
+			// and the nested case (creates intermediate dirs first).
+			if err := files.SaveAt(st.SiteUser, domain, sub, name, part); err != nil {
 				errs = append(errs, name+": "+err.Error())
 			} else {
 				saved++

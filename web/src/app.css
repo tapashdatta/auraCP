@@ -382,6 +382,28 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .tab .num{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);margin-left:6px}
 .tab .tab-ic{display:inline-flex;align-items:center;color:currentColor}
 .tab .tab-ic svg{width:14px;height:14px}
+/* v0.2.23: tree folder glyph picks up the same warm-amber as the file list
+   folder icon, so the two views are visually consistent. */
+.tree-row .tree-ic{color:#e2a857}
+:root[data-theme="dark"] .tree-row .tree-ic{color:#f5be6a}
+.tree-row.active .tree-ic{color:var(--aura-strong)}
+
+/* v0.2.23: responsive nav. Below 760 px the per-site tab bar collapses to
+   icon-only — frees space and lets the operator see all 11 tabs without
+   horizontal scroll on phones. Tooltip via the SVG's surrounding button label
+   (existing aria-label) keeps screen-readers happy. */
+@media (max-width:760px){
+  .tabs{gap:2px}
+  .tab{padding:10px 9px;font-size:0;line-height:1}
+  .tab .tab-ic svg{width:18px;height:18px}
+  /* Restore font size for the active tab so the user has *some* anchor; but
+     only on slightly larger phones — sub-540 still icon-only. */
+}
+@media (max-width:540px){
+  .topbar .nav button{font-size:0;padding:7px 11px}
+  .topbar .nav button svg{margin-right:0 !important;width:16px;height:16px}
+  .topbar .brand{font-size:15px}
+}
 /* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
    default centered-glyph background for a sized SVG that fills the box. */
 .fav.brand{padding:7px}
@@ -477,6 +499,57 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .chmod-preview > div{display:flex;flex-direction:column;align-items:center;gap:4px}
 .chmod-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600}
 .chmod-preview .mono{font-size:16px;color:var(--txt);font-weight:600}
+
+/* v0.2.23: folder icon (filled, warm amber) — clearly different at a glance
+   from the outlined sheet-of-paper file icons next to it. */
+.file-ic-folder{color:#e2a857}
+:root[data-theme="dark"] .file-ic-folder{color:#f5be6a}
+.file-row.folder{font-weight:500}
+
+/* v0.2.23: toggle save indicator. Small green chip that flashes in next to
+   a toggle on a successful save, then fades after 1.6s. The kv-right wrapper
+   is needed because .kv is space-between two-column; we want the toggle to
+   stay rightmost while the saved tag sits to its left. */
+.kv-right{display:inline-flex;align-items:center;gap:10px;margin-left:auto}
+.saved-flash{display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;background:var(--up-soft, color-mix(in srgb, #38e3a3 16%, transparent));color:var(--up, #18a86b);border:1px solid color-mix(in srgb, var(--up, #18a86b) 32%, transparent);animation:auracp-saved-flash 1.6s ease forwards}
+@keyframes auracp-saved-flash{
+  0%   { opacity:0; transform:translateX(6px) scale(.92); }
+  18%  { opacity:1; transform:translateX(0)   scale(1);   }
+  78%  { opacity:1; }
+  100% { opacity:0; transform:translateX(-2px); }
+}
+
+/* v0.2.23: Danger Zone on a site's Settings tab. Red top border + slight tint
+   so destructive actions feel distinct from the rest of the page. */
+.danger-zone{border-top:2px solid color-mix(in srgb, var(--down) 60%, transparent);margin-top:18px}
+.danger-zone h3{color:var(--down)}
+.danger-row{display:flex;align-items:center;gap:18px;justify-content:space-between;flex-wrap:wrap}
+.danger-row > div{flex:1;min-width:280px}
+.danger-row b{display:block;font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px}
+.danger-row p{margin:0;font-size:12.5px;color:var(--txt-2);line-height:1.5}
+
+/* v0.2.23: restyled database list. Each row gets a leading database glyph
+   tinted to the engine, plus a clearer name treatment and a trash button. */
+.db-list{width:100%}
+.db-list td, .db-list th{padding:12px 14px}
+.db-list tbody tr{transition:background-color .1s}
+.db-list tbody tr:hover{background:var(--surface-1)}
+.db-name-cell{display:flex;align-items:center;gap:10px}
+.db-ic{width:28px;height:28px;display:grid;place-items:center;border-radius:8px;flex:none}
+.db-ic svg{width:16px;height:16px}
+.db-ic-maria{background:color-mix(in srgb, #C0765A 18%, var(--surface-1));color:#C0765A;border:1px solid color-mix(in srgb, #C0765A 30%, transparent)}
+.db-ic-pg{background:color-mix(in srgb, #336791 20%, var(--surface-1));color:#336791;border:1px solid color-mix(in srgb, #336791 35%, transparent)}
+:root[data-theme="dark"] .db-ic-pg{color:#74acdc}
+.db-name{font-weight:600;color:var(--txt);font-size:13.5px}
+
+/* v0.2.23: SSH/FTP user list — restyle to match the new DB list density. */
+.ssh-table{width:100%}
+.ssh-table td, .ssh-table th{padding:11px 14px}
+.ssh-table tbody tr:hover{background:var(--surface-1)}
+.role-tag{display:inline-block;margin-left:6px;padding:2px 7px;border-radius:var(--radius-pill);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;background:var(--surface-2);color:var(--txt-3);border:1px solid var(--line)}
+.acc-pill{display:inline-flex;align-items:center;padding:3px 10px;border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;letter-spacing:.01em}
+.acc-sftp{background:color-mix(in srgb, var(--info) 14%, var(--surface-1));color:var(--info);border:1px solid color-mix(in srgb, var(--info) 28%, transparent)}
+.acc-ssh{background:color-mix(in srgb, var(--aura-strong) 14%, var(--surface-1));color:var(--aura-strong);border:1px solid color-mix(in srgb, var(--aura-strong) 32%, transparent)}
 
 /* v0.2.21: compact two-column form layout for the Add Database panel —
    engine + name on row 1, user + password on row 2. Collapses below 640px. */

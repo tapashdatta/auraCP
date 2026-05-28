@@ -93,6 +93,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("GET /api/database-servers", srv.protect(srv.listDatabaseServers))
 	mux.Handle("GET /api/sites/{domain}/databases", srv.requirePerm("databases", "read", srv.listDatabases))
 	mux.Handle("POST /api/sites/{domain}/databases", srv.requirePerm("databases", "create", srv.createDatabase))
+	mux.Handle("DELETE /api/sites/{domain}/databases/{engine}/{name}", srv.requirePerm("databases", "delete", srv.deleteDatabase))
 
 	// per-site features
 	mux.Handle("GET /api/sites/{domain}/logs", srv.protect(srv.siteLogs))
@@ -312,6 +313,38 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"engine": in.Engine, "name": in.Name, "user": in.User, "password": in.Password,
 	})
+}
+
+// DELETE /api/sites/{domain}/databases/{engine}/{name}
+// v0.2.23: drops a database + its user from the engine and the store. Engine
+// is in the path (not the body) so the URL is RESTful and the operation is
+// idempotent. We look up the dbUser from the store record before dropping.
+func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	engine := r.PathValue("engine")
+	name := r.PathValue("name")
+	dbs, err := s.store.DatabasesForSite(domain)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	var rec *store.Database
+	for i := range dbs {
+		if dbs[i].Engine == engine && dbs[i].Name == name {
+			rec = &dbs[i]
+			break
+		}
+	}
+	if rec == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "database not found"})
+		return
+	}
+	if err := s.dbs.Drop(r.Context(), engine, name, rec.DBUser); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "database.delete", engine+":"+name)
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) listDatabaseServers(w http.ResponseWriter, r *http.Request) {
