@@ -127,6 +127,8 @@ run "pkill -9 -x caddy 2>/dev/null"          # ensure :80 and :443 are free
 run "rm -f /etc/systemd/system/caddy.service"
 run "rm -f /usr/bin/caddy"
 run "rm -rf /etc/caddy /var/lib/caddy"
+# Caddy run as root also stashes auto-managed certs/state under /root by default.
+run "rm -rf /root/.local/share/caddy /root/.config/caddy"
 run "id caddy >/dev/null 2>&1 && userdel -rf caddy"
 run "systemctl daemon-reload"
 
@@ -135,7 +137,8 @@ run "rm -f /usr/bin/frankenphp"
 
 msg "Removing Node.js…"
 purge_installed nodejs
-run "rm -f /etc/apt/sources.list.d/nodesource.list /etc/apt/keyrings/nodesource.gpg"
+run "rm -f /etc/apt/sources.list.d/nodesource.list"
+run "rm -f /etc/apt/keyrings/nodesource.gpg /usr/share/keyrings/nodesource.gpg"
 
 # ── 3. databases ────────────────────────────────────────────────────────────
 if [ "$KEEP_DB" -eq 0 ]; then
@@ -143,6 +146,9 @@ if [ "$KEEP_DB" -eq 0 ]; then
   stop_unit mariadb
   purge_installed mariadb-server mariadb-client mariadb-common
   run "rm -rf /var/lib/mysql /etc/mysql"
+  # third-party apt source/keyring added by the installer for mariadb.org
+  run "rm -f /etc/apt/sources.list.d/mariadb.list /usr/share/keyrings/mariadb.asc"
+
   msg "Removing PostgreSQL (+ data)…"
   stop_unit postgresql
   # Enumerate installed postgresql* packages — avoids apt's glob match against
@@ -151,22 +157,29 @@ if [ "$KEEP_DB" -eq 0 ]; then
             | awk '$2=="installed"{print $1}' | tr '\n' ' ')
   [ -n "$pg_pkgs" ] && run "apt-get purge -y $pg_pkgs"
   run "rm -rf /var/lib/postgresql /etc/postgresql"
+  # third-party apt source/keyring added by the installer for apt.postgresql.org
+  run "rm -f /etc/apt/sources.list.d/pgdg.list /usr/share/keyrings/pgdg.gpg"
 else
   msg "Keeping databases (--keep-databases)."
 fi
 
 # ── 4. optional components ──────────────────────────────────────────────────
 msg "Removing Redis…"
+stop_unit redis-server
 purge_installed redis-server redis-tools
+run "rm -rf /var/lib/redis /etc/redis /var/log/redis"
 
 msg "Removing Typesense…"
 stop_unit typesense-server
 purge_installed typesense-server
+run "rm -rf /etc/typesense-server /var/lib/typesense"
 
 msg "Removing Docker…"
 stop_unit docker
 purge_installed docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker.io
-run "rm -rf /var/lib/docker /etc/docker /etc/apt/sources.list.d/docker.list"
+run "rm -rf /var/lib/docker /etc/docker"
+run "rm -f /etc/apt/sources.list.d/docker.list"
+run "rm -f /etc/apt/keyrings/docker.gpg /etc/apt/keyrings/docker-archive-keyring.gpg"
 
 msg "Removing firewall + fail2ban…"
 if command -v ufw >/dev/null 2>&1; then
@@ -175,12 +188,20 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 purge_installed ufw fail2ban
 
-# ── 5. apt cleanup ──────────────────────────────────────────────────────────
-msg "Cleaning up apt…"
+# ── 5. residual / temp + apt cleanup ────────────────────────────────────────
+msg "Cleaning installer temp files…"
+run "rm -f /tmp/nodesource_setup.sh /tmp/get-docker.sh /tmp/typesense-server.deb"
+run "rm -f /tmp/auracp-cron-* 2>/dev/null"
+# any backup tarballs the panel produced
+run "rm -rf /var/lib/auracp/backups"
+
+msg "Refreshing apt (sources we removed are now gone)…"
+run "apt-get update -y"
 run "apt-get autoremove -y --purge"
+run "apt-get autoclean"
 run "apt-get clean"
 
 echo
-ok "auraCP and its packages removed. The host is clean."
+ok "auraCP and its packages removed. The host is back to its baseline."
 [ "$DRY" -eq 1 ] && echo "${D}(dry-run — nothing was actually changed)${Z}"
 echo "Reinstall any time with: sudo ./installer/install.sh"
