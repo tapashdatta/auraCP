@@ -48,17 +48,17 @@ On a fresh **Debian 13** or **Ubuntu 24.04** host (x86-64 or ARM64):
 
 ```bash
 # 1) install the panel package (from a GitHub Release)
-sudo apt install ./auracp_0.1.0_amd64.deb
+sudo apt install ./auracp_0.1.1_amd64.deb
 
-# 2) provision the data plane (pick optional components interactively, or via flags)
-sudo ./installer/install.sh --yes --db=both --node=yes --php=yes --php-version=8.4 --security=yes
+# 2) provision the data plane — run WITHOUT flags for the interactive package menu,
+#    or pass flags to go non-interactive:
+sudo ./installer/install.sh
+#    e.g. headless with a panel domain (Caddy issues its Let's Encrypt cert):
+sudo ./installer/install.sh --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
 
-Then open `https://<server-ip>:8443` and find the one-time admin login:
-
-```bash
-journalctl -u auracpd | grep -A2 'initial admin'
-```
+Then open the panel — `https://panel.example.com` if you set a domain, otherwise
+`https://<server-ip>:8443` (self-signed) — and **create your admin account** on the first-run setup screen.
 
 The installer locks the required packages (auracpd, Caddy) and lets you choose optional ones:
 MariaDB, PostgreSQL, Node.js, PHP/FrankenPHP, Python, Redis, Typesense, Docker, UFW + fail2ban.
