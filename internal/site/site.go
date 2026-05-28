@@ -13,6 +13,7 @@ import (
 	"log"
 
 	"github.com/auracp/auracp/internal/acme"
+	"github.com/auracp/auracp/internal/db"
 	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
 	"github.com/auracp/auracp/internal/paths"
@@ -34,11 +35,14 @@ type Manager struct {
 	node  *noderuntime.Manager
 	php   *phpruntime.Manager
 	acme  *acme.Manager
+	// v0.2.51: needed for comprehensive teardown (drops DBs that the
+	// site owns, alongside the existing vhost + FPM + user cleanup).
+	dbs *db.Manager
 }
 
-// New wires the orchestrator. php + acme may be nil during early dev runs;
-// non-nil in real production.
-func New(r *system.Runner, st *store.Store, node *noderuntime.Manager, php *phpruntime.Manager, ac *acme.Manager, web *webserver.Manager) *Manager {
+// New wires the orchestrator. php + acme + dbs may be nil during early
+// dev runs; non-nil in real production.
+func New(r *system.Runner, st *store.Store, node *noderuntime.Manager, php *phpruntime.Manager, ac *acme.Manager, web *webserver.Manager, dbs *db.Manager) *Manager {
 	return &Manager{
 		r: r, store: st,
 		os:   osuser.New(r),
@@ -47,6 +51,7 @@ func New(r *system.Runner, st *store.Store, node *noderuntime.Manager, php *phpr
 		node: node,
 		php:  php,
 		acme: ac,
+		dbs:  dbs,
 	}
 }
 
@@ -324,12 +329,31 @@ func (m *Manager) ReapplyRuntime(ctx context.Context, domain string) error {
 	return nil
 }
 
-// Delete tears a site down: vhost, backend, user, and record.
+// Delete tears a site down COMPLETELY: nginx vhost, backend service,
+// every associated database, every cron job, every extra SSH/FTP user,
+// every backup file, the primary Linux user (which drops the home
+// dir + crontab + files), and every related store row.
+//
+// v0.2.51 expanded scope. Prior versions silently left orphan rows in
+// site_config / cron_jobs / databases / ssh_users / backups whenever a
+// site was deleted — those came back as "ghost cron" / "DB shown in
+// UI" / "stale backup eating disk" bugs. The comprehensive teardown
+// runs through internal/site/teardown.go::Teardown which is shared
+// with the new-pipeline path (api/sites_creator.go) so both delete
+// flows behave identically.
+//
+// Failure mode: best-effort on every step; the first error is returned
+// at the end but the function continues through subsequent steps to
+// minimize residual state. Each step logs its own outcome to journald.
 func (m *Manager) Delete(ctx context.Context, domain string) error {
 	st, err := m.store.SiteByDomain(domain)
 	if err != nil {
 		return err
 	}
+
+	// Step A: filesystem + system teardown (vhost, FPM pool / systemd
+	// unit, primary Linux user). Same as before — the on-disk artifacts
+	// that the legacy path always handled.
 	if err := m.web.Remove(ctx, domain); err != nil {
 		return err
 	}
@@ -346,9 +370,16 @@ func (m *Manager) Delete(ctx context.Context, domain string) error {
 	if err := m.os.Delete(ctx, st.SiteUser); err != nil {
 		return err
 	}
-	_ = m.store.DeleteAllPHPSettings(domain)
-	_ = m.store.DeleteCertificate(domain)
-	return m.store.DeleteSite(domain)
+
+	// Step B: comprehensive teardown of EVERYTHING else (databases,
+	// extra users, backups, every store row). Shared with the new
+	// pipeline so the two delete code paths have identical semantics.
+	return Teardown(ctx, &TeardownDeps{
+		R:     m.r,
+		Store: m.store,
+		DBs:   m.dbs,
+		OS:    m.os,
+	}, domain)
 }
 
 func appLabel(s Spec) string {

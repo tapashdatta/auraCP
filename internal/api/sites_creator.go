@@ -240,10 +240,21 @@ func (s *Server) deleteSiteViaNewPipeline(ctx context.Context, domain string) er
 	if st.Type == "nodejs" || st.Type == "python" {
 		_ = deps.Rt.Remove(ctx, domain)
 	}
-	// DB cleanup.
-	_ = s.store.DeleteAllPHPSettings(domain)
-	_ = s.store.DeleteCertificate(domain)
-	return s.store.DeleteSite(domain)
+
+	// v0.2.51: comprehensive teardown — drops every database the site
+	// owned, removes extra SFTP/SSH users, sweeps backup files, and
+	// purges every store row associated with the domain. Identical
+	// semantics to the legacy path (site.Manager.Delete also calls
+	// site.Teardown). Without this, deleting a site through the new
+	// pipeline left orphan rows in site_config / cron_jobs / databases
+	// / ssh_users / backups, which surfaced later as ghost cron jobs
+	// and "DB shown in UI but file gone" bugs.
+	return site.Teardown(ctx, &site.TeardownDeps{
+		R:     s.runner,
+		Store: s.store,
+		DBs:   s.dbs,
+		OS:    s.osu,
+	}, domain)
 }
 
 // creatorAppLabel returns the UI label for a freshly-created site.

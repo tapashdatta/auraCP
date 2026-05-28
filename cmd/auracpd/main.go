@@ -154,9 +154,14 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
+	dbs := db.New(runner, st, sec)
 	api.Register(mux, st, api.Deps{
-		Sites:        site.New(runner, st, node, php, ac, web),
-		DBs:          db.New(runner, st, sec),
+		// v0.2.51: site.New now takes the db.Manager so the
+		// comprehensive teardown (site.Teardown) can drop every DB
+		// associated with a site on delete. Two-phase construction
+		// (dbs first, then sites) keeps the wiring straight.
+		Sites:        site.New(runner, st, node, php, ac, web, dbs),
+		DBs:          dbs,
 		Cron:         cron.New(runner, st),
 		Backups:      backup.New(runner, st),
 		Web:          web,
