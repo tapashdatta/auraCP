@@ -46,12 +46,13 @@
   --radius-lg:26px;
   --radius-pill:999px;
 
-  /* Display + body + mono — unchanged set, but new --fs-numeral picks up
-     tabular figures + oldstyle alternates for the hero metric. */
-  --fs-display:"Bricolage Grotesque",sans-serif;
-  --fs-ui:"Hanken Grotesk",sans-serif;
-  --fs-mono:"JetBrains Mono",monospace;
-  --fs-numeral:"Bricolage Grotesque",sans-serif;
+  /* Typography: one variable font (Manrope) covers display + UI; JetBrains
+     Mono stays for code/identifiers. Manrope ships tnum for tabular figures
+     and a CSS-zero alternate; we opt into both on the hero numeral. */
+  --fs-display:"Manrope","Inter",system-ui,-apple-system,sans-serif;
+  --fs-ui:"Manrope","Inter",system-ui,-apple-system,sans-serif;
+  --fs-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --fs-numeral:"Manrope","Inter",system-ui,sans-serif;
 }
 
 :root[data-theme="dark"] {
@@ -92,7 +93,9 @@ body{
   color:var(--txt);
   font-family:var(--fs-ui);
   font-size:14px;
-  line-height:1.5;
+  line-height:1.55;
+  letter-spacing:-.005em;
+  font-feature-settings:"cv11" 1, "ss01" 1;  /* Manrope: alt single-storey 'a' */
   -webkit-font-smoothing:antialiased;
   /* Soft atmospheric gradient (no images, no perf cost) — warm peach
      glow top-left, faint mint glow bottom-right, almost imperceptible
@@ -166,13 +169,13 @@ input,select{font-family:inherit}
 .btn-square{border-radius:var(--radius-sm)}
 .btn svg{width:15px;height:15px}
 
-/* Hero numeral — used for big landing-page stats (Lisso 85% style).
-   Tabular numbers, tight tracking, refined optical-size variation. */
+/* Hero numeral — big landing-page stats. Manrope at 800 with tabular
+   figures and CSS-zero alternate; tight negative tracking gives the
+   condensed display feel without needing a separate display face. */
 .hero-num{
   font-family:var(--fs-numeral);font-weight:800;
-  font-size:clamp(56px, 8vw, 96px);line-height:1;letter-spacing:-.04em;
-  font-feature-settings:"tnum" 1, "ss01" 1;
-  font-variation-settings:"opsz" 92;
+  font-size:clamp(56px, 8vw, 96px);line-height:1;letter-spacing:-.045em;
+  font-feature-settings:"tnum" 1, "zero" 1, "ss01" 1;
   color:var(--txt);
 }
 .hero-num small{font-size:.4em;font-weight:600;color:var(--txt-3);letter-spacing:-.01em}
