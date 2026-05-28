@@ -105,6 +105,24 @@ if [ -d /run/systemd/system ]; then
   # (e.g. after an in-panel upgrade from a pre-v0.2.15 release) recovers
   # by itself within ~60s instead of leaving the operator at a 502.
   systemctl enable --now auracpd-watchdog.timer >/dev/null 2>&1 || true
+  # v0.2.32: if Adminer was installed previously (i.e. PHP is on the host),
+  # refresh the SSO wrapper from the just-unpacked packaging directory.
+  # Without this an upgrade leaves the daemon on the new version but the
+  # wrapper PHP on the prior version — which is exactly what bit the
+  # Adminer "No active panel session" flow on v0.2.31. install_adminer
+  # does this normally, but it's gated behind a full auracp-install run;
+  # this line makes panel-pill / auracp-update upgrades self-healing too.
+  if [ -d /opt/auracp/adminer ] && [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
+    install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php
+    # Stale subclass file from < v0.2.31 — current wrapper doesn't use it.
+    rm -f /opt/auracp/adminer/adminer-plugins.php
+    # Reload any installed PHP-FPM versions so an op-code cache (if enabled)
+    # picks up the new wrapper. Safe to ignore failures — opcache will
+    # re-validate on next access by mtime anyway.
+    for unit in $(systemctl list-units --type=service --state=active --no-legend 'php*-fpm.service' 2>/dev/null | awk '{print $1}'); do
+      systemctl reload "$unit" 2>/dev/null || true
+    done
+  fi
   echo
   echo "auraCP panel installed and running on https://<server-ip>:8443"
   echo "Next step — provision the data plane (nginx, MariaDB/Postgres, PHP-FPM, Node, …):"
