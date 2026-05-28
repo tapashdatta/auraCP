@@ -26,6 +26,7 @@
   let newCron = $state({ schedule: '', command: '' })
   let config = $state({})
   let sslStatus = $state(null)
+  let sslBusy = $state(false)
   let sshUsers = $state([])
   let nodeRuntimes = $state([])
   let nodePick = $state(site.node || 'default')
@@ -147,6 +148,26 @@
   // token server-side, then opens the returned URL in a new tab. The PHP
   // wrapper at /_adminer/ consumes the token (single-use) and seeds
   // Adminer's session with the credentials — no login form, no typing.
+  // v0.2.40: kick off an ACME re-issuance for this site's cert. lego runs
+  // synchronously inside the panel request — typical issuance is 5–15s for
+  // HTTP-01, ~30–60s for DNS-01 (TXT propagation), so we show a 'busy'
+  // state on the button. On success we refresh the status to reflect the
+  // new cert in the UI immediately.
+  async function renewCert() {
+    sslBusy = true
+    const r = await apiFetch(`${base}/ssl/renew`, { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    sslBusy = false
+    if (!r.ok) {
+      toastError(d.error ? `Issuance failed: ${d.error}` : `Issuance failed: HTTP ${r.status}`)
+      // Still refresh — the certs table now has lastError populated.
+      load('ssl')
+      return
+    }
+    toastSuccess('Certificate issued. Reloading status…')
+    load('ssl')
+  }
+
   async function manageDb(engine, name) {
     const r = await apiFetch(`${base}/databases/${encodeURIComponent(engine)}/${encodeURIComponent(name)}/manage`, { method: 'POST' })
     const d = await r.json().catch(() => ({}))
@@ -934,7 +955,11 @@
     </div></div>
 
   {:else if active === 'ssl'}
-    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Issued + renewed by auracpd via <span class="mono">go-acme/lego</span>. HTTP-01 by default; Cloudflare DNS-01 below.</p></div>
+    <!-- v0.2.40: SSL/TLS tab — live TLS + stored issuance state. When lego
+         left a lastError on the cert record, that's surfaced verbatim with
+         a Retry button next to it. CF DNS-01 toggle gets a clearer banner
+         when the host's CF token isn't configured yet. -->
+    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Issued + renewed by auracpd via <span class="mono">go-acme/lego</span>. HTTP-01 by default; switch to DNS-01 for Cloudflare-proxied domains.</p></div>
       {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}</div>
       <div class="section-b" style="padding-top:4px">
         {#if sslStatus === null}
@@ -942,21 +967,54 @@
         {:else if sslStatus.status === 'active'}
           <div class="kv"><span class="k">Issuer</span><span class="v">{sslStatus.issuer || '—'}</span></div>
           <div class="kv"><span class="k">Domains</span><span class="v">{(sslStatus.domains || []).join(', ') || '—'}</span></div>
-          <div class="kv"><span class="k">Expires</span><span class="v">{sslStatus.expires ? new Date(sslStatus.expires).toLocaleString() : '—'}</span></div>
+          <div class="kv"><span class="k">Expires</span><span class="v">{sslStatus.expires ? new Date(sslStatus.expires).toLocaleString() : '—'}{#if sslStatus.expires}<span class="hint" style="margin-left:8px">({Math.max(0, Math.round((new Date(sslStatus.expires) - Date.now()) / 86400000))} days left)</span>{/if}</span></div>
         {:else}
-          <div class="kv"><span class="k">Status</span><span class="v">{sslStatus?.message || 'no certificate served yet'}</span></div>
-          <div class="kv"><span class="k">Provider</span><span class="v">Let's Encrypt (auto)</span></div>
-          <div class="hint" style="margin-left:0;margin-top:8px">
-            Cert issuance runs in the background after a site is created.
-            Watch <span class="mono">journalctl -u auracpd</span> for <span class="mono">acme: issued cert</span>.
-            If your DNS goes through Cloudflare with the orange cloud, enable DNS-01 below.
-          </div>
+          <div class="kv"><span class="k">Live status</span><span class="v">{sslStatus?.message || 'no certificate served yet'}</span></div>
+          <div class="kv"><span class="k">Provider</span><span class="v">Let's Encrypt (auto, in-process via lego)</span></div>
+          {#if sslStatus?.stored?.lastError}
+            <div class="note ssl-fail" style="margin:14px 0 6px"><div>
+              <b>Issuance failed</b> (attempt {sslStatus.stored.attempts || 1})<br>
+              <span class="mono" style="font-size:12px;color:var(--down)">{sslStatus.stored.lastError}</span>
+            </div></div>
+            <!-- Detect the common 'orange-cloud blocks HTTP-01' pattern from
+                 the error text and surface the DNS-01 remediation inline. -->
+            {#if /cloudflare|http-01|connection refused|timeout|404|403/i.test(sslStatus.stored.lastError) && !sslStatus.cloudflareDNS}
+              <div class="hint" style="margin:6px 0 0">
+                Looks like HTTP-01 can't reach this server. If the domain is proxied through Cloudflare
+                (<b>orange cloud</b>), switch to DNS-01 below — it works without exposing port 80.
+              </div>
+            {/if}
+          {:else if sslStatus?.stored?.status === 'pending'}
+            <div class="hint" style="margin-top:8px">
+              Cert issuance is in progress. First request after site create can take 10–60s.
+            </div>
+          {:else}
+            <div class="hint" style="margin-top:8px">
+              No cert on file yet. Click <b>Retry issuance</b> below; watch <span class="mono">journalctl -u auracpd</span> if it fails.
+            </div>
+          {/if}
         {/if}
-        <div style="margin-top:14px;display:flex;gap:8px">
-          <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check now</button>
+
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy}>
+            {sslBusy ? 'Issuing…' : (sslStatus?.status === 'active' ? 'Renew now' : 'Retry issuance')}
+          </button>
+          <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check status</button>
         </div>
-        <div class="kv" style="margin-top:14px"><span class="k">Cloudflare DNS-01 (wildcard / proxied)</span><span class="kv-right">{#if savedFlash['cloudflare_dns']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></span></div>
-        <div class="hint" style="margin-left:0">Requires a Cloudflare API token under <b>Instance → Cloudflare</b>. Use this for wildcards, or when CF orange-cloud is blocking HTTP-01.</div>
+
+        <div class="kv" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+          <span class="k">Cloudflare DNS-01 <span class="hint">wildcard / proxied domains</span></span>
+          <span class="kv-right">{#if savedFlash['cloudflare_dns']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></span>
+        </div>
+        {#if isOn('cloudflare_dns') && sslStatus?.cloudflareTokenSet === false}
+          <div class="note ssl-fail" style="margin-top:10px"><div>
+            DNS-01 needs a Cloudflare API token at the panel level.
+            Configure it under <button type="button" class="linkish" onclick={() => go('instance')}>Settings → Cloudflare</button>,
+            then click <b>Retry issuance</b>.
+          </div></div>
+        {:else}
+          <div class="hint" style="margin-left:0">Token configured under <b>Settings → Cloudflare</b>. Use DNS-01 for wildcards, or when CF orange-cloud blocks HTTP-01.</div>
+        {/if}
       </div></div>
 
   {:else if active === 'security'}

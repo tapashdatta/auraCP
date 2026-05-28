@@ -1,26 +1,35 @@
 /*
- * auraCP — Adminer theme
+ * auraCP — Adminer theme (v0.2.40 enterprise rewrite)
  *
- * Adminer auto-loads /opt/auracp/adminer/adminer.css when it sits next to
- * adminer.php. We swap the default 2012-era look for one that matches the
- * panel: Manrope display + JetBrains Mono code, true-dark surfaces, aura
- * green accents, pill buttons.
+ * Adminer ships an HTML structure unchanged since ~2010: #menu is the left
+ * sidebar, #content is the main panel, #breadcrumb floats at the top, forms
+ * use <table> for layout, "the version footer" + theme-switcher live at the
+ * bottom of #content. We don't control the HTML — only what CSS can reach.
+ * But CSS can do a lot when used aggressively.
  *
- * Defaults to dark since Adminer's lit by the SSO POST from auracpd; the
- * operator was just in the panel and any colour shock when the new tab
- * opens is worse than committing to one mode. Light theme via
- * @media (prefers-color-scheme: light) for systems that explicitly ask.
+ * Design goals for this pass:
+ *   • Real enterprise SaaS feel — Linear / Vercel / Supabase territory
+ *   • Sticky sidebar that doesn't scroll with the page
+ *   • Sticky table headers on long result sets
+ *   • Card-style content sections with consistent 24-px gutter
+ *   • Strong information hierarchy: 14px body / 11px uppercase metadata /
+ *     16px headlines / mono for code + identifiers
+ *   • Subtle dividers, no zebra striping, hover-row highlight only
+ *   • All buttons read as either primary (aura) or secondary (surface-1)
+ *   • Hide Adminer's version footer + theme-switcher (cruft on a managed install)
  */
 
-/* Font stack lives on the panel domain (same origin as Adminer when fronted
-   by /_adminer/). Inlining cuts an external request + the FOUC. */
+/* Inlined font import: Manrope display + JetBrains Mono code.
+   Adminer is same-origin with the panel under /_adminer/ so this caches once. */
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
+/* ─── design tokens ──────────────────────────────────────────────────────── */
 :root {
     --ink:        #0a0b0f;
     --surface-0:  #222630;
     --surface-1:  #2c3039;
     --surface-2:  #363b46;
+    --surface-3:  #414754;
     --line:       rgba(255,255,255,.06);
     --line-2:     rgba(255,255,255,.13);
     --txt:        #eef0f4;
@@ -29,105 +38,254 @@
     --aura:       #38e3a3;
     --aura-strong:#38e3a3;
     --aura-ink:   #04130d;
-    --aura-glow:  rgba(56,227,163,.14);
+    --aura-glow:  rgba(56,227,163,.16);
     --down:       #ff6063;
     --down-soft:  rgba(255,96,99,.14);
     --warn:       #f5b75a;
     --warn-soft:  rgba(245,183,90,.14);
     --info:       #a89bff;
     --radius:     10px;
+    --radius-sm:  6px;
     --radius-pill:999px;
-    --fs-ui: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    --fs-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --shadow:     0 1px 2px rgba(0,0,0,.25), 0 12px 28px -16px rgba(0,0,0,.55);
+    --fs-ui:      "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --fs-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    /* Layout dimensions */
+    --sidebar-w:  240px;
+    --header-h:   54px;
+    --gutter:     24px;
 }
 
-/* --- base --- */
-html, body { height: auto; }
+/* ─── reset + base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+
 body {
-    margin: 0;
     background: var(--ink);
     color: var(--txt);
     font-family: var(--fs-ui);
     font-size: 13.5px;
-    line-height: 1.5;
+    line-height: 1.55;
     letter-spacing: -.005em;
     -webkit-font-smoothing: antialiased;
+    font-feature-settings: "cv11" 1, "ss01" 1;
 }
 
-/* Adminer wraps the data area in #content; sidebar lives in #menu. */
-#content {
+/* Synthetic top header: built from CSS only, anchored as a fixed bar across
+   the entire viewport. The actual content sits below it via padding-top.
+   This is the trick that makes Adminer feel like a real app — we can't
+   inject DOM, but we can fake a header with a fixed-position pseudo strip. */
+body::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: var(--header-h);
     background: var(--surface-0);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 22px 26px;
-    margin: 18px 18px 18px 240px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 12px 28px -16px rgba(0,0,0,.55);
-}
-#menu {
-    background: var(--surface-0);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 18px 16px;
-    margin: 18px;
-    width: 200px;
-    box-sizing: border-box;
-    font-size: 13px;
-    box-shadow: 0 1px 2px rgba(0,0,0,.25);
-}
-@media (max-width: 880px) {
-    #menu { position: static; width: auto; margin: 18px 18px 0; }
-    #content { margin: 12px 18px 18px; }
+    border-bottom: 1px solid var(--line);
+    z-index: 99;
+    pointer-events: none;
 }
 
-/* --- headings --- */
-h1, h2, h3 {
-    color: var(--txt);
-    font-weight: 600;
+/* Top-right brand mark inside the synthetic header. Picks up the page <h1>
+   text via no DOM tricks — we just place a static label here. */
+body::after {
+    content: "auraCP · Database";
+    position: fixed;
+    top: 0;
+    left: var(--gutter);
+    height: var(--header-h);
+    display: flex;
+    align-items: center;
+    z-index: 100;
+    font-weight: 700;
+    font-size: 14px;
     letter-spacing: -.015em;
-    margin: 0 0 14px;
+    color: var(--txt);
+    pointer-events: none;
 }
-h1 { font-size: 18px; display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
-h2 { font-size: 15.5px; margin-top: 22px; }
-h3 { font-size: 13.5px; color: var(--txt-2); margin-top: 18px; }
-#menu h1 { font-size: 13.5px; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
-#menu h1 a { color: var(--aura-strong); font-weight: 700; text-decoration: none; }
-#menu h1 a img, #menu h1 .h1 img { display: none; }
 
-/* --- links --- */
-a {
+/* ─── sidebar (#menu) ────────────────────────────────────────────────────── */
+#menu {
+    position: fixed;
+    top: var(--header-h);
+    left: 0;
+    bottom: 0;
+    width: var(--sidebar-w);
+    background: var(--surface-0);
+    border-right: 1px solid var(--line);
+    padding: 18px 12px 24px;
+    overflow-y: auto;
+    z-index: 50;
+    font-size: 13px;
+}
+#menu h1 {
+    margin: 0 6px 14px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--line);
+    font-size: 12px;
+    color: var(--txt-3);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 700;
+}
+#menu h1 a {
     color: var(--aura-strong);
     text-decoration: none;
-    transition: color .1s ease;
+    font-size: 12px;
 }
-a:hover { color: color-mix(in srgb, var(--aura-strong) 75%, white); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-a:visited { color: var(--aura-strong); }
-#menu a { color: var(--txt-2); display: block; padding: 5px 8px; border-radius: 6px; margin: 1px 0; }
-#menu a:hover { background: var(--surface-1); color: var(--txt); text-decoration: none; }
-#menu a.active { background: var(--aura-glow); color: var(--aura-strong); font-weight: 600; }
-#menu p { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--txt-3); font-weight: 600; }
-#menu p:first-child { margin-top: 0; }
+#menu h1 .h1 { display: none; }   /* hide the dated Adminer logo image */
+#menu p {
+    margin: 18px 6px 6px;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--txt-3);
+    font-weight: 700;
+}
+#menu p:first-of-type { margin-top: 0; }
+#menu p img { display: none; }    /* hide Adminer's inline icon images */
 
-/* --- breadcrumb --- */
+#menu a {
+    display: block;
+    padding: 7px 12px;
+    border-radius: var(--radius-sm);
+    margin: 1px 0;
+    color: var(--txt-2);
+    text-decoration: none;
+    font-size: 13px;
+    transition: background-color .1s, color .1s;
+    word-break: break-word;
+}
+#menu a:hover { background: var(--surface-1); color: var(--txt); }
+#menu a.active, #menu a.select { background: var(--aura-glow); color: var(--aura-strong); font-weight: 600; }
+
+#menu .links, #menu .links br { display: block; }
+#menu .links { margin: 4px 6px 0; }
+#menu form, #menu form input { margin: 6px 0; }
+#menu form input[type=submit] { width: 100%; }
+#menu form select { width: 100%; }
+
+/* Logout button styled distinctly so destructive actions don't look like nav. */
+#logout {
+    position: fixed;
+    top: 0;
+    right: var(--gutter);
+    height: var(--header-h);
+    display: flex;
+    align-items: center;
+    z-index: 100;
+}
+#logout input[type=submit] {
+    background: transparent;
+    color: var(--txt-2);
+    border: 1px solid var(--line-2);
+    box-shadow: none;
+    padding: 6px 14px;
+    font-size: 12px;
+    border-radius: var(--radius-pill);
+}
+#logout input[type=submit]:hover { background: var(--surface-1); color: var(--txt); border-color: var(--txt-3); }
+
+/* ─── main content + breadcrumb ──────────────────────────────────────────── */
+#content {
+    margin: 0 0 0 var(--sidebar-w);
+    padding: calc(var(--header-h) + 16px) var(--gutter) 48px;
+    max-width: none;
+    min-height: 100vh;
+    background: var(--ink);
+}
+
 #breadcrumb {
     background: transparent;
     border: none;
-    padding: 0 0 4px;
-    margin: 14px 26px 4px 240px;
-    color: var(--txt-3);
+    padding: 0;
+    margin: 0 0 14px;
     font-size: 12px;
+    color: var(--txt-3);
+    display: block;
 }
-#breadcrumb a { color: var(--txt-2); }
-#breadcrumb a:hover { color: var(--txt); }
+#breadcrumb a { color: var(--txt-2); text-decoration: none; }
+#breadcrumb a:hover { color: var(--txt); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+#breadcrumb::before { content: ""; }   /* drop the leading '»' separator */
 
-/* --- forms --- */
+/* Page title (Adminer renders <h2> after #breadcrumb for the active section) */
+#content h2 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.025em;
+    margin: 4px 0 22px;
+    color: var(--txt);
+}
+#content h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--txt-2);
+    margin: 22px 0 10px;
+    text-transform: none;
+    letter-spacing: -.01em;
+}
+#content h3 + form, #content h3 + table { margin-top: 0; }
+
+/* ─── card-style section wrappers ────────────────────────────────────────── */
+/* Adminer wraps each major form/table in a fieldset OR a free-floating
+   <form>. Force-style both as cards so the page reads as a sequence of
+   distinct sections rather than a wall of fields. */
+#content > form, #content > fieldset {
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 22px;
+    margin: 14px 0;
+    box-shadow: var(--shadow);
+}
+#content > p { margin: 8px 0; color: var(--txt-2); }
+
+fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 16px; margin: 12px 0; }
+legend {
+    color: var(--txt-2);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 700;
+    padding: 0 8px;
+}
+
+/* ─── links ──────────────────────────────────────────────────────────────── */
+a {
+    color: var(--aura-strong);
+    text-decoration: none;
+    transition: color .1s;
+}
+a:hover { color: color-mix(in srgb, var(--aura-strong) 75%, white); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+a:visited { color: var(--aura-strong); }
+
+/* Action links inside content (Adminer renders them as " · "-separated
+   anchors). Style them as ghost pills. */
+#content > p > a, #content > h2 + p > a, .links > a {
+    display: inline-block;
+    padding: 5px 12px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-1);
+    border: 1px solid var(--line-2);
+    color: var(--txt);
+    font-size: 12.5px;
+    font-weight: 500;
+    margin: 0 4px 4px 0;
+    text-decoration: none;
+}
+#content > p > a:hover, .links > a:hover { background: var(--surface-2); border-color: var(--txt-3); text-decoration: none; }
+
+/* ─── forms ──────────────────────────────────────────────────────────────── */
 input, select, textarea {
     font-family: var(--fs-ui);
     font-size: 13.5px;
     background: var(--surface-1);
     color: var(--txt);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 8px 10px;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    padding: 8px 11px;
+    line-height: 1.45;
     transition: border-color .1s, box-shadow .1s;
     outline: none;
 }
@@ -135,106 +293,172 @@ input:focus, select:focus, textarea:focus {
     border-color: var(--aura-strong);
     box-shadow: 0 0 0 3px var(--aura-glow);
 }
-textarea { font-family: var(--fs-mono); font-size: 13px; line-height: 1.55; resize: vertical; }
-input[type=checkbox], input[type=radio] { accent-color: var(--aura-strong); width: 14px; height: 14px; }
-input[type=submit], input[type=button], button {
+textarea {
+    font-family: var(--fs-mono);
+    font-size: 13px;
+    line-height: 1.55;
+    resize: vertical;
+    min-height: 80px;
+}
+input[type=checkbox], input[type=radio] {
+    accent-color: var(--aura-strong);
+    width: 14px; height: 14px;
+    vertical-align: middle;
+    margin: 0 6px 0 0;
+}
+
+/* Primary button = aura gradient pill */
+input[type=submit], button:not(.icon) {
     background: linear-gradient(180deg, color-mix(in srgb, var(--aura) 88%, white), var(--aura));
     color: var(--aura-ink);
     border: 1px solid transparent;
     border-radius: var(--radius-pill);
-    padding: 7px 16px;
+    padding: 8px 18px;
     font-weight: 600;
     font-size: 12.5px;
     cursor: pointer;
     transition: filter .1s, transform .08s;
     box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 10px 22px -10px var(--aura);
     font-family: var(--fs-ui);
+    letter-spacing: -.005em;
 }
-input[type=submit]:hover, input[type=button]:hover, button:hover { filter: brightness(1.05); transform: translateY(-1px); }
-input[type=submit]:active, input[type=button]:active, button:active { transform: translateY(0); }
-.icon { background: transparent; box-shadow: none; padding: 4px; }
+input[type=submit]:hover, button:not(.icon):hover { filter: brightness(1.05); transform: translateY(-1px); }
+input[type=submit]:active, button:not(.icon):active { transform: translateY(0); }
+input[type=submit][disabled], button[disabled] { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
 
-/* "Cancel" or secondary buttons — Adminer uses class="logout" + value-based hooks */
-input[name=logout], a.logout {
+/* Secondary buttons (logout, cancel, anything else that should look quiet) */
+input[type=submit][name=logout],
+input[type=submit][value*=Cancel i],
+input[type=submit].cancel {
     background: var(--surface-1);
     color: var(--txt);
     border: 1px solid var(--line-2);
     box-shadow: none;
 }
-input[name=logout]:hover, a.logout:hover { background: var(--surface-2); border-color: var(--txt-3); }
+input[type=submit][name=logout]:hover,
+input[type=submit][value*=Cancel i]:hover { background: var(--surface-2); border-color: var(--txt-3); }
 
-/* --- tables --- */
+/* Form table layouts — Adminer uses <table> for forms (legacy). Override
+   to make spacing readable. */
+form table { border: none; background: transparent; box-shadow: none; }
+form table th, form table td { border: none; padding: 6px 10px; vertical-align: middle; background: transparent; }
+form table th { text-align: right; color: var(--txt-2); font-weight: 500; font-size: 12.5px; padding-right: 14px; }
+form table tr:hover { background: transparent; }
+
+/* ─── data tables ────────────────────────────────────────────────────────── */
 table {
+    width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    width: 100%;
-    font-size: 13px;
-    margin: 10px 0 16px;
+    margin: 0;
     background: var(--surface-0);
     border: 1px solid var(--line);
     border-radius: var(--radius);
     overflow: hidden;
+    font-size: 13px;
 }
 th, td {
-    padding: 9px 12px;
+    padding: 10px 14px;
+    border: none;
     border-bottom: 1px solid var(--line);
     text-align: left;
     vertical-align: top;
-    word-break: break-word;
 }
 tr:last-child th, tr:last-child td { border-bottom: none; }
-thead th, table.checkable th, th[scope=col] {
+thead th, table.checkable th {
     background: var(--surface-1);
     color: var(--txt-3);
     font-weight: 600;
-    font-size: 11px;
+    font-size: 10.5px;
     text-transform: uppercase;
-    letter-spacing: .05em;
+    letter-spacing: .08em;
     border-bottom: 1px solid var(--line-2);
+    position: sticky;
+    top: var(--header-h);
+    z-index: 10;
 }
 tbody tr:hover { background: var(--surface-1); }
-td.function, td.type { color: var(--txt-3); font-size: 12px; }
-td.number, td.bigint, td.int { font-family: var(--fs-mono); text-align: right; color: var(--info); }
-td.varchar, td.text { font-family: var(--fs-mono); color: var(--txt-2); font-size: 12.5px; }
-td.null { color: var(--txt-3); font-style: italic; }
 
-/* --- messages --- */
+/* Cell-type accents — Adminer adds td classes for known types. */
+td.number, td.bigint, td.int, td.tinyint, td.decimal, td.float, td.double {
+    font-family: var(--fs-mono);
+    text-align: right;
+    color: var(--info);
+    font-feature-settings: "tnum" 1;
+}
+td.varchar, td.text, td.char, td.string {
+    font-family: var(--fs-mono);
+    font-size: 12.5px;
+    color: var(--txt-2);
+}
+td.null { color: var(--txt-3); font-style: italic; }
+td.function, td.type { color: var(--txt-3); font-size: 11.5px; }
+
+/* Checkboxes inside tables compact */
+td input[type=checkbox] { margin: 0; }
+
+/* Action links inside a row */
+td a { color: var(--aura-strong); }
+
+/* ─── messages ───────────────────────────────────────────────────────────── */
 .error, .message {
-    padding: 10px 14px;
-    border-radius: 8px;
+    padding: 11px 16px;
+    border-radius: var(--radius-sm);
     border: 1px solid transparent;
     margin: 12px 0;
     font-size: 13px;
+    line-height: 1.5;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
 }
-.error { background: var(--down-soft); color: var(--down); border-color: color-mix(in srgb, var(--down) 32%, transparent); }
-.message { background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 32%, transparent); }
+.error  { background: var(--down-soft); color: var(--down); border-color: color-mix(in srgb, var(--down) 32%, transparent); }
+.message{ background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 32%, transparent); }
+.error::before  { content: "⚠"; flex: none; }
+.message::before{ content: "✓"; flex: none; font-weight: 700; }
 
-/* --- SQL editor --- */
+/* ─── SQL editor + code blocks ───────────────────────────────────────────── */
 .sqlarea, textarea[name="query"] {
     background: #0d1015;
     color: var(--txt);
     font-family: var(--fs-mono);
     font-size: 13px;
-    border: 1px solid var(--line-2);
-    border-radius: 8px;
-    padding: 12px 14px;
     line-height: 1.55;
+    border: 1px solid var(--line-2);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
     tab-size: 2;
-    min-height: 120px;
+    min-height: 140px;
 }
-.sqlarea:focus, textarea[name="query"]:focus { border-color: var(--aura-strong); box-shadow: 0 0 0 3px var(--aura-glow); }
+.sqlarea:focus, textarea[name="query"]:focus {
+    border-color: var(--aura-strong);
+    box-shadow: 0 0 0 3px var(--aura-glow);
+}
 
-/* --- code + monospace contexts --- */
-code, pre, .jush, .jush * {
+code, pre, kbd, samp {
     font-family: var(--fs-mono);
     font-size: 12.5px;
     color: var(--txt);
 }
-pre { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+pre {
+    background: var(--surface-1);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    overflow-x: auto;
+}
 
-/* --- pagination + page bar --- */
-.pages a, .pages {
-    padding: 5px 10px;
+/* Syntax-highlighted SQL output (Adminer's "jush" library) */
+.jush-php, .jush-sql, .jush, .jush * { font-family: var(--fs-mono); }
+.jush-sql_string, .jush-php_string { color: #e2a857; }
+.jush-sql_function, .jush-php_function { color: var(--info); }
+.jush-sql_number, .jush-php_number { color: #79c0ff; }
+.jush-sql_comment, .jush-php_comment { color: var(--txt-3); font-style: italic; }
+.jush-sql_keyword, .jush-php_reserved { color: var(--aura-strong); font-weight: 600; }
+
+/* ─── pagination ─────────────────────────────────────────────────────────── */
+.pages a, .pages b, .pages {
+    padding: 5px 12px;
     border-radius: var(--radius-pill);
     background: var(--surface-1);
     border: 1px solid var(--line-2);
@@ -242,40 +466,59 @@ pre { background: var(--surface-1); border: 1px solid var(--line); border-radius
     font-size: 12px;
     margin-right: 4px;
     display: inline-block;
+    text-decoration: none;
 }
-.pages a:hover { background: var(--surface-2); text-decoration: none; }
+.pages a:hover { background: var(--surface-2); }
+.pages b { background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 38%, transparent); font-weight: 600; }
 
-/* --- hide Adminer's own footer ("Adminer 4.8.1" + theme switcher) for cleanness --- */
-#content > p:last-child a[href*="adminer.org"] {
-    color: var(--txt-3);
-    font-size: 11px;
-}
-
-/* --- scrollbars (Webkit + Firefox) --- */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: var(--ink); }
-::-webkit-scrollbar-thumb { background: var(--surface-2); border-radius: 5px; border: 2px solid var(--ink); }
-::-webkit-scrollbar-thumb:hover { background: var(--surface-1); }
+/* ─── scrollbar (Webkit + Firefox) ───────────────────────────────────────── */
+::-webkit-scrollbar      { width: 10px; height: 10px; }
+::-webkit-scrollbar-track{ background: var(--ink); }
+::-webkit-scrollbar-thumb{ background: var(--surface-2); border-radius: 5px; border: 2px solid var(--ink); }
+::-webkit-scrollbar-thumb:hover { background: var(--surface-3); }
 * { scrollbar-color: var(--surface-2) var(--ink); scrollbar-width: thin; }
 
-/* --- selection highlight --- */
 ::selection { background: var(--aura-glow); color: var(--txt); }
 
-/* --- "logout" / top-right strip --- */
-#logout { float: right; margin-top: -2px; }
+/* ─── hide Adminer cruft ─────────────────────────────────────────────────── */
+/* Version footer ("Adminer 4.8.1") + alternate theme switcher links */
+#content > p:last-child a[href*="adminer.org"],
+#content > p > a[href*="?"][href$="-en.css"],
+#content > p > a[href*="?"][href$="-fr.css"] { display: none; }
 
-/* Adminer renders nav buttons as <input type="image"> for some icons; tone
-   the brightness so they don't look like wireframe sketches against dark. */
-input[type=image] { filter: brightness(1.4) invert(.85); opacity: .8; }
+/* Adminer's small image icons embedded inline (sort arrows, edit icons) —
+   tone them so they're readable against the dark surfaces but don't look
+   like wireframes. */
+img[src*="arrow"], img[src*="up.gif"], img[src*="down.gif"] {
+    filter: brightness(1.6) invert(.85); opacity: .7;
+}
+input[type=image] { filter: brightness(1.6) invert(.85); opacity: .7; }
 input[type=image]:hover { opacity: 1; }
 
-/* --- light mode override --- */
+/* ─── responsive — collapse the sidebar below 880 px ─────────────────────── */
+@media (max-width: 880px) {
+    :root { --sidebar-w: 0px; }
+    #menu {
+        position: static;
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+        padding: 14px 16px;
+    }
+    #content { margin: 0; padding: calc(var(--header-h) + 14px) 14px 32px; }
+    body::after { font-size: 13px; }
+    thead th { position: static; }   /* sticky breaks inside a non-static parent */
+}
+
+/* ─── light mode override ────────────────────────────────────────────────── */
 @media (prefers-color-scheme: light) {
     :root {
         --ink:        #f4ebdc;
         --surface-0:  #ffffff;
         --surface-1:  #faf6f0;
         --surface-2:  #f0eadf;
+        --surface-3:  #e4dcc8;
         --line:       rgba(60,40,20,.10);
         --line-2:     rgba(60,40,20,.18);
         --txt:        #2b1e10;
@@ -287,8 +530,11 @@ input[type=image]:hover { opacity: 1; }
         --aura-glow:  rgba(24,168,107,.12);
         --down:       #c5364a;
         --down-soft:  rgba(197,54,74,.10);
+        --info:       #4a6cf7;
+        --shadow:     0 1px 2px rgba(80,55,30,.08), 0 12px 28px -16px rgba(80,55,30,.22);
     }
-    .sqlarea, textarea[name="query"] { background: #fbf7ee; }
-    input[type=image] { filter: none; opacity: .65; }
+    .sqlarea, textarea[name="query"] { background: #fbf7ee; color: var(--txt); }
+    input[type=image] { filter: none; opacity: .55; }
     input[type=image]:hover { opacity: 1; }
+    img[src*="arrow"], img[src*="up.gif"], img[src*="down.gif"] { filter: none; opacity: .55; }
 }

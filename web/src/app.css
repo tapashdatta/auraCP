@@ -619,6 +619,12 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 .input-row .gen:hover{color:var(--aura-strong);border-color:var(--line-2);background:var(--surface-2)}
 .input-row .gen svg{width:14px;height:14px}
 
+/* v0.2.40: failure-tinted .note variant for SSL issuance errors + the
+   'token not set' DNS-01 warning. Same shape as a regular .note but red
+   border + chip so it reads as an error, not just info. */
+.note.ssl-fail{border:1px solid color-mix(in srgb, var(--down) 32%, transparent);background:var(--down-soft)}
+.note.ssl-fail b{color:var(--down)}
+
 /* v0.2.18: live upload progress bar */
 .upload-prog{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-1)}
 .upload-prog-info{display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
