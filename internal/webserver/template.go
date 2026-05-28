@@ -247,9 +247,11 @@ server {
     location /_adminer/ {
         alias /opt/auracp/adminer/;
         index index.php;
-        # Static files (Adminer CSS/JS): serve directly.
-        location ~ ^/_adminer/.+\.(css|js|png|svg|ico|woff2?)$ {
-            alias /opt/auracp/adminer/;
+        # v0.2.39: serve adminer.css + sibling static assets directly with
+        # a long cache; named capture is required because the outer location
+        # is regex-anchored and alias needs to know what subpath to serve.
+        location ~ ^/_adminer/(?<asset>.+\.(css|js|png|svg|ico|woff2?))$ {
+            alias /opt/auracp/adminer/$asset;
             expires 7d;
             access_log off;
         }

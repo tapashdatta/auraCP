@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.38"
+AURACP_VERSION="0.2.39"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -830,16 +830,21 @@ install_adminer() {
     install -m 0644 "$tmp" /opt/auracp/adminer/adminer.php
     rm -f "$tmp"
   fi
-  # Wrapper PHP is shipped in the .deb at /opt/auracp/packaging/. During
-  # install_adminer we copy it next to adminer.php where the wrapper expects
-  # it via __DIR__. v0.2.31: stale adminer-plugins.php from earlier installs
-  # is removed (the new wrapper uses Adminer's own auth flow and no longer
-  # depends on a plugin subclass).
+  # Wrapper PHP + theme CSS are shipped in the .deb at /opt/auracp/packaging/.
+  # During install_adminer we copy them next to adminer.php — the wrapper
+  # via __DIR__/index.php, the theme via __DIR__/adminer.css (Adminer
+  # auto-loads adminer.css from its own directory). v0.2.31: stale
+  # adminer-plugins.php from earlier installs is removed (the wrapper now
+  # uses Adminer's own auth flow and no longer depends on a plugin subclass).
+  # v0.2.39: theme CSS shipped to replace Adminer's 2012-era default look.
   if [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
     run "install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php"
     run "rm -f /opt/auracp/adminer/adminer-plugins.php"
   else
     warn "Adminer wrapper not bundled in the .deb (re-build with v0.2.31+ packaging); Manage buttons will 500 until fixed."
+  fi
+  if [ -f /opt/auracp/packaging/adminer.css ]; then
+    run "install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css"
   fi
   # Tmpfile for the SSO token directory — /run is tmpfs so this re-creates
   # on every boot; mode 0700 root:www-data so only PHP-FPM can read tokens.

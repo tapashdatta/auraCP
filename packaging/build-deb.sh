@@ -40,6 +40,9 @@ install -m 0644 "$ROOT/packaging/auracpd-watchdog.timer"   "$PKG/etc/systemd/sys
 # v0.2.31: dropped adminer-plugins.php — the new wrapper uses Adminer's own
 # auth POST flow and doesn't need a plugin subclass.
 install -m 0644 "$ROOT/packaging/adminer-wrapper.php" "$PKG/opt/auracp/packaging/adminer-wrapper.php"
+# v0.2.39: ship the Adminer theme CSS alongside the wrapper. Adminer
+# auto-loads adminer.css from its own directory if present.
+install -m 0644 "$ROOT/packaging/adminer.css" "$PKG/opt/auracp/packaging/adminer.css"
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
@@ -114,6 +117,10 @@ if [ -d /run/systemd/system ]; then
   # this line makes panel-pill / auracp-update upgrades self-healing too.
   if [ -d /opt/auracp/adminer ] && [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
     install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php
+    # v0.2.39: refresh the theme CSS too so design changes self-deploy.
+    if [ -f /opt/auracp/packaging/adminer.css ]; then
+      install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css
+    fi
     # Stale subclass file from < v0.2.31 — current wrapper doesn't use it.
     rm -f /opt/auracp/adminer/adminer-plugins.php
     # Reload any installed PHP-FPM versions so an op-code cache (if enabled)

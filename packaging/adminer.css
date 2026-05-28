@@ -1,0 +1,294 @@
+/*
+ * auraCP — Adminer theme
+ *
+ * Adminer auto-loads /opt/auracp/adminer/adminer.css when it sits next to
+ * adminer.php. We swap the default 2012-era look for one that matches the
+ * panel: Manrope display + JetBrains Mono code, true-dark surfaces, aura
+ * green accents, pill buttons.
+ *
+ * Defaults to dark since Adminer's lit by the SSO POST from auracpd; the
+ * operator was just in the panel and any colour shock when the new tab
+ * opens is worse than committing to one mode. Light theme via
+ * @media (prefers-color-scheme: light) for systems that explicitly ask.
+ */
+
+/* Font stack lives on the panel domain (same origin as Adminer when fronted
+   by /_adminer/). Inlining cuts an external request + the FOUC. */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --ink:        #0a0b0f;
+    --surface-0:  #222630;
+    --surface-1:  #2c3039;
+    --surface-2:  #363b46;
+    --line:       rgba(255,255,255,.06);
+    --line-2:     rgba(255,255,255,.13);
+    --txt:        #eef0f4;
+    --txt-2:      #a8aebb;
+    --txt-3:      #7a8190;
+    --aura:       #38e3a3;
+    --aura-strong:#38e3a3;
+    --aura-ink:   #04130d;
+    --aura-glow:  rgba(56,227,163,.14);
+    --down:       #ff6063;
+    --down-soft:  rgba(255,96,99,.14);
+    --warn:       #f5b75a;
+    --warn-soft:  rgba(245,183,90,.14);
+    --info:       #a89bff;
+    --radius:     10px;
+    --radius-pill:999px;
+    --fs-ui: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --fs-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* --- base --- */
+html, body { height: auto; }
+body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--txt);
+    font-family: var(--fs-ui);
+    font-size: 13.5px;
+    line-height: 1.5;
+    letter-spacing: -.005em;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Adminer wraps the data area in #content; sidebar lives in #menu. */
+#content {
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 22px 26px;
+    margin: 18px 18px 18px 240px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 12px 28px -16px rgba(0,0,0,.55);
+}
+#menu {
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 18px 16px;
+    margin: 18px;
+    width: 200px;
+    box-sizing: border-box;
+    font-size: 13px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.25);
+}
+@media (max-width: 880px) {
+    #menu { position: static; width: auto; margin: 18px 18px 0; }
+    #content { margin: 12px 18px 18px; }
+}
+
+/* --- headings --- */
+h1, h2, h3 {
+    color: var(--txt);
+    font-weight: 600;
+    letter-spacing: -.015em;
+    margin: 0 0 14px;
+}
+h1 { font-size: 18px; display: flex; align-items: center; gap: 10px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+h2 { font-size: 15.5px; margin-top: 22px; }
+h3 { font-size: 13.5px; color: var(--txt-2); margin-top: 18px; }
+#menu h1 { font-size: 13.5px; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
+#menu h1 a { color: var(--aura-strong); font-weight: 700; text-decoration: none; }
+#menu h1 a img, #menu h1 .h1 img { display: none; }
+
+/* --- links --- */
+a {
+    color: var(--aura-strong);
+    text-decoration: none;
+    transition: color .1s ease;
+}
+a:hover { color: color-mix(in srgb, var(--aura-strong) 75%, white); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
+a:visited { color: var(--aura-strong); }
+#menu a { color: var(--txt-2); display: block; padding: 5px 8px; border-radius: 6px; margin: 1px 0; }
+#menu a:hover { background: var(--surface-1); color: var(--txt); text-decoration: none; }
+#menu a.active { background: var(--aura-glow); color: var(--aura-strong); font-weight: 600; }
+#menu p { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--txt-3); font-weight: 600; }
+#menu p:first-child { margin-top: 0; }
+
+/* --- breadcrumb --- */
+#breadcrumb {
+    background: transparent;
+    border: none;
+    padding: 0 0 4px;
+    margin: 14px 26px 4px 240px;
+    color: var(--txt-3);
+    font-size: 12px;
+}
+#breadcrumb a { color: var(--txt-2); }
+#breadcrumb a:hover { color: var(--txt); }
+
+/* --- forms --- */
+input, select, textarea {
+    font-family: var(--fs-ui);
+    font-size: 13.5px;
+    background: var(--surface-1);
+    color: var(--txt);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 10px;
+    transition: border-color .1s, box-shadow .1s;
+    outline: none;
+}
+input:focus, select:focus, textarea:focus {
+    border-color: var(--aura-strong);
+    box-shadow: 0 0 0 3px var(--aura-glow);
+}
+textarea { font-family: var(--fs-mono); font-size: 13px; line-height: 1.55; resize: vertical; }
+input[type=checkbox], input[type=radio] { accent-color: var(--aura-strong); width: 14px; height: 14px; }
+input[type=submit], input[type=button], button {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--aura) 88%, white), var(--aura));
+    color: var(--aura-ink);
+    border: 1px solid transparent;
+    border-radius: var(--radius-pill);
+    padding: 7px 16px;
+    font-weight: 600;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: filter .1s, transform .08s;
+    box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 10px 22px -10px var(--aura);
+    font-family: var(--fs-ui);
+}
+input[type=submit]:hover, input[type=button]:hover, button:hover { filter: brightness(1.05); transform: translateY(-1px); }
+input[type=submit]:active, input[type=button]:active, button:active { transform: translateY(0); }
+.icon { background: transparent; box-shadow: none; padding: 4px; }
+
+/* "Cancel" or secondary buttons — Adminer uses class="logout" + value-based hooks */
+input[name=logout], a.logout {
+    background: var(--surface-1);
+    color: var(--txt);
+    border: 1px solid var(--line-2);
+    box-shadow: none;
+}
+input[name=logout]:hover, a.logout:hover { background: var(--surface-2); border-color: var(--txt-3); }
+
+/* --- tables --- */
+table {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+    font-size: 13px;
+    margin: 10px 0 16px;
+    background: var(--surface-0);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+th, td {
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+}
+tr:last-child th, tr:last-child td { border-bottom: none; }
+thead th, table.checkable th, th[scope=col] {
+    background: var(--surface-1);
+    color: var(--txt-3);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .05em;
+    border-bottom: 1px solid var(--line-2);
+}
+tbody tr:hover { background: var(--surface-1); }
+td.function, td.type { color: var(--txt-3); font-size: 12px; }
+td.number, td.bigint, td.int { font-family: var(--fs-mono); text-align: right; color: var(--info); }
+td.varchar, td.text { font-family: var(--fs-mono); color: var(--txt-2); font-size: 12.5px; }
+td.null { color: var(--txt-3); font-style: italic; }
+
+/* --- messages --- */
+.error, .message {
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    margin: 12px 0;
+    font-size: 13px;
+}
+.error { background: var(--down-soft); color: var(--down); border-color: color-mix(in srgb, var(--down) 32%, transparent); }
+.message { background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 32%, transparent); }
+
+/* --- SQL editor --- */
+.sqlarea, textarea[name="query"] {
+    background: #0d1015;
+    color: var(--txt);
+    font-family: var(--fs-mono);
+    font-size: 13px;
+    border: 1px solid var(--line-2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    line-height: 1.55;
+    tab-size: 2;
+    min-height: 120px;
+}
+.sqlarea:focus, textarea[name="query"]:focus { border-color: var(--aura-strong); box-shadow: 0 0 0 3px var(--aura-glow); }
+
+/* --- code + monospace contexts --- */
+code, pre, .jush, .jush * {
+    font-family: var(--fs-mono);
+    font-size: 12.5px;
+    color: var(--txt);
+}
+pre { background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; overflow-x: auto; }
+
+/* --- pagination + page bar --- */
+.pages a, .pages {
+    padding: 5px 10px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-1);
+    border: 1px solid var(--line-2);
+    color: var(--txt);
+    font-size: 12px;
+    margin-right: 4px;
+    display: inline-block;
+}
+.pages a:hover { background: var(--surface-2); text-decoration: none; }
+
+/* --- hide Adminer's own footer ("Adminer 4.8.1" + theme switcher) for cleanness --- */
+#content > p:last-child a[href*="adminer.org"] {
+    color: var(--txt-3);
+    font-size: 11px;
+}
+
+/* --- scrollbars (Webkit + Firefox) --- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--ink); }
+::-webkit-scrollbar-thumb { background: var(--surface-2); border-radius: 5px; border: 2px solid var(--ink); }
+::-webkit-scrollbar-thumb:hover { background: var(--surface-1); }
+* { scrollbar-color: var(--surface-2) var(--ink); scrollbar-width: thin; }
+
+/* --- selection highlight --- */
+::selection { background: var(--aura-glow); color: var(--txt); }
+
+/* --- "logout" / top-right strip --- */
+#logout { float: right; margin-top: -2px; }
+
+/* Adminer renders nav buttons as <input type="image"> for some icons; tone
+   the brightness so they don't look like wireframe sketches against dark. */
+input[type=image] { filter: brightness(1.4) invert(.85); opacity: .8; }
+input[type=image]:hover { opacity: 1; }
+
+/* --- light mode override --- */
+@media (prefers-color-scheme: light) {
+    :root {
+        --ink:        #f4ebdc;
+        --surface-0:  #ffffff;
+        --surface-1:  #faf6f0;
+        --surface-2:  #f0eadf;
+        --line:       rgba(60,40,20,.10);
+        --line-2:     rgba(60,40,20,.18);
+        --txt:        #2b1e10;
+        --txt-2:      #5b4630;
+        --txt-3:      #846b50;
+        --aura:       #18a86b;
+        --aura-strong:#18a86b;
+        --aura-ink:   #ffffff;
+        --aura-glow:  rgba(24,168,107,.12);
+        --down:       #c5364a;
+        --down-soft:  rgba(197,54,74,.10);
+    }
+    .sqlarea, textarea[name="query"] { background: #fbf7ee; }
+    input[type=image] { filter: none; opacity: .65; }
+    input[type=image]:hover { opacity: 1; }
+}
