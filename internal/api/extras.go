@@ -171,6 +171,18 @@ func (s *Server) siteRenewCert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
+	// v0.2.45: re-render the vhost so the new cert is actually presented.
+	// acme.saveIssuedCert calls reloader (nginx -s reload) but that reloads
+	// whatever's on disk — the existing vhost may not have a `listen 443 ssl`
+	// block referencing the cert yet (typical first-issue path). reapplyWeb
+	// rewrites the vhost with CertPath/KeyPath from the certificates table.
+	if err := s.reapplyWeb(r.Context(), domain); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"warning": "cert issued but vhost re-render failed: " + err.Error(),
+		})
+		return
+	}
 	s.audit(r, "cert.renew", domain)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

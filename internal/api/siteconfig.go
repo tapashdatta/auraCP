@@ -16,6 +16,12 @@ import (
 const cfTokenKey = "cloudflare_token_enc"
 
 // reapplyWeb re-renders a site's nginx vhost from its stored flags and reloads.
+//
+// v0.2.45: also reads the certificates table and passes CertPath / KeyPath
+// into the Spec. The vhost template only emits a `listen 443 ssl` block
+// when those fields are set. Without this, every save in Settings (cache,
+// security, basic-auth toggle) silently dropped the HTTPS server block,
+// even when a valid cert had already been issued.
 func (s *Server) reapplyWeb(ctx context.Context, domain string) error {
 	st, err := s.store.SiteByDomain(domain)
 	if err != nil {
@@ -41,6 +47,15 @@ func (s *Server) reapplyWeb(ctx context.Context, domain string) error {
 			if tok, derr := s.secret.Decrypt(enc); derr == nil {
 				spec.CloudflareTok = tok
 			}
+		}
+	}
+	// v0.2.45: include the cert paths so the HTTPS server block is emitted.
+	if cert, ok := s.store.Certificate(domain); ok {
+		if cert.CertPath.Valid {
+			spec.CertPath = cert.CertPath.String
+		}
+		if cert.KeyPath.Valid {
+			spec.KeyPath = cert.KeyPath.String
 		}
 	}
 	return s.web.Apply(ctx, spec)
