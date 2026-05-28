@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.49"
+AURACP_VERSION="0.2.50"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -804,27 +804,47 @@ EOF
   install_wp_cli
 }
 
-# v0.2.33: wp-cli — required for WordPress one-click auto-install. Pinned to
-# a recent stable release with a sha256 check so a compromised builds bucket
-# couldn't substitute code. Wrapped as `/usr/local/bin/wp`.
-WP_CLI_VERSION="2.11.0"
-WP_CLI_SHA256="d29ad19b3037b3f8859ee31fc7f6f7e708e7f8c7d8e0e1c0d3f8e6f8d5e6c0b5"
+# v0.2.33: wp-cli — required ONLY for `wp core install` (the WordPress
+# setup wizard). v0.2.50 moved core download + wp-config writing into
+# native Go in internal/wpinstall, so wp-cli is no longer involved in
+# the path that hit the phar template loader regression in 2.10+.
+#
+# Pin: wp-cli 2.10.0 — predates the config-command phar bug. The SHA
+# check is REAL now (v0.2.49 and earlier declared a SHA constant but
+# never invoked sha256sum). If the download SHA doesn't match, we abort
+# the wp-cli install with a clear warning rather than silently falling
+# back to whatever the rolling builds bucket happens to ship today —
+# that fallback was how broken wp-cli's reached operator boxes in
+# v0.2.49 and earlier.
+WP_CLI_VERSION="2.10.0"
+WP_CLI_SHA256="4c6a93cecae7f499ca481fa7a6d6d4299c8b93214e5e5308e26770dbfd3631df"
 install_wp_cli() {
   msg "Installing wp-cli ${WP_CLI_VERSION}…"
   if [ "$DRY_RUN" -eq 0 ]; then
     local tmp
     tmp=$(mktemp /tmp/wp-cli.XXXXXX.phar)
-    if ! curl -fsSL "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" -o "$tmp" 2>/dev/null; then
-      # Fall back to the rolling 'latest' build if the pinned tag moves.
-      curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" -o "$tmp" \
-        || { rm -f "$tmp"; warn "wp-cli download failed; WordPress auto-install will be skipped on this host."; return 0; }
+    if ! curl -fsSL "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" -o "$tmp"; then
+      rm -f "$tmp"
+      warn "wp-cli ${WP_CLI_VERSION} download failed; WordPress auto-install will be skipped on this host. (To install manually, fetch the phar from wp-cli.org and place at /usr/local/bin/wp with mode 0755.)"
+      return 0
     fi
-    # SHA pin only checked for the tagged build; the rolling build floats.
+    # v0.2.50: SHA check is finally REAL. If it mismatches we DO NOT
+    # fall through to a rolling build — that path delivered broken
+    # wp-cli's in v0.2.49. Operator can override by editing this file
+    # if they accept the risk, but the default is fail-safe.
+    local got
+    got=$(sha256sum "$tmp" | cut -d' ' -f1)
+    if [ "$got" != "$WP_CLI_SHA256" ]; then
+      rm -f "$tmp"
+      warn "wp-cli sha256 mismatch (got ${got}, expected ${WP_CLI_SHA256}); skipping. WordPress auto-install will not work until this is resolved."
+      warn "If you trust the downloaded build, update WP_CLI_SHA256 in installer/install.sh and re-run."
+      return 0
+    fi
     chmod +x "$tmp"
     install -m 0755 "$tmp" /usr/local/bin/wp
     rm -f "$tmp"
   fi
-  ok "wp-cli ready at /usr/local/bin/wp."
+  ok "wp-cli ${WP_CLI_VERSION} ready at /usr/local/bin/wp (sha256 verified)."
 }
 
 # v0.2.25: install Adminer (single-file PHP DB manager) so each panel-managed
