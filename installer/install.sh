@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.23"
+AURACP_VERSION="0.2.24"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -295,7 +295,62 @@ prompt_panel_domain() {
   read -r -p "  Panel domain: " PANEL_DOMAIN < /dev/tty || true
 }
 
-select_whiptail() {
+# v0.2.24: TUI is now a state machine — each whiptail dialog returns 0 (Next)
+# or 1 (Back / Cancel). The outer loop walks an ordered step list, skipping
+# steps whose gate is off (e.g. the PHP-versions step is skipped if PHP is
+# unchecked on the main screen). Back from the first step exits the installer;
+# Back from any other step returns to the previous *enabled* step with all
+# prior selections preserved (the values live in shell vars across calls).
+#
+# Each step's --cancel-button is relabeled "← Back" on non-first steps so
+# the user knows what Cancel does at that point. The first step keeps the
+# default "Cancel" label, since there's nothing to go back to.
+
+# Cached availability probes — checked once at TUI start, not on every step.
+_PHP_AVAIL=""; _MARIADB_AVAIL=""; _POSTGRES_AVAIL=""
+prime_avail_cache() {
+  _PHP_AVAIL=$(php_available)
+  _MARIADB_AVAIL=$(mariadb_available)
+  _POSTGRES_AVAIL=$(postgres_available)
+}
+
+# step_enabled <step> → exits 0 if the step should be shown.
+step_enabled() {
+  case "$1" in
+    components|domain) return 0 ;;
+    php)      yesno "$OPT_PHP"      && [ -n "$_PHP_AVAIL" ] ;;
+    mariadb)  yesno "$OPT_MARIADB"  && [ -n "$_MARIADB_AVAIL" ] ;;
+    postgres) yesno "$OPT_POSTGRES" && [ -n "$_POSTGRES_AVAIL" ] ;;
+    node)     yesno "$OPT_NODE" ;;
+    *) return 1 ;;
+  esac
+}
+# Ordered list of all possible steps. next_step / prev_step walk this skipping
+# disabled ones.
+_STEPS_ALL="components php mariadb postgres node domain"
+next_step() {
+  local found=0 s
+  for s in $_STEPS_ALL; do
+    if [ "$found" -eq 1 ] && step_enabled "$s"; then echo "$s"; return; fi
+    [ "$s" = "$1" ] && found=1
+  done
+  echo ""   # past the end → done
+}
+prev_step() {
+  local prev="" s
+  for s in $_STEPS_ALL; do
+    [ "$s" = "$1" ] && { echo "$prev"; return; }
+    step_enabled "$s" && prev="$s"
+  done
+  echo ""
+}
+
+# ─── individual step dialogs ────────────────────────────────────────────────
+# Each function returns 0 (Next), or 1 (Back / Cancel). The component step
+# uses "Cancel" as its second-button label (since it's the first step);
+# every later step uses "← Back".
+
+tui_components() {
   local chosen
   chosen=$(whiptail --title "auraCP — optional components" \
     --checklist "Space to toggle, Enter to confirm.\nRequired (auracpd, nginx) are always installed." \
@@ -309,8 +364,7 @@ select_whiptail() {
     TYPESENSE "Typesense search server"          "$(onoff "$OPT_TYPESENSE")" \
     DOCKER  "Docker engine"                      "$(onoff "$OPT_DOCKER")" \
     SECURITY "UFW firewall + fail2ban"           "$(onoff "$OPT_SECURITY")" \
-    3>&1 1>&2 2>&3 < /dev/tty) || die "Installation cancelled."
-
+    3>&1 1>&2 2>&3 < /dev/tty) || return 1
   OPT_MARIADB=no OPT_POSTGRES=no OPT_NODE=no OPT_PHP=no OPT_PYTHON=no OPT_REDIS=no OPT_TYPESENSE=no OPT_DOCKER=no OPT_SECURITY=no
   case "$chosen" in *MARIADB*) OPT_MARIADB=yes;; esac
   case "$chosen" in *POSTGRES*) OPT_POSTGRES=yes;; esac
@@ -321,94 +375,121 @@ select_whiptail() {
   case "$chosen" in *TYPESENSE*) OPT_TYPESENSE=yes;; esac
   case "$chosen" in *DOCKER*) OPT_DOCKER=yes;; esac
   case "$chosen" in *SECURITY*) OPT_SECURITY=yes;; esac
+  # If the user just checked PHP/MariaDB/Postgres but the repo isn't available
+  # on this distro, warn here so we don't surprise them with a skipped step.
+  if yesno "$OPT_PHP" && [ -z "$_PHP_AVAIL" ]; then
+    whiptail --title "PHP unavailable" --msgbox \
+      "deb.sury.org publishes no PHP repo for ${OS_ID} ${OS_CODENAME}.\nPHP will be skipped." 10 60 < /dev/tty || true
+    OPT_PHP=no
+  fi
+  if yesno "$OPT_MARIADB" && [ -z "$_MARIADB_AVAIL" ]; then
+    whiptail --title "MariaDB unavailable" --msgbox \
+      "mariadb.org publishes no MariaDB build for ${OS_ID} ${OS_CODENAME}.\nMariaDB will be skipped." 10 60 < /dev/tty || true
+    OPT_MARIADB=no
+  fi
+  if yesno "$OPT_POSTGRES" && [ -z "$_POSTGRES_AVAIL" ]; then
+    whiptail --title "PostgreSQL unavailable" --msgbox \
+      "apt.postgresql.org publishes no PGDG repo for ${OS_ID} ${OS_CODENAME}.\nPostgreSQL will be skipped." 10 60 < /dev/tty || true
+    OPT_POSTGRES=no
+  fi
+  return 0
+}
 
-  if yesno "$OPT_PHP"; then
-    local pver_list pver_args=() pver_count=0 v selected
-    pver_list=$(php_available)
-    if [ -z "$pver_list" ]; then
-      whiptail --title "PHP unavailable" --msgbox \
-        "deb.sury.org publishes no PHP repo for ${OS_ID} ${OS_CODENAME}.\nPHP will be skipped." 10 60 < /dev/tty || true
-      OPT_PHP=no
+tui_php() {
+  local pver_args=() pver_count=0 v selected
+  for v in $_PHP_AVAIL; do
+    case " $PHP_VERSIONS " in *" $v "*) pver_args+=("$v" "PHP $v" ON) ;; *) pver_args+=("$v" "PHP $v" OFF) ;; esac
+    pver_count=$((pver_count + 1))
+  done
+  selected=$(whiptail --title "PHP versions" --checklist \
+    "Pick one or more PHP-FPM versions to install side-by-side.\nSites pin per-site in the Create form; more can be added later from Settings → PHP Versions." \
+    14 70 "$pver_count" --cancel-button "← Back" "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || return 1
+  PHP_VERSIONS=$(echo "$selected" | tr -d '"')
+  if [ -z "$PHP_VERSIONS" ]; then
+    OPT_PHP=no
+  elif [ -z "$PHP_DEFAULT" ]; then
+    PHP_DEFAULT="${PHP_VERSIONS%% *}"
+  fi
+  return 0
+}
+
+tui_mariadb() {
+  local mver_args=() mver_count=0 v
+  MARIADB_VERSION=$(snap_to_available "$MARIADB_VERSION" "$_MARIADB_AVAIL")
+  for v in $_MARIADB_AVAIL; do
+    case "$v" in
+      11.8)  mver_args+=("$v" "11.8 LTS (current)"            "$(req "$MARIADB_VERSION" "$v")") ;;
+      11.4)  mver_args+=("$v" "11.4 LTS"                      "$(req "$MARIADB_VERSION" "$v")") ;;
+      10.11) mver_args+=("$v" "10.11 LTS (oldest supported)"  "$(req "$MARIADB_VERSION" "$v")") ;;
+      *)     mver_args+=("$v" "MariaDB $v"                    "$(req "$MARIADB_VERSION" "$v")") ;;
+    esac
+    mver_count=$((mver_count + 1))
+  done
+  MARIADB_VERSION=$(whiptail --title "MariaDB version" --radiolist \
+    "Available for ${OS_ID} ${OS_CODENAME} (from mariadb.org):" 12 64 "$mver_count" \
+    --cancel-button "← Back" "${mver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || return 1
+  return 0
+}
+
+tui_postgres() {
+  local pver_args=() pver_count=0 v
+  POSTGRES_VERSION=$(snap_to_available "$POSTGRES_VERSION" "$_POSTGRES_AVAIL")
+  for v in $_POSTGRES_AVAIL; do
+    case "$v" in
+      18) pver_args+=("$v" "PostgreSQL 18 (current)" "$(req "$POSTGRES_VERSION" "$v")") ;;
+      *)  pver_args+=("$v" "PostgreSQL $v"           "$(req "$POSTGRES_VERSION" "$v")") ;;
+    esac
+    pver_count=$((pver_count + 1))
+  done
+  POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
+    "Available for ${OS_ID} ${OS_CODENAME} (from apt.postgresql.org):" 12 64 "$pver_count" \
+    --cancel-button "← Back" "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || return 1
+  return 0
+}
+
+tui_node() {
+  NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
+    "Pick the system-wide Node.js LTS:" 12 60 3 \
+    --cancel-button "← Back" \
+    24 "Node 24 LTS (recommended)" "$(req "$NODE_MAJOR" 24)" \
+    22 "Node 22 LTS"               "$(req "$NODE_MAJOR" 22)" \
+    20 "Node 20 LTS"               "$(req "$NODE_MAJOR" 20)" \
+    3>&1 1>&2 2>&3 < /dev/tty) || return 1
+  return 0
+}
+
+tui_domain() {
+  PANEL_DOMAIN=$(whiptail --title "Panel domain (optional)" --inputbox \
+    "Setting a domain lets auracpd issue a real Let's Encrypt cert for the panel.\nPoint its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}." \
+    12 70 "$PANEL_DOMAIN" --cancel-button "← Back" 3>&1 1>&2 2>&3 < /dev/tty) || return 1
+  return 0
+}
+
+# ─── state-machine driver ───────────────────────────────────────────────────
+select_whiptail() {
+  prime_avail_cache
+  local step="components" rc
+  while [ -n "$step" ]; do
+    case "$step" in
+      components) tui_components ;;
+      php)        tui_php ;;
+      mariadb)    tui_mariadb ;;
+      postgres)   tui_postgres ;;
+      node)       tui_node ;;
+      domain)     tui_domain ;;
+    esac
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      step=$(next_step "$step")
     else
-      # Multi-select: install one or many side-by-side. Pre-checks whatever
-      # PHP_VERSIONS already contains (default 8.4) plus any value passed via
-      # --php-version= flag; user can tick/untick. Empty result keeps PHP off.
-      for v in $pver_list; do
-        case " $PHP_VERSIONS " in *" $v "*) pver_args+=("$v" "PHP $v" ON) ;; *) pver_args+=("$v" "PHP $v" OFF) ;; esac
-        pver_count=$((pver_count + 1))
-      done
-      selected=$(whiptail --title "PHP versions" --checklist \
-        "Pick one or more PHP-FPM versions to install side-by-side.\nSites pin per-site in the Create form; more can be added later from Settings → PHP Versions." \
-        14 70 "$pver_count" "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || selected=""
-      # whiptail returns "8.4" "8.5" (quoted, space-separated). Strip quotes.
-      PHP_VERSIONS=$(echo "$selected" | tr -d '"')
-      if [ -z "$PHP_VERSIONS" ]; then
-        OPT_PHP=no
-      else
-        # Pick a default if not pinned via flag — first selected (oldest tick).
-        if [ -z "$PHP_DEFAULT" ]; then
-          PHP_DEFAULT="${PHP_VERSIONS%% *}"
-        fi
+      # Back on the first step = cancel the whole installer.
+      if [ "$step" = "components" ]; then
+        die "Installation cancelled."
       fi
+      step=$(prev_step "$step")
+      [ -z "$step" ] && step="components"
     fi
-  fi
-  if yesno "$OPT_MARIADB"; then
-    local mver_list mver_args=() mver_count=0 v
-    mver_list=$(mariadb_available)
-    if [ -z "$mver_list" ]; then
-      whiptail --title "MariaDB unavailable" --msgbox \
-        "mariadb.org publishes no MariaDB build for ${OS_ID} ${OS_CODENAME}.\nMariaDB will be skipped." 10 60 < /dev/tty || true
-      OPT_MARIADB=no
-    else
-      MARIADB_VERSION=$(snap_to_available "$MARIADB_VERSION" "$mver_list")
-      for v in $mver_list; do
-        case "$v" in
-          11.8)  mver_args+=("$v" "11.8 LTS (current)"            "$(req "$MARIADB_VERSION" "$v")") ;;
-          11.4)  mver_args+=("$v" "11.4 LTS"                      "$(req "$MARIADB_VERSION" "$v")") ;;
-          10.11) mver_args+=("$v" "10.11 LTS (oldest supported)"  "$(req "$MARIADB_VERSION" "$v")") ;;
-          *)     mver_args+=("$v" "MariaDB $v"                    "$(req "$MARIADB_VERSION" "$v")") ;;
-        esac
-        mver_count=$((mver_count + 1))
-      done
-      MARIADB_VERSION=$(whiptail --title "MariaDB version" --radiolist \
-        "Available for ${OS_ID} ${OS_CODENAME} (from mariadb.org):" 12 64 "$mver_count" \
-        "${mver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || MARIADB_VERSION="${mver_list%% *}"
-    fi
-  fi
-  if yesno "$OPT_POSTGRES"; then
-    local pver_list pver_args=() pver_count=0 v
-    pver_list=$(postgres_available)
-    if [ -z "$pver_list" ]; then
-      whiptail --title "PostgreSQL unavailable" --msgbox \
-        "apt.postgresql.org publishes no PGDG repo for ${OS_ID} ${OS_CODENAME}.\nPostgreSQL will be skipped." 10 60 < /dev/tty || true
-      OPT_POSTGRES=no
-    else
-      POSTGRES_VERSION=$(snap_to_available "$POSTGRES_VERSION" "$pver_list")
-      for v in $pver_list; do
-        case "$v" in
-          18) pver_args+=("$v" "PostgreSQL 18 (current)" "$(req "$POSTGRES_VERSION" "$v")") ;;
-          *)  pver_args+=("$v" "PostgreSQL $v"           "$(req "$POSTGRES_VERSION" "$v")") ;;
-        esac
-        pver_count=$((pver_count + 1))
-      done
-      POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
-        "Available for ${OS_ID} ${OS_CODENAME} (from apt.postgresql.org):" 12 64 "$pver_count" \
-        "${pver_args[@]}" 3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION="${pver_list%% *}"
-    fi
-  fi
-  if yesno "$OPT_NODE"; then
-    NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
-      "Pick the system-wide Node.js LTS:" 12 60 3 \
-      24 "Node 24 LTS (recommended)" "$(req "$NODE_MAJOR" 24)" \
-      22 "Node 22 LTS"               "$(req "$NODE_MAJOR" 22)" \
-      20 "Node 20 LTS"               "$(req "$NODE_MAJOR" 20)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || NODE_MAJOR=24
-  fi
-  if [ -z "$PANEL_DOMAIN" ]; then
-    PANEL_DOMAIN=$(whiptail --title "Panel domain (optional)" --inputbox \
-      "Setting a domain lets auracpd issue a real Let's Encrypt cert for the panel.\nPoint its DNS A record at this server, or leave blank to use IP:${PANEL_PORT}." \
-      12 70 "$PANEL_DOMAIN" 3>&1 1>&2 2>&3 < /dev/tty) || PANEL_DOMAIN=""
-  fi
+  done
 }
 
 # plain-text fallback when whiptail isn't available
