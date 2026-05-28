@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -81,12 +82,17 @@ func (m *Manager) Reconcile() {
 }
 
 // Install adds the deb.sury.org packages for the chosen version. Idempotent.
+//
+// Extension list is conservative: every PHP site needs the core extensions
+// (mbstring/xml/curl/gd/zip/bcmath/intl) and the embedded opcache (no
+// separate php<ver>-opcache package on deb.sury.org since PHP 7.0). The DB /
+// cache client libraries are added ONLY when the corresponding service is
+// installed on the host — no point pulling php<ver>-mysql onto a Postgres-
+// only box, php<ver>-redis where Redis was never selected, etc.
 func (m *Manager) Install(ctx context.Context, version string, makeDefault bool) error {
 	if err := validate.PHPVersion(version); err != nil {
 		return err
 	}
-	// opcache is statically embedded in php<ver>-cli/-fpm since PHP 7.0
-	// (no separate php<ver>-opcache package on deb.sury.org).
 	pkgs := []string{
 		"php" + version + "-fpm",
 		"php" + version + "-cli",
@@ -97,9 +103,20 @@ func (m *Manager) Install(ctx context.Context, version string, makeDefault bool)
 		"php" + version + "-zip",
 		"php" + version + "-bcmath",
 		"php" + version + "-intl",
-		"php" + version + "-mysql",
-		"php" + version + "-pgsql",
-		"php" + version + "-redis",
+	}
+	// Detect by binary because that's what the installer (or future apt
+	// install of these engines) reliably drops; status of the systemd unit
+	// is a less stable signal than the binary's presence on PATH.
+	if _, err := exec.LookPath("mariadbd"); err == nil {
+		pkgs = append(pkgs, "php"+version+"-mysql")
+	} else if _, err := exec.LookPath("mysqld"); err == nil {
+		pkgs = append(pkgs, "php"+version+"-mysql")
+	}
+	if _, err := exec.LookPath("psql"); err == nil {
+		pkgs = append(pkgs, "php"+version+"-pgsql")
+	}
+	if _, err := exec.LookPath("redis-server"); err == nil {
+		pkgs = append(pkgs, "php"+version+"-redis")
 	}
 	args := append([]string{"install", "-y", "--no-install-recommends"}, pkgs...)
 	if _, err := m.R.Run(ctx, "apt-get", args...); err != nil {

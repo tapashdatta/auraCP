@@ -50,10 +50,10 @@ already-issued certs keep working until expiry (renewal pauses until auracpd is 
 | Admin UI | **Svelte** (compiled, embedded via `go:embed`) | tiny bundle, no runtime on server |
 | Front web server | **nginx** (mainline 1.30) | ~10 MB / worker, battle-tested, fastcgi_cache + proxy_cache built-in |
 | Auto-HTTPS | **go-acme/lego in auracpd** | in-process ACME; HTTP-01 by default + Cloudflare DNS-01 for wildcards / proxied domains |
-| PHP runtime | **PHP-FPM, pool per site** (Unix socket per domain) | classic CloudPanel-class isolation; multi-version side-by-side via `deb.sury.org` |
+| PHP runtime | **PHP-FPM, pool per site** (Unix socket per domain) | classic CloudPanel-class isolation; multi-version side-by-side via `deb.sury.org`. Extension list is conditional on host components — `php-mysql` / `php-pgsql` / `php-redis` only pull when MariaDB / Postgres / Redis are present, so PHP-only or PHP-+-one-engine hosts stay lean. |
 | Page cache | **nginx fastcgi_cache + proxy_cache** | full-page cache per site; bypass on logged-in/POST |
 | Object cache | **Redis** | WordPress / Drupal / Laravel / Django expect it |
-| Node runtime | **Node 24 LTS** (nodejs.org tarball, multi-version managed by auracpd) | per-site systemd unit; PM2 opt-in via `pm2-runtime` foreground (no daemon) |
+| Node runtime | **Node 24 LTS** (nodejs.org tarball, multi-version managed by auracpd) | per-site systemd unit; **systemd-only is the default** runner, **PM2 wrapper** opt-in (`pm2-runtime` foreground — no daemon). Site Create UI surfaces both as a radio choice. |
 | Python | **gunicorn / uvicorn** via per-site systemd unit | standard modern Python web stack |
 | Databases | **MariaDB** + **PostgreSQL** | per-database engine choice |
 | Secrets | NaCl secretbox + `/etc/auracp/secret.key` | encrypt DB passwords, Cloudflare tokens at rest |

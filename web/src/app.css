@@ -195,10 +195,21 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .field{margin-bottom:18px}
 .field label{display:block;font-weight:600;font-size:13px;margin-bottom:7px}
 .field .hint{color:var(--txt-3);font-weight:400;font-size:12px;margin-left:6px}
-.input,.select{width:100%;padding:11px 14px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;transition:border-color .15s, box-shadow .15s}
+.input,.select{width:100%;padding:11px 14px;border:1px solid var(--line-2);border-radius:10px;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;transition:border-color .15s, box-shadow .15s, background-color .15s}
 .input:hover,.select:hover{border-color:var(--txt-3)}
 .input:focus,.select:focus{border-color:var(--aura);box-shadow:0 0 0 3.5px var(--aura-glow)}
 .input::placeholder{color:var(--txt-3)}
+/* Modernised <select> — drop the native chevron, draw a crisp one via SVG bg.
+   Padding-right makes room; native control is otherwise unstyleable cross-OS. */
+.select{appearance:none;-webkit-appearance:none;padding-right:38px;cursor:pointer;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 12px center;background-size:14px}
+:root[data-theme="dark"] .select{
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%239aa4b6' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")}
+.select:focus{background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E")}
+.select option{background:var(--surface-0);color:var(--txt)}
+/* multi-line / sized selects (no native arrow shown) */
+.select[size],.select[multiple]{appearance:auto;-webkit-appearance:auto;background-image:none;padding-right:14px}
 .input-row{display:flex;gap:10px}
 .input-row .input{flex:1}
 .gen{flex:none;padding:0 14px;border:1px solid var(--line);border-radius:9px;background:var(--surface-1);color:var(--aura-strong);font-weight:600;font-size:12.5px;cursor:pointer}
@@ -207,6 +218,36 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .select.ui{font-family:var(--fs-ui)}
 .form-actions{display:flex;gap:10px;margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
 .section-b{padding:18px}
+/* radio-card group (Process supervision on Node create form etc.).
+   Selected state gets a thicker accent border, a corner checkmark badge,
+   and a subtle inner glow — clear at-a-glance which option is active. */
+.runner-choice{display:grid;gap:10px}
+.runner-opt{
+  position:relative;display:flex;gap:12px;align-items:flex-start;
+  padding:14px 14px 13px;border:1.5px solid var(--line);border-radius:var(--radius);
+  background:var(--surface-0);cursor:pointer;
+  transition:border-color .15s,background-color .15s,box-shadow .15s,transform .12s;
+}
+.runner-opt:hover{border-color:var(--line-2);background:var(--surface-1)}
+.runner-opt:active{transform:scale(.998)}
+.runner-opt input[type=radio]{margin:3px 0 0 0;accent-color:var(--aura);cursor:pointer}
+.runner-opt.selected{
+  border-color:var(--aura);background:var(--surface-1);
+  box-shadow:0 0 0 4px var(--aura-glow), inset 0 0 0 1px color-mix(in srgb, var(--aura) 35%, transparent);
+}
+.runner-opt.selected::after{
+  /* Corner checkmark badge — only visible when selected. */
+  content:"";position:absolute;top:10px;right:10px;
+  width:22px;height:22px;border-radius:50%;background:var(--aura);
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5L20 7'/%3E%3C/svg%3E");
+  background-size:14px;background-position:center;background-repeat:no-repeat;
+  box-shadow:0 0 0 3px var(--surface-0), 0 2px 8px var(--aura-glow);
+}
+.runner-body{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;padding-right:28px}
+.runner-title{font-weight:600;font-size:14px;color:var(--txt)}
+.runner-opt.selected .runner-title{color:var(--aura-strong)}
+.runner-desc{font-size:12.5px;line-height:1.5;color:var(--txt-2)}
+.runner-desc .mono{font-family:var(--fs-mono);font-size:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
 
 /* ---------- site detail ---------- */
 .site-head{display:flex;align-items:center;gap:16px;margin-bottom:6px}
@@ -231,10 +272,30 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .kv:last-child{border-bottom:none}
 .kv .k{color:var(--txt-2);font-size:13px}
 .kv .v{font-family:var(--fs-mono);font-size:13px;color:var(--txt)}
-.toggle{width:40px;height:23px;border-radius:999px;background:var(--surface-3);position:relative;transition:.2s;flex:none;cursor:pointer;border:1px solid var(--line)}
-.toggle.on{background:var(--aura);border-color:var(--aura)}
-.toggle::after{content:"";position:absolute;top:2px;left:2.5px;width:17px;height:17px;border-radius:50%;background:#fff;transition:.2s;box-shadow:0 1px 2px rgba(0,0,0,.2)}
-.toggle.on::after{left:19px}
+/* iOS-style toggle — larger pill, spring-y motion, soft knob shadow.
+   On-state inset shadow gives a subtle "depth" feel, like Settings.app. */
+.toggle{
+  width:52px;height:32px;border-radius:999px;
+  background:color-mix(in srgb, var(--txt-3) 38%, transparent);
+  position:relative;flex:none;cursor:pointer;border:none;
+  transition:background-color .25s ease;
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.08);
+}
+.toggle:hover{background:color-mix(in srgb, var(--txt-3) 50%, transparent)}
+.toggle.on{
+  background:var(--aura);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--aura) 60%, black), 0 0 0 3px var(--aura-glow);
+}
+.toggle.on:hover{background:var(--aura-strong)}
+.toggle::after{
+  content:"";position:absolute;top:2px;left:2px;
+  width:28px;height:28px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 1px rgba(0,0,0,.06), 0 3px 8px rgba(0,0,0,.18);
+  transition:left .25s cubic-bezier(.34,1.56,.64,1), width .18s ease;
+}
+.toggle:active::after{width:32px}
+.toggle.on::after{left:22px}
+.toggle.on:active::after{left:18px;width:32px}
 .code{font-family:var(--fs-mono);font-size:12.5px;line-height:1.7;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px 18px;color:var(--txt-2);overflow:auto;max-height:360px;white-space:pre-wrap}
 .code .c{color:var(--txt-3)}
 .code .k{color:var(--aura-strong)}

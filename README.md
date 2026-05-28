@@ -24,7 +24,11 @@ and leaves the server's resources for the sites it hosts.
 - **Automatic HTTPS** (in-process **go-acme/lego** in auracpd) — HTTP-01 by default, **Cloudflare**
   DNS-01 for wildcards or proxied domains, daily renewal scheduler.
 - **PHP-FPM, one pool per site** with a per-site Unix socket and isolated UID; **multiple PHP
-  versions side-by-side** (8.3 / 8.4 / 8.5) from `deb.sury.org`, pin per site.
+  versions side-by-side** (8.3 / 8.4 / 8.5) from `deb.sury.org`, pin per site. PHP install
+  pulls only the DB / cache extensions for engines actually selected on the host (no
+  `php-mysql` when MariaDB wasn't picked, etc.).
+- **Node.js** runs as a per-site **systemd** unit by default; optional **PM2 wrapper**
+  (`pm2-runtime` — no daemon) for apps that need cluster mode or ship `ecosystem.config.js`.
 - **nginx fastcgi_cache + proxy_cache** for full-page caching; **Redis** for object cache.
 - Per-site tabs: Settings · Vhost · Databases · Cache · SSL/TLS · Security · SSH/FTP · File Manager ·
   Cron · Logs · Backups.
@@ -57,7 +61,7 @@ clone needed — the `.deb` bundles the installer and exposes it as the `auracp-
 # 1) download the package for your arch (plain curl — repo is public)
 ARCH=$(dpkg --print-architecture)        # → amd64 or arm64
 curl -fL -o auracp.deb \
-  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.3/auracp_0.2.3_${ARCH}.deb"
+  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.4/auracp_0.2.4_${ARCH}.deb"
 
 # 2) install the panel
 sudo dpkg -i ./auracp.deb
@@ -70,7 +74,7 @@ sudo auracp-install
 
 ```bash
 ARCH=$(dpkg --print-architecture) && \
-curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.3/auracp_0.2.3_${ARCH}.deb" && \
+curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.4/auracp_0.2.4_${ARCH}.deb" && \
 sudo dpkg -i /tmp/auracp.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```

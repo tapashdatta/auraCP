@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.3"
+AURACP_VERSION="0.2.4"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -635,10 +635,15 @@ install_php_fpm() {
   local v="$PHP_VERSION"
   # NOTE: opcache is statically embedded in php<ver>-cli and php<ver>-fpm
   # since PHP 7.0 — there's no separate php<ver>-opcache package to list.
-  run "apt-get install -y --no-install-recommends \
-       php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl \
-       php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl php${v}-mysql \
-       php${v}-pgsql php${v}-redis"
+  # Core extensions every PHP site needs; DB / cache client libraries are
+  # added conditionally so we don't install php8.5-mysql on a host that
+  # never selected MariaDB, etc.
+  local pkgs="php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl"
+  pkgs="$pkgs php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl"
+  yesno "$OPT_MARIADB"  && pkgs="$pkgs php${v}-mysql"
+  yesno "$OPT_POSTGRES" && pkgs="$pkgs php${v}-pgsql"
+  yesno "$OPT_REDIS"    && pkgs="$pkgs php${v}-redis"
+  run "apt-get install -y --no-install-recommends $pkgs"
   # auraCP owns all PHP-FPM pools — disable the default `www` pool the package
   # auto-creates so it doesn't conflict with per-site pools the panel writes.
   if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then

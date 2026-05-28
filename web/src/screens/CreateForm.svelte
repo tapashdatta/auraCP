@@ -13,12 +13,14 @@
   const type = ui.createType
   const meta = META[type] || META.php
 
-  // single reactive model; type-specific fields are shown conditionally
+  // single reactive model; type-specific fields are shown conditionally.
+  // `runner` is the Node-supervision choice the user picks (systemd-native vs
+  // PM2 wrapper inside systemd); the API still takes pm2:bool, we map at submit.
   let m = $state({
     domain: '', user: '', password: randPw(),
     phpVersion: '', port: type === 'python' ? '8000' : '3000',
     startFile: 'app.js', module: 'main:app', upstream: 'http://127.0.0.1:8088',
-    pm2: false,
+    runner: 'systemd',  // 'systemd' | 'pm2'
   })
   let phpVersions = $state([])  // populated from /api/instance/php-versions on mount
   let busy = $state(false)
@@ -49,7 +51,7 @@
         type, domain: m.domain, user: m.user, password: m.password,
         phpVersion: m.phpVersion, port: Number(m.port),
         startFile: m.startFile, module: m.module, upstream: m.upstream,
-        pm2: m.pm2,
+        pm2: m.runner === 'pm2',
       }),
     })
     const d = await r.json().catch(() => ({}))
@@ -92,10 +94,23 @@
           <div class="field"><label>Startup File</label><input class="input" bind:value={m.startFile}></div>
         </div>
         <div class="field">
-          <label style="display:flex;gap:8px;align-items:center;font-weight:500">
-            <input type="checkbox" bind:checked={m.pm2}> Run via <b>PM2</b> (pm2-runtime; recommended for production Node apps)
-          </label>
-          <span class="hint" style="margin-left:0">PM2 process name = the domain ({m.domain || 'your-domain'}); systemd unit stays <span class="mono">auracp-site-&lt;domain&gt;</span>.</span>
+          <label>Process supervision</label>
+          <div class="runner-choice">
+            <label class="runner-opt" class:selected={m.runner === 'systemd'}>
+              <input type="radio" name="runner" value="systemd" bind:group={m.runner}>
+              <div class="runner-body">
+                <div class="runner-title">systemd <span class="hint" style="margin-left:6px">default</span></div>
+                <div class="runner-desc">Plain <span class="mono">node {m.startFile || 'app.js'}</span> as the unit's ExecStart. Restart-on-crash, journald logs, cgroup limits — same as the rest of the panel's services.</div>
+              </div>
+            </label>
+            <label class="runner-opt" class:selected={m.runner === 'pm2'}>
+              <input type="radio" name="runner" value="pm2" bind:group={m.runner}>
+              <div class="runner-body">
+                <div class="runner-title">PM2 wrapper</div>
+                <div class="runner-desc">Wraps the app in <span class="mono">pm2-runtime</span> (foreground — no PM2 daemon). Pick this only if your app uses <span class="mono">ecosystem.config.js</span> or you specifically want PM2's Node-level cluster mode. Process name = the domain.</div>
+              </div>
+            </label>
+          </div>
         </div>
       {/if}
       {#if type === 'python'}
