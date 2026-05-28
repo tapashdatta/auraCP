@@ -123,6 +123,19 @@ if [ -d /run/systemd/system ]; then
       systemctl reload "$unit" 2>/dev/null || true
     done
   fi
+
+  # v0.2.35: install wp-cli if PHP is present but the binary is missing.
+  # Covers upgrades from < v0.2.33 (when wp-cli was added to install_php_fpm) —
+  # those hosts have PHP-FPM but no /usr/local/bin/wp, and clicking
+  # WordPress auto-install fails with the wp-cli-missing message.
+  # Idempotent: skips if /usr/local/bin/wp already exists.
+  if command -v php >/dev/null 2>&1 && [ ! -x /usr/local/bin/wp ]; then
+    if curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" -o /tmp/wp-cli.phar 2>/dev/null; then
+      chmod +x /tmp/wp-cli.phar
+      mv /tmp/wp-cli.phar /usr/local/bin/wp
+      echo "auraCP: installed wp-cli at /usr/local/bin/wp"
+    fi
+  fi
   echo
   echo "auraCP panel installed and running on https://<server-ip>:8443"
   echo "Next step — provision the data plane (nginx, MariaDB/Postgres, PHP-FPM, Node, …):"
