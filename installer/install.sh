@@ -14,7 +14,7 @@
 # Selection flags (override defaults; imply --non-interactive when given):
 #   --db=mariadb|postgres|both|none   --node=yes|no      --php=yes|no
 #   --php-version=8.3|8.4|8.5         --python=yes|no     --redis=yes|no
-#   --mariadb-version=10.11|11.4|11.8 --postgres-version=15|16|17
+#   --mariadb-version=10.11|11.4|11.8 --postgres-version=16|17|18
 #   --node-version=20|22|24
 #   --typesense=yes|no                --docker=yes|no
 #   --security=yes|no                 --port=8443
@@ -28,7 +28,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.8"
+AURACP_VERSION="0.1.9"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -52,7 +52,7 @@ TYPESENSE_VERSION="${AURACP_TYPESENSE_VERSION:-27.1}"
 
 # Per-engine version defaults — overridable via flags / env / TUI.
 MARIADB_VERSION="${AURACP_MARIADB_VERSION:-11.8}"     # 11.8 | 11.4 | 10.11  (LTS)
-POSTGRES_VERSION="${AURACP_POSTGRES_VERSION:-17}"     # 17 | 16 | 15
+POSTGRES_VERSION="${AURACP_POSTGRES_VERSION:-18}"     # 18 | 17 | 16
 
 # paths + detected OS (filled in by preflight)
 PREFIX="/opt/auracp"
@@ -190,7 +190,7 @@ parse_args() {
   done
   case "$PHP_VERSION"     in 8.3|8.4|8.5) ;;     *) die "--php-version must be 8.3 / 8.4 / 8.5";; esac
   case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
-  case "$POSTGRES_VERSION" in 15|16|17) ;;       *) die "--postgres-version must be 15 / 16 / 17";; esac
+  case "$POSTGRES_VERSION" in 16|17|18) ;;       *) die "--postgres-version must be 16 / 17 / 18";; esac
   case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
   [ "$sawSelection" -eq 1 ] && INTERACTIVE=0
   return 0
@@ -270,10 +270,10 @@ select_whiptail() {
   if yesno "$OPT_POSTGRES"; then
     POSTGRES_VERSION=$(whiptail --title "PostgreSQL version" --radiolist \
       "Pick a PostgreSQL major (from apt.postgresql.org):" 12 60 3 \
-      17 "PostgreSQL 17 (current)" "$(req "$POSTGRES_VERSION" 17)" \
+      18 "PostgreSQL 18 (current)" "$(req "$POSTGRES_VERSION" 18)" \
+      17 "PostgreSQL 17"           "$(req "$POSTGRES_VERSION" 17)" \
       16 "PostgreSQL 16"           "$(req "$POSTGRES_VERSION" 16)" \
-      15 "PostgreSQL 15"           "$(req "$POSTGRES_VERSION" 15)" \
-      3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION=17
+      3>&1 1>&2 2>&3 < /dev/tty) || POSTGRES_VERSION=18
   fi
   if yesno "$OPT_NODE"; then
     NODE_MAJOR=$(whiptail --title "Node.js version" --radiolist \
@@ -306,8 +306,8 @@ select_readline() {
     case "${v:-$MARIADB_VERSION}" in 10.11|11.4|11.8) MARIADB_VERSION="${v:-$MARIADB_VERSION}";; esac
   fi
   if yesno "$OPT_POSTGRES"; then
-    read -r -p "  PostgreSQL major [17/16/15] (${POSTGRES_VERSION}): " v < /dev/tty || true
-    case "${v:-$POSTGRES_VERSION}" in 15|16|17) POSTGRES_VERSION="${v:-$POSTGRES_VERSION}";; esac
+    read -r -p "  PostgreSQL major [18/17/16] (${POSTGRES_VERSION}): " v < /dev/tty || true
+    case "${v:-$POSTGRES_VERSION}" in 16|17|18) POSTGRES_VERSION="${v:-$POSTGRES_VERSION}";; esac
   fi
   if yesno "$OPT_NODE"; then
     read -r -p "  Node.js LTS [24/22/20] (${NODE_MAJOR}): " v < /dev/tty || true
