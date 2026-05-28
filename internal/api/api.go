@@ -122,6 +122,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("DELETE /api/sites/{domain}/cron/{id}", srv.requirePerm("cron", "delete", srv.deleteCron))
 	mux.Handle("GET /api/sites/{domain}/backups", srv.requirePerm("backups", "read", srv.listBackups))
 	mux.Handle("POST /api/sites/{domain}/backups", srv.requirePerm("backups", "create", srv.createBackup))
+	mux.Handle("DELETE /api/sites/{domain}/backups/{id}", srv.requirePerm("backups", "delete", srv.deleteBackup))
 	mux.Handle("GET /api/sites/{domain}/ssh-users", srv.requirePerm("ssh_users", "read", srv.listSSHUsers))
 	mux.Handle("POST /api/sites/{domain}/ssh-users", srv.requirePerm("ssh_users", "create", srv.addSSHUser))
 	mux.Handle("DELETE /api/sites/{domain}/ssh-users/{username}", srv.requirePerm("ssh_users", "delete", srv.deleteSSHUser))

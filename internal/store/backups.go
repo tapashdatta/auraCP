@@ -56,3 +56,18 @@ func (s *Store) DeleteBackupByPath(path string) error {
 	_, err := s.DB.Exec(`DELETE FROM backups WHERE path = ?`, path)
 	return err
 }
+
+// v0.2.47: id-keyed lookup + delete so the panel can offer a per-row delete
+// button without baking the on-disk path into the UI.
+func (s *Store) BackupByID(domain string, id int64) (Backup, error) {
+	var b Backup
+	err := s.DB.QueryRow(`SELECT id, site_domain, kind, path, size_bytes, created_at
+		FROM backups WHERE id = ? AND site_domain = ?`, id, domain).
+		Scan(&b.ID, &b.SiteDomain, &b.Kind, &b.Path, &b.SizeBytes, &b.CreatedAt)
+	return b, err
+}
+
+func (s *Store) DeleteBackupByID(id int64) error {
+	_, err := s.DB.Exec(`DELETE FROM backups WHERE id = ?`, id)
+	return err
+}

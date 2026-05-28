@@ -191,9 +191,18 @@
             </td>
             <td><span class="status"><span class="sdot s-{s.status}"></span>{s.statusText}</span></td>
             <td style="text-align:right">
-              <button type="button" class="manage" onclick={(e) => { e.stopPropagation(); openSite(s) }}>Manage
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
-              </button>
+              <div class="row-actions">
+                <!-- v0.2.47: visit the live site in a new tab. Stops the row
+                     click from also triggering openSite(). -->
+                <a class="row-act-link" href="https://{s.domain}" target="_blank" rel="noopener noreferrer"
+                   onclick={(e) => e.stopPropagation()}
+                   title="Open https://{s.domain} in a new tab" aria-label="Open {s.domain}">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                </a>
+                <button type="button" class="manage" onclick={(e) => { e.stopPropagation(); openSite(s) }}>Manage
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+                </button>
+              </div>
             </td>
           </tr>
         {/each}
@@ -246,6 +255,14 @@
 
   .empty{text-align:center;padding:32px 16px;color:var(--txt-3)}
   .hint{color:var(--txt-3);font-size:12.5px}
+
+  /* v0.2.47: site-row right-edge action cluster — external-link icon next
+     to the Manage button. Same opacity-on-hover treatment as Manage. */
+  .row-actions{display:inline-flex;align-items:center;gap:6px;justify-content:flex-end}
+  .row-act-link{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border-radius:8px;color:var(--txt-3);border:1px solid var(--line);background:var(--surface-1);transition:.1s;opacity:.6}
+  .row-act-link:hover{color:var(--aura-strong);border-color:var(--line-2);background:var(--surface-2);text-decoration:none}
+  .row-act-link svg{width:14px;height:14px}
+  :global(tr.site-row:hover) .row-act-link{opacity:1}
 
   /* v0.2.29: below 720 px (small tablet portrait + phones) hide Recent
      Activity entirely — operators on a phone are dipping in to check sites,

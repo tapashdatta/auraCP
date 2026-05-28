@@ -27,12 +27,35 @@
   let config = $state({})
   let sslStatus = $state(null)
   let sslBusy = $state(false)
+  let sslRecheckBusy = $state(false)
   // v0.2.42: HTTP-01 reachability pre-flight result. { ok, step, reason, hint, url }
   let preflight = $state(null)
   let preflightBusy = $state(false)
+
+  // v0.2.47: re-check the live TLS state with feedback. The previous button
+  // just called load('ssl') silently — operators thought it didn't work
+  // because nothing visible changed when the cert state was unchanged.
+  // Now: busy state during the refetch + toast on completion.
+  async function recheckSSL() {
+    sslRecheckBusy = true
+    preflight = null   // wipe the stale pre-flight result; the world may have changed
+    const before = sslStatus?.status
+    await load('ssl')
+    sslRecheckBusy = false
+    if (sslStatus?.status === 'active') {
+      toastSuccess(before === 'active' ? 'Still active' : 'Cert is now active')
+    } else if (sslStatus?.status === 'pending') {
+      toast('Still pending — issuance may not have completed', { kind: 'warn' })
+    } else {
+      toastError('No cert served yet. Click Issue / retry above.')
+    }
+  }
   let sshUsers = $state([])
   let nodeRuntimes = $state([])
   let nodePick = $state(site.node || 'default')
+  // v0.2.47: per-site PHP version switcher (PHP/WordPress sites only).
+  let phpRuntimesSite = $state([])
+  let phpPick = $state(site.phpVersion || '')
   let newSSH = $state({ username: '', type: 'sftp', password: randPw() })
   let basicAuth = $state({ user: '', password: '' })
   let vhost = $state({ content: '', path: '', loaded: false, dirty: false })
@@ -51,6 +74,12 @@
     else if (tab === 'settings') {
       backups = await getJSON(`${base}/backups`, [])
       if (site.type === 'nodejs') nodeRuntimes = await getJSON('/api/instance/node-versions', [])
+      if (site.type === 'php' || site.type === 'wordpress') {
+        const all = await getJSON('/api/instance/php-versions', [])
+        // Only show versions actually installed on this host.
+        phpRuntimesSite = (all || []).filter(v => v.installed)
+        if (!phpPick && phpRuntimesSite.length) phpPick = phpRuntimesSite[0].version
+      }
     }
     else if (tab === 'vhost') {
       const v = await getJSON(`${base}/vhost`, null)
@@ -306,6 +335,30 @@
     const d = await r.json().catch(() => ({}))
     busy = false
     notice = r.ok ? `Site now runs on Node ${d.version}.` : (d.error || 'Failed')
+  }
+  // v0.2.47: change a site's PHP version. Backend moves the FPM pool file
+  // from the old version to the new one + reloads both fpm services.
+  async function savePHPVersion() {
+    busy = true
+    const r = await apiFetch(`${base}/php-version`, { method: 'PUT', body: JSON.stringify({ version: phpPick }) })
+    const d = await r.json().catch(() => ({}))
+    busy = false
+    if (!r.ok) { toastError(d.error || 'Could not switch PHP version'); return }
+    site.phpVersion = d.version
+    toastSuccess(`Site now runs on PHP ${d.version}`)
+  }
+  // v0.2.47: delete one backup row + its on-disk tarball.
+  async function deleteBackup(id) {
+    if (!(await confirmDialog({
+      title: 'Delete this backup?',
+      message: 'The backup record and its on-disk file are both removed. This cannot be undone.',
+      confirmText: 'Delete', danger: true,
+    }))) return
+    const r = await apiFetch(`${base}/backups/${id}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { toastError(d.error || 'Could not delete backup'); return }
+    toastSuccess('Backup deleted')
+    load('settings')
   }
   async function togglePM2(enabled) {
     busy = true
@@ -806,7 +859,7 @@
       </div></div>
       {#if site.type === 'nodejs'}
         <div class="section"><div class="section-h"><div><h3>Node.js runtime</h3>
-          <p>Pin this site to a specific Node version. Manage installed versions in <b>Instance → Node.js Runtimes</b>.</p></div></div>
+          <p>Pin this site to a specific Node version. Manage installed versions in <b>Settings → Node.js Runtimes</b>.</p></div></div>
           <div class="section-b">
             <div class="kv"><span class="k">Current</span><span class="v">{site.node || 'default'}</span></div>
             <div class="two">
@@ -827,14 +880,53 @@
           </div>
         </div>
       {/if}
+      {#if site.type === 'php' || site.type === 'wordpress'}
+        <!-- v0.2.47: per-site PHP version switcher. Backend moves the FPM
+             pool file from the old version's pool.d/ to the new one and
+             reloads both fpm services so the unix socket re-binds cleanly. -->
+        <div class="section"><div class="section-h"><div><h3>PHP runtime</h3>
+          <p>Pin this site to a specific PHP version. Install + remove versions in <b>Settings → PHP Versions</b>.</p></div></div>
+          <div class="section-b">
+            <div class="kv"><span class="k">Current</span><span class="v">PHP {site.phpVersion || '—'}</span></div>
+            {#if phpRuntimesSite.length === 0}
+              <div class="hint" style="margin-left:0;margin-top:6px">No PHP-FPM versions are installed on this host. Install one from <button type="button" class="linkish" onclick={() => go('instance')}>Settings → PHP Versions</button>.</div>
+            {:else}
+              <div class="two">
+                <div class="field"><label>
+                  <span class="label-text">PHP version</span>
+                  <select class="select ui" bind:value={phpPick}>
+                    {#each phpRuntimesSite as v}
+                      <option value={v.version}>{v.version}{v.isDefault ? ' (default)' : ''}</option>
+                    {/each}
+                  </select>
+                </label></div>
+              </div>
+              <button class="btn btn-primary" onclick={savePHPVersion} disabled={busy || !phpPick || phpPick === site.phpVersion}>
+                {busy ? 'Switching…' : 'Apply &amp; reload PHP-FPM'}
+              </button>
+              <p class="hint" style="margin:6px 0 0">Briefly drops the old version's socket while the new pool binds — typically &lt; 100 ms. PHP-side settings (memory_limit, etc.) carry over from the panel-managed pool config.</p>
+            {/if}
+          </div>
+        </div>
+      {/if}
       <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Document root + databases, stored locally</p></div>
         <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
         {#if backups.length === 0}
           <div class="empty">No backups yet.</div>
         {:else}
-          <table><thead><tr><th>Created</th><th>Kind</th><th>Size</th><th>Path</th></tr></thead><tbody>
+          <table><thead><tr><th>Created</th><th>Kind</th><th>Size</th><th>Path</th><th style="text-align:right">Actions</th></tr></thead><tbody>
             {#each backups as b}
-              <tr><td><span class="mono">{b.createdAt}</span></td><td>{b.kind}</td><td><span class="mono">{fmtSize(b.size)}</span></td><td><span class="mono" style="color:var(--txt-3)">{b.path}</span></td></tr>
+              <tr>
+                <td><span class="mono">{b.createdAt}</span></td>
+                <td>{b.kind}</td>
+                <td><span class="mono">{fmtSize(b.size)}</span></td>
+                <td><span class="mono" style="color:var(--txt-3);font-size:11.5px">{b.path}</span></td>
+                <td style="text-align:right">
+                  <button type="button" class="file-del" onclick={() => deleteBackup(b.id)} title="Delete backup" aria-label="Delete backup">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                  </button>
+                </td>
+              </tr>
             {/each}
           </tbody></table>
         {/if}
@@ -1033,7 +1125,9 @@
           <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy}>
             {sslBusy ? 'Issuing…' : (sslStatus?.status === 'active' ? 'Renew now' : 'Issue / retry')}
           </button>
-          <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check status</button>
+          <button class="btn btn-ghost" onclick={recheckSSL} disabled={sslRecheckBusy}>
+            {sslRecheckBusy ? 'Refreshing…' : 'Re-check status'}
+          </button>
         </div>
 
         <!-- v0.2.42: DNS-01 section is now a clearly-labelled OPT-IN, not

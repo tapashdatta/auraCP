@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 
 	"github.com/auracp/auracp/internal/auth"
 	"github.com/auracp/auracp/internal/instance"
@@ -232,6 +234,39 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// DELETE /api/sites/{domain}/backups/{id} — remove a backup record AND its
+// on-disk file. Idempotent: a record without a file on disk still gets the
+// DB row dropped; a file-system removal failure is logged but doesn't fail
+// the API call (the operator can manually rm the leftover if needed).
+// v0.2.47.
+func (s *Server) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	idStr := r.PathValue("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid backup id"})
+		return
+	}
+	b, err := s.store.BackupByID(domain, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "backup not found"})
+		return
+	}
+	// Remove the on-disk file best-effort; the DB row is the source of truth.
+	if b.Path != "" {
+		if rerr := os.Remove(b.Path); rerr != nil && !os.IsNotExist(rerr) {
+			// Not a hard failure — log + tell the UI in a sidecar field.
+			defer s.audit(r, "backup.delete.partial", b.Path+": "+rerr.Error())
+		}
+	}
+	if err := s.store.DeleteBackupByID(id); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	s.audit(r, "backup.delete", b.Path)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

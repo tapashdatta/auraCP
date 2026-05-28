@@ -258,6 +258,30 @@ func (m *Manager) WritePool(ctx context.Context, version, domain, user string) e
 	if err := t.Execute(&buf, d); err != nil {
 		return err
 	}
+	// v0.2.47: clean up stale pool files for this domain under OTHER PHP
+	// versions before writing the new one. Without this, switching a site's
+	// pinned version from e.g. 8.4 → 8.5 leaves the 8.4 pool in place — both
+	// FPM services then try to bind the same /run/php-fpm/<domain>.sock and
+	// one (whichever reloads second) fails with "Address already in use".
+	for _, v := range m.Installed() {
+		if v == version {
+			continue
+		}
+		old := paths.PHPPoolFile(v, domain)
+		if _, err := os.Stat(old); err != nil {
+			continue
+		}
+		if !m.R.DryRun {
+			_ = os.Remove(old)
+		}
+		// Reload the old FPM so the socket is released before the new pool
+		// tries to bind it. If the service is inactive, no need.
+		oldSvc := "php" + v + "-fpm"
+		st, _ := m.R.Run(ctx, "systemctl", "is-active", oldSvc)
+		if strings.TrimSpace(st) == "active" {
+			_, _ = m.R.Run(ctx, "systemctl", "reload", oldSvc)
+		}
+	}
 	if !m.R.DryRun {
 		if err := os.MkdirAll(filepath.Dir(paths.PHPPoolFile(version, domain)), 0o755); err != nil {
 			return err
