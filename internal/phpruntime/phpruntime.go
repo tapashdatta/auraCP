@@ -184,6 +184,12 @@ php_admin_value[expose_php] = Off
 
 // WritePool generates the per-site pool config and reloads the right
 // php<ver>-fpm service. Validates version + domain + user before touching disk.
+//
+// Refuses if the requested PHP version isn't actually installed on the host
+// (e.g. the operator installed PHP 8.5 in the data-plane installer but the
+// site form posted 8.4) — without this guard we'd write a pool file to
+// /etc/php/8.4/fpm/pool.d/ that no service would ever read, then fail at
+// `systemctl reload php8.4-fpm` with the cryptic "Unit not found".
 func (m *Manager) WritePool(ctx context.Context, version, domain, user string) error {
 	if err := validate.PHPVersion(version); err != nil {
 		return err
@@ -193,6 +199,21 @@ func (m *Manager) WritePool(ctx context.Context, version, domain, user string) e
 	}
 	if err := validate.Username(user); err != nil {
 		return err
+	}
+	installed := m.Installed()
+	found := false
+	for _, v := range installed {
+		if v == version {
+			found = true
+			break
+		}
+	}
+	if !found {
+		if len(installed) == 0 {
+			return fmt.Errorf("no PHP-FPM versions installed on this host — install one from Settings → PHP Versions, then retry")
+		}
+		return fmt.Errorf("PHP %s is not installed (available: %s) — install it from Settings → PHP Versions, or pick an installed version",
+			version, strings.Join(installed, ", "))
 	}
 	// Per-site overrides from the store, fall back to package defaults.
 	get := func(k, def string) string {

@@ -16,14 +16,27 @@
   // single reactive model; type-specific fields are shown conditionally
   let m = $state({
     domain: '', user: '', password: randPw(),
-    phpVersion: '8.4', port: type === 'python' ? '8000' : '3000',
+    phpVersion: '', port: type === 'python' ? '8000' : '3000',
     startFile: 'app.js', module: 'main:app', upstream: 'http://127.0.0.1:8088',
     pm2: false,
   })
+  let phpVersions = $state([])  // populated from /api/instance/php-versions on mount
   let busy = $state(false)
   let error = $state('')
 
   function randPw() { return Math.random().toString(36).slice(2, 10) + '-' + Math.random().toString(36).slice(2, 6) }
+
+  // Fetch installed PHP versions so the dropdown only offers what'll actually
+  // work — hard-coding 8.3/8.4/8.5 leaves the user picking a version that
+  // isn't installed and getting a confusing systemctl error on submit.
+  if (type === 'php' || type === 'wordpress') {
+    apiFetch('/api/instance/php-versions').then(r => r.json()).then(list => {
+      const installed = (list || []).filter(v => v.installed)
+      phpVersions = installed
+      const def = installed.find(v => v.isDefault) || installed[0]
+      if (def) m.phpVersion = def.version
+    }).catch(() => { phpVersions = [] })
+  }
 
   async function submit(e) {
     e.preventDefault()
@@ -58,10 +71,20 @@
         <input class="input" bind:value={m.domain} placeholder="example.com"></div>
 
       {#if type === 'php' || type === 'wordpress'}
-        <div class="field"><label>PHP Version <span class="hint">8.3+ only</span></label>
-          <select class="select" bind:value={m.phpVersion}>
-            <option>8.5</option><option>8.4</option><option>8.3</option>
-          </select></div>
+        <div class="field"><label>PHP Version <span class="hint">8.3+ only · only installed versions are listed</span></label>
+          {#if phpVersions.length === 0}
+            <div class="hint" style="margin-left:0">
+              No PHP-FPM versions are installed on this host.
+              Install one from <a href="#" onclick={(e) => { e.preventDefault(); go('instance') }}>Settings → PHP Versions</a> before creating PHP sites.
+            </div>
+          {:else}
+            <select class="select" bind:value={m.phpVersion}>
+              {#each phpVersions as v}
+                <option value={v.version}>{v.version}{v.isDefault ? ' (default)' : ''}</option>
+              {/each}
+            </select>
+          {/if}
+        </div>
       {/if}
       {#if type === 'nodejs'}
         <div class="two">
