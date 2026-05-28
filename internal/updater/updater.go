@@ -98,32 +98,55 @@ func (m *Manager) Refresh(ctx context.Context) Status {
 	return s
 }
 
-// Apply triggers /usr/local/bin/auracp-update in a detached process so the
-// running auracpd can be killed mid-request without aborting the upgrade.
-// Returns immediately; caller should respond 202 and the UI should start
-// polling /api/health to know when the new daemon is up.
+// Apply triggers /usr/local/bin/auracp-update in a TRANSIENT systemd scope so
+// the upgrade survives `systemctl stop auracpd` (which is what dpkg's prerm
+// does). v0.2.13–0.2.15 used `setsid`, which detaches the session but NOT
+// the cgroup — systemd kills the whole auracpd.service cgroup on stop, taking
+// dpkg with it, leaving a half-installed package and a 502.
+//
+// `systemd-run --no-block --collect` puts the upgrade into its own transient
+// unit (own cgroup), returns immediately, and garbage-collects the unit on
+// success. The upgrade log goes to its own journal entries (visible via
+// `journalctl -u <unit-name>`) so an operator can review post-mortem.
+//
+// Returns immediately; caller should respond 202 and the UI polls /api/health
+// to know when the new daemon is up.
 func (m *Manager) Apply(ctx context.Context) error {
 	if _, err := exec.LookPath("auracp-update"); err != nil {
 		return fmt.Errorf("auracp-update not found in PATH (re-install the .deb to restore the symlink)")
 	}
-	// Schedule via setsid so the child outlives our process group.
-	// Output goes to a known log file so curious operators can tail it.
+	unitName := fmt.Sprintf("auracp-update-%d", time.Now().Unix())
+	// Use systemd-run when available (every modern Debian/Ubuntu host).
+	if _, err := exec.LookPath("systemd-run"); err == nil {
+		// --no-block: return immediately. --collect: GC the transient unit on
+		// success. --unit: predictable name for `journalctl -u`. The shell
+		// wrapper redirects to the long-lived log file so the historical tail
+		// stays in one place.
+		cmd := exec.Command("systemd-run",
+			"--no-block", "--collect", "--unit="+unitName,
+			"sh", "-c",
+			"sleep 2 && /usr/local/bin/auracp-update >> /var/log/auracp-update.log 2>&1")
+		if err := cmd.Run(); err == nil {
+			return nil
+		}
+		// fall through to setsid fallback if systemd-run somehow fails
+	}
+	// Fallback for non-systemd containers (or systemd-run permission denied):
+	// setsid + nohup. NOTE: this is the v0.2.15 behaviour that's known to
+	// die mid-upgrade when invoked from auracpd's own cgroup; use only when
+	// systemd-run isn't available (the docs warn against this path).
 	cmd := exec.Command("setsid", "sh", "-c",
 		"sleep 2 && /usr/local/bin/auracp-update >> /var/log/auracp-update.log 2>&1")
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
-		// Fall back: nohup without setsid (some minimal containers lack it).
 		cmd = exec.Command("nohup", "sh", "-c",
 			"sleep 2 && /usr/local/bin/auracp-update >> /var/log/auracp-update.log 2>&1 &")
 		if err2 := cmd.Start(); err2 != nil {
 			return fmt.Errorf("could not detach auracp-update: %w", err)
 		}
 	}
-	// Don't wait — caller returns immediately, child runs after the 2-second
-	// delay (long enough for the HTTP response to flush before dpkg yanks the
-	// daemon).
 	go func() { _ = cmd.Wait() }()
 	return nil
 }

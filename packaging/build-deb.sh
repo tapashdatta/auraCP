@@ -60,6 +60,13 @@ EOF
 cat > "$PKG/DEBIAN/postinst" <<'EOF'
 #!/bin/sh
 set -e
+# v0.2.16: belt-and-braces — if a previous panel-initiated upgrade got killed
+# mid-flight (the v0.2.13–0.2.15 setsid-only spawn was vulnerable to systemd's
+# cgroup kill), the dpkg state may have been left half-configured. Running
+# `dpkg --configure -a` here is harmless when there's nothing pending, and
+# completes any partial install when there is. Eats failures so it can't
+# brick the current install attempt.
+dpkg --configure -a 2>/dev/null || true
 mkdir -p /var/lib/auracp /etc/auracp
 chmod 700 /etc/auracp
 ln -sf /opt/auracp/bin/auracp             /usr/local/bin/auracp
