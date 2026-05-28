@@ -73,9 +73,21 @@
   }
   async function revertVhost() {
     busy = true
-    await apiFetch(`${base}/vhost`, { method: 'PUT', body: JSON.stringify({ content: '' }) })
+    const r = await apiFetch(`${base}/vhost`, { method: 'PUT', body: JSON.stringify({ content: '' }) })
+    const d = await r.json().catch(() => ({}))
     busy = false
-    notice = 'Reverted to auto-generated vhost.'
+    if (!r.ok) { notice = d.error || `Could not regenerate: ${r.status}`; return }
+    notice = 'Reverted to auto-generated vhost; nginx reloaded.'
+    load('vhost')
+  }
+  async function generateVhost() {
+    // Same as revert — explicit "create now" when the file is missing entirely.
+    busy = true
+    const r = await apiFetch(`${base}/vhost`, { method: 'PUT', body: JSON.stringify({ content: '' }) })
+    const d = await r.json().catch(() => ({}))
+    busy = false
+    if (!r.ok) { notice = d.error || `Could not generate: ${r.status}`; return }
+    notice = 'Vhost generated and nginx reloaded.'
     load('vhost')
   }
   async function saveDocRoot() {
@@ -137,12 +149,20 @@
   $effect(() => { load('settings') })
 
   async function addDb() {
+    notice = ''
     busy = true
     const r = await apiFetch(`${base}/databases`, { method: 'POST', body: JSON.stringify(newDb) })
     const d = await r.json().catch(() => ({}))
     busy = false
-    if (!r.ok) { notice = d.error || 'Failed'; return }
-    notice = `Created ${d.name}. Password: ${d.password}`
+    if (!r.ok) {
+      // Surface the actual MariaDB / PostgreSQL message verbatim — typical
+      // reasons: db name reserved, user already exists, engine not running.
+      notice = d.error
+        ? `Could not create the database: ${d.error}`
+        : `Database create failed (HTTP ${r.status}); check journalctl -u auracpd.`
+      return
+    }
+    notice = `Created ${d.name}. Password: ${d.password} — copy it now, it's only shown once.`
     newDb = { engine: 'mariadb', name: '', user: '', password: randPw() }
     load('databases')
   }
@@ -183,6 +203,59 @@
   function upDir() { filePath = filePath.split('/').slice(0, -1).join('/'); load('files') }
   function setLogKind(k) { logKind = k; load('logs') }
   function fmtSize(n) { return n > 1<<20 ? (n/(1<<20)).toFixed(1)+' MB' : (n/1024).toFixed(1)+' KB' }
+
+  // File-manager upload state — drag-over highlight, in-flight progress, and
+  // the file input ref so the 'Upload' button can trigger it programmatically.
+  let dragOver = $state(false)
+  let uploadBusy = $state(false)
+  let uploadMsg = $state('')
+  let fileInput = $state(null)   // refs the hidden <input type=file>
+
+  async function uploadFiles(fileList) {
+    if (!fileList || fileList.length === 0) return
+    uploadBusy = true
+    uploadMsg = `Uploading ${fileList.length} file${fileList.length > 1 ? 's' : ''}…`
+    const fd = new FormData()
+    fd.append('path', filePath)
+    for (const f of fileList) fd.append('files', f, f.name)
+    try {
+      const r = await apiFetch(`${base}/files`, { method: 'POST', body: fd })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) { uploadMsg = d.error || `Upload failed: ${r.status}`; uploadBusy = false; return }
+      const errs = Array.isArray(d.errors) ? d.errors.length : 0
+      uploadMsg = errs > 0
+        ? `Uploaded ${d.saved}; ${errs} failed: ${d.errors.join(', ')}`
+        : `Uploaded ${d.saved} file${d.saved > 1 ? 's' : ''}.`
+      load('files')
+    } catch (e) {
+      uploadMsg = 'Upload aborted: ' + (e?.message || 'unknown error')
+    }
+    uploadBusy = false
+  }
+  function onDrop(e) {
+    e.preventDefault(); dragOver = false
+    uploadFiles(e.dataTransfer?.files)
+  }
+  function onDragOver(e) { e.preventDefault(); dragOver = true }
+  function onDragLeave() { dragOver = false }
+  async function deleteFile(name) {
+    if (!confirm(`Delete ${name}? This cannot be undone.`)) return
+    const sub = filePath ? `${filePath}/${name}` : name
+    const r = await apiFetch(`${base}/files?path=${encodeURIComponent(sub)}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { uploadMsg = d.error || 'Could not delete'; return }
+    uploadMsg = `Deleted ${name}.`
+    load('files')
+  }
+  function downloadFile(name) {
+    // Build the URL with credentials = sessionid cookie; same-origin so a
+    // plain <a download> works for download (no CORS shenanigans).
+    const sub = filePath ? `${filePath}/${name}` : name
+    const a = document.createElement('a')
+    a.href = `${base}/files/download?path=${encodeURIComponent(sub)}`
+    a.download = name
+    a.click()
+  }
 </script>
 
 <div class="wrap fade">
@@ -268,11 +341,17 @@
   {:else if active === 'vhost'}
     <div class="section fade"><div class="section-h"><div>
       <h3>nginx vhost</h3>
-      <p>Auto-generated from your settings · validated via <span class="mono">nginx -t</span> on save · reverting drops the override and re-renders</p></div>
+      <p>Auto-generated from your settings · validated via <span class="mono">nginx -t</span> on save</p></div>
       <span class="mono" style="color:var(--txt-3);font-size:12px">{vhost.path || ''}</span></div>
       <div class="section-b">
         {#if !vhost.loaded}
           <div class="empty">Loading vhost…</div>
+        {:else if !vhost.content.trim()}
+          <div class="empty">
+            <p style="margin-bottom:14px"><b>No vhost on disk yet</b> at <span class="mono">{vhost.path}</span>.</p>
+            <p style="margin-bottom:14px">This usually means the site was created but a later edit or service restart left the file missing. Click below to re-render from the template — nothing else is touched.</p>
+            <button class="btn btn-primary" onclick={generateVhost} disabled={busy}>{busy ? 'Generating…' : 'Generate vhost now'}</button>
+          </div>
         {:else}
           <textarea class="input vhost-editor" rows="22" spellcheck="false"
                     bind:value={vhost.content} oninput={() => vhost.dirty = true}></textarea>
@@ -280,8 +359,8 @@
             <button class="btn btn-primary" onclick={saveVhost} disabled={!vhost.dirty || busy || !vhost.content.trim()}>Save &amp; reload</button>
             <button class="btn btn-ghost" onclick={revertVhost} disabled={busy}>Revert to auto-generated</button>
           </div>
-          {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
         {/if}
+        {#if notice}<div class="note" style="margin-top:12px"><div>{notice}</div></div>{/if}
       </div></div>
 
   {:else if active === 'databases'}
@@ -410,34 +489,57 @@
     </div>
 
   {:else if active === 'files'}
-    <div class="section fade"><div class="section-h"><div><h3>File Manager</h3><p class="mono">{site.root}{filePath ? '/' + filePath : ''}</p></div>
-      {#if filePath}<button class="btn btn-ghost" style="padding:7px 13px" onclick={upDir}>↑ Up</button>{/if}</div>
+    <div class="section fade" role="region" aria-label="File manager"
+         ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}
+         class:drop-active={dragOver}>
+      <div class="section-h"><div><h3>File Manager</h3><p class="mono">{site.root}{filePath ? '/' + filePath : ''}</p></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          {#if filePath}<button class="btn btn-ghost" style="padding:7px 14px" onclick={upDir}>↑ Up</button>{/if}
+          <button class="btn btn-primary" style="padding:7px 14px" onclick={() => fileInput.click()} disabled={uploadBusy}>
+            {uploadBusy ? 'Uploading…' : 'Upload'}
+          </button>
+          <input type="file" multiple bind:this={fileInput}
+                 onchange={(e) => { uploadFiles(e.target.files); e.target.value = '' }}
+                 style="display:none">
+        </div>
+      </div>
+
+      {#if dragOver}
+        <div class="drop-overlay">Drop files to upload to <span class="mono">{filePath || '/'}</span></div>
+      {/if}
+
       <div class="section-b" style="padding:0">
         {#if files.length === 0}
           <div class="empty">
-            This directory is empty. Upload via SFTP as <span class="mono">{site.user}</span>
-            (host: <span class="mono">{site.domain}</span>, port 22) or drop a file into
-            <span class="mono">{site.root}{filePath ? '/' + filePath : ''}</span>.
+            This directory is empty. <b>Drop files here</b> or click <b>Upload</b> above.
+            For larger transfers, use SFTP as <span class="mono">{site.user}</span> on port 22.
           </div>
         {:else}
           {#each files as f}
-            <div class="kv" style="padding:12px 18px">
+            <div class="file-row-grid">
               {#if f.dir}
                 <button type="button" class="file-row k" onclick={() => openDir(f.name)}>
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
                   {f.name}
                 </button>
               {:else}
-                <span class="k file-row">
+                <button type="button" class="file-row k" onclick={() => downloadFile(f.name)} title="Download">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
-                </span>
+                </button>
               {/if}
-              <span class="v" style="color:var(--txt-3)">{f.mode} · {fmtSize(f.size)}</span>
+              <span class="file-meta">{f.mode} · {fmtSize(f.size)}</span>
+              <button type="button" class="file-del" onclick={() => deleteFile(f.name)} aria-label="Delete {f.name}" title="Delete">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+              </button>
             </div>
           {/each}
         {/if}
       </div>
+
+      {#if uploadMsg}
+        <div class="note" style="margin:14px 18px"><div>{uploadMsg}</div></div>
+      {/if}
     </div>
 
   {:else if active === 'cron'}

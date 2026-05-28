@@ -385,11 +385,24 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .kv .v{font-family:var(--fs-mono);font-size:13px;color:var(--txt)}
 /* file-manager directory rows — buttons that mimic the .kv .k text style but
    reset every UA button default and add a click affordance. */
-.file-row{font:inherit;color:var(--txt);font-size:13px;text-align:left;display:inline-flex;align-items:center;gap:9px;cursor:pointer;background:none;border:none;padding:0}
+.file-row{font:inherit;color:var(--txt);font-size:13px;text-align:left;display:inline-flex;align-items:center;gap:9px;cursor:pointer;background:none;border:none;padding:0;min-width:0;flex:1}
 .file-row:hover{color:var(--aura-strong)}
 .file-ic{width:18px;height:18px;flex:none;color:var(--txt-2)}
 .file-row:hover .file-ic,.file-row.k:not(button) .file-ic{color:inherit}
 button.file-row:hover .file-ic{color:var(--aura-strong)}
+/* File-manager row layout: filename / meta / delete button on one line. */
+.file-row-grid{display:flex;align-items:center;gap:14px;padding:11px 18px;border-bottom:1px solid var(--line);transition:background-color .1s}
+.file-row-grid:last-child{border-bottom:none}
+.file-row-grid:hover{background:var(--surface-1)}
+.file-meta{font-family:var(--fs-mono);font-size:11.5px;color:var(--txt-3);flex:none}
+.file-del{flex:none;width:30px;height:30px;display:grid;place-items:center;color:var(--txt-3);border-radius:8px;transition:.1s}
+.file-del:hover{color:var(--down);background:var(--down-soft)}
+.file-del svg{width:15px;height:15px}
+/* Drag-and-drop overlay on the file manager section — softly highlights the
+   container while files hover, with a clear instruction. */
+.section.drop-active{border:1.5px dashed var(--aura);background:var(--aura-glow)}
+.drop-overlay{position:absolute;inset:0;pointer-events:none;background:color-mix(in srgb, var(--aura-glow) 50%, var(--surface-0));display:grid;place-items:center;font-weight:600;color:var(--aura-strong);border-radius:inherit;z-index:1}
+.section{position:relative}
 /* iOS-style toggle — larger pill, spring-y motion, soft knob shadow.
    On-state inset shadow gives a subtle "depth" feel, like Settings.app.
    Always rendered as a <button role="switch"> so it's keyboard-focusable. */

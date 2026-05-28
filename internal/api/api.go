@@ -96,6 +96,9 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	// per-site features
 	mux.Handle("GET /api/sites/{domain}/logs", srv.protect(srv.siteLogs))
 	mux.Handle("GET /api/sites/{domain}/files", srv.requirePerm("files", "read", srv.siteFiles))
+	mux.Handle("POST /api/sites/{domain}/files", srv.requirePerm("files", "create", srv.uploadFiles))
+	mux.Handle("DELETE /api/sites/{domain}/files", srv.requirePerm("files", "delete", srv.deleteFile))
+	mux.Handle("GET /api/sites/{domain}/files/download", srv.requirePerm("files", "read", srv.downloadFile))
 	mux.Handle("GET /api/sites/{domain}/cron", srv.requirePerm("cron", "read", srv.listCron))
 	mux.Handle("POST /api/sites/{domain}/cron", srv.requirePerm("cron", "create", srv.addCron))
 	mux.Handle("DELETE /api/sites/{domain}/cron/{id}", srv.requirePerm("cron", "delete", srv.deleteCron))
