@@ -157,6 +157,16 @@ func (m *Manager) RemovePanelProxy(ctx context.Context) error {
 }
 
 // Reload validates the config, then asks Caddy to reload it gracefully.
+//
+// Two-step strategy:
+//  1. Prefer `systemctl reload caddy` — goes through journald + honours the
+//     unit's restart policy.
+//  2. Fall back to `caddy reload --config … --force` (talks to Caddy's local
+//     admin endpoint directly). Pre-v0.1.17 hosts shipped a Caddy unit
+//     without ExecReload= and systemctl reload returns exit 3 ("Job type
+//     reload is not applicable") — without this fallback those hosts would
+//     load /etc/caddy/sites/00-panel.caddy on disk but Caddy would never
+//     re-read it, leaving :80/:443 unbound and producing CF 521s.
 func (m *Manager) Reload(ctx context.Context) error {
 	if !m.R.DryRun {
 		if _, err := exec.LookPath("caddy"); err != nil {
@@ -166,6 +176,9 @@ func (m *Manager) Reload(ctx context.Context) error {
 	if _, err := m.R.Run(ctx, "caddy", "validate", "--config", "/etc/caddy/Caddyfile"); err != nil {
 		return fmt.Errorf("caddy config invalid: %w", err)
 	}
-	_, err := m.R.Run(ctx, "systemctl", "reload", "caddy")
+	if _, err := m.R.Run(ctx, "systemctl", "reload", "caddy"); err == nil {
+		return nil
+	}
+	_, err := m.R.Run(ctx, "caddy", "reload", "--config", "/etc/caddy/Caddyfile", "--force")
 	return err
 }

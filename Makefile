@@ -1,5 +1,5 @@
 # auraCP build. Pure-Go (no cgo) → trivial cross-compilation for both arches.
-VERSION ?= 0.1.16
+VERSION ?= 0.1.17
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
 

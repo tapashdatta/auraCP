@@ -30,7 +30,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.16"
+AURACP_VERSION="0.1.17"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -536,7 +536,10 @@ install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
   # be writable by the caddy service user or you get "permission denied" spam.
   run "chown -R caddy:caddy /var/lib/caddy"
   run "[ -f /etc/caddy/Caddyfile ] || printf 'import sites/*\\n' > /etc/caddy/Caddyfile"
-  install_unit caddy "Caddy web server" "/usr/bin/caddy run --config /etc/caddy/Caddyfile" caddy
+  install_unit caddy "Caddy web server" \
+    "/usr/bin/caddy run --config /etc/caddy/Caddyfile" \
+    caddy \
+    "/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force"
   ok "Caddy ready."
 }
 
@@ -729,31 +732,24 @@ install_auracpd() { # required — the control plane
   ok "auracpd installed and started on :${PANEL_PORT}."
 }
 
-# install_unit NAME DESC EXECSTART USER
+# install_unit NAME DESC EXECSTART USER [EXECRELOAD]
+# Optional ExecReload lets `systemctl reload <name>` succeed — required for
+# Caddy so auracpd can apply a new panel domain / site config without
+# restarting the whole web server (which would drop in-flight connections).
 install_unit() {
-  local name="$1" desc="$2" exec="$3" user="$4"
+  local name="$1" desc="$2" exec="$3" user="$4" reload="${5:-}"
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "${C_DIM}[dry-run]${C_RESET} write /etc/systemd/system/${name}.service (User=${user})"
     printf '%s\n' "${C_DIM}[dry-run]${C_RESET} systemctl enable --now ${name}"
     return
   fi
-  cat > "/etc/systemd/system/${name}.service" <<EOF
-[Unit]
-Description=${desc}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${user}
-ExecStart=${exec}
-Restart=always
-RestartSec=3
-LimitNOFILE=1048576
-
-[Install]
-WantedBy=multi-user.target
-EOF
+  {
+    printf '[Unit]\nDescription=%s\nAfter=network-online.target\nWants=network-online.target\n\n' "$desc"
+    printf '[Service]\nType=simple\nUser=%s\nExecStart=%s\n' "$user" "$exec"
+    [ -n "$reload" ] && printf 'ExecReload=%s\n' "$reload"
+    printf 'Restart=always\nRestartSec=3\nLimitNOFILE=1048576\n\n'
+    printf '[Install]\nWantedBy=multi-user.target\n'
+  } > "/etc/systemd/system/${name}.service"
   systemctl daemon-reload
   systemctl enable --now "${name}"
 }
