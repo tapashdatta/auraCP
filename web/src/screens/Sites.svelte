@@ -244,7 +244,10 @@
   /* v0.2.29: below 720 px (small tablet portrait + phones) hide Recent
      Activity entirely — operators on a phone are dipping in to check sites,
      not scanning the audit log. Sites Hosted + Server Snapshot stay; they're
-     the only two cards that earn the screen space at small widths. */
+     the only two cards that earn the screen space at small widths.
+     v0.2.30: keep them side-by-side all the way down to phone widths instead
+     of stacking; tightened padding + hero-num at < 480 px keeps the pair
+     readable at 320 px viewports. */
   @media (max-width:720px){
     .hero-grid{grid-template-columns:1fr 1fr}
     .hero-card.hero-card-recent{display:none}
@@ -252,8 +255,14 @@
   @media (max-width:480px){
     .hero{flex-direction:column;align-items:flex-start;gap:14px}
     .hero h1{font-size:26px}
-    :global(.hero-num){font-size:64px !important}
-    .hero-grid{grid-template-columns:1fr}
-    .hero-card-metric{grid-column:auto}
+    .hero-grid{gap:10px}
+    .hero-card{padding:12px 14px;gap:8px}
+    :global(.hero-num){font-size:32px !important}
+    :global(.hero-num small){display:none}
+    .mix-row{grid-template-columns:60px 1fr 22px;gap:7px}
+    .mix-type{font-size:10.5px}
+    .snap-row{grid-template-columns:60px 1fr;column-gap:6px}
+    .snap-k{font-size:11.5px}
+    .snap-v{font-size:12.5px}
   }
 </style>
