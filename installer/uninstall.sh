@@ -82,6 +82,43 @@ fi
 
 export DEBIAN_FRONTEND=noninteractive
 
+# ── 0. apt-source preflight ──────────────────────────────────────────────────
+# Strip any third-party apt source that earlier auraCP versions might have
+# installed BEFORE we start running apt-get (purge, update). This is content-
+# based, not filename-based, so it catches deb822 .sources files, any-named
+# .list files, and files in /etc/apt/sources.list itself — exactly the cases
+# where filename-only cleanups in older uninstallers silently missed leftovers.
+msg "Sweeping apt for third-party sources auraCP-versions installed…"
+sweep_pat='deb\.nodesource\.com|mirror\.mariadb\.org|apt\.postgresql\.org|download\.docker\.com|pkg\.dunglas\.dev|static-php|frankenphp|dl\.typesense\.org'
+for src in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+  [ -e "$src" ] || continue
+  if grep -qE "$sweep_pat" "$src" 2>/dev/null; then
+    printf '  %s\n' "removing $src"
+    run "rm -f '$src'"
+  fi
+done
+# Strip matching lines from /etc/apt/sources.list (rare, but possible).
+if [ -e /etc/apt/sources.list ] && grep -qE "$sweep_pat" /etc/apt/sources.list 2>/dev/null; then
+  printf '  %s\n' "scrubbing matching lines from /etc/apt/sources.list"
+  run "sed -i.bak -E '/${sweep_pat}/d' /etc/apt/sources.list"
+fi
+# Orphaned keyrings (safe glob — these names are all auraCP-specific).
+for kr in /etc/apt/keyrings/nodesource.gpg \
+          /usr/share/keyrings/nodesource.gpg \
+          /etc/apt/keyrings/nodesource-keyring.gpg \
+          /etc/apt/keyrings/static-php*.gpg \
+          /usr/share/keyrings/static-php*.gpg \
+          /etc/apt/keyrings/frankenphp*.gpg \
+          /usr/share/keyrings/frankenphp*.gpg \
+          /etc/apt/keyrings/pkg-dunglas*.gpg \
+          /usr/share/keyrings/pkg-dunglas*.gpg \
+          /usr/share/keyrings/mariadb.asc \
+          /usr/share/keyrings/pgdg.gpg \
+          /etc/apt/keyrings/docker.gpg \
+          /etc/apt/keyrings/docker-archive-keyring.gpg; do
+  [ -e "$kr" ] && run "rm -f '$kr'"
+done
+
 # ── 1. panel + per-site backends ────────────────────────────────────────────
 msg "Removing per-site backend services…"
 for f in /etc/systemd/system/auracp-site-*.service; do
@@ -215,4 +252,4 @@ run "apt-get clean"
 echo
 ok "auraCP and its packages removed. The host is back to its baseline."
 [ "$DRY" -eq 1 ] && echo "${D}(dry-run — nothing was actually changed)${Z}"
-echo "Reinstall any time with: sudo ./installer/install.sh"
+echo "Reinstall any time with: sudo auracp-install  (or download a fresh .deb from GitHub Releases)"
