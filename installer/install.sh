@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.52"
+AURACP_VERSION="0.2.53"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -852,8 +852,13 @@ install_wp_cli() {
 # version + sha256 so a compromised packages.adminer.org couldn't substitute
 # code on us. Wrapper PHP + plugins live alongside; nginx panel vhost serves
 # /_adminer/ via a dedicated PHP-FPM pool (default PHP version).
-ADMINER_VERSION="4.8.1"
-ADMINER_SHA256="2fd7e6d8f987b243ab1839249551f62adce19704c47d3d0c8dd9e57ea5b9c6b3"
+# v0.2.53: bumped from 4.8.1 → 5.4.2 to match the new theme CSS
+# (packaging/adminer.css), which targets Adminer 5.x DOM. The 4.8.1
+# DOM was different enough that the theme rendered ~nothing — operators
+# reported "Adminer CSS didn't work" until this version match.
+# SHA is real (unlike wp-cli's pre-v0.2.50 placeholder).
+ADMINER_VERSION="5.4.2"
+ADMINER_SHA256="5b761efe7049bf586119256324fd417b49e5bb9243b40d9734fe86655e4402fd"
 install_adminer() {
   local default_php="$1"
   [ -z "$default_php" ] && return 0

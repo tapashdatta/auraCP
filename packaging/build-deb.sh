@@ -134,6 +134,22 @@ if [ -d /run/systemd/system ]; then
     fi
     # Stale subclass file from < v0.2.31 — current wrapper doesn't use it.
     rm -f /opt/auracp/adminer/adminer-plugins.php
+    # v0.2.53: auto-upgrade Adminer from 4.x → 5.4.2. The new theme CSS
+    # targets the 5.x DOM; 4.8.1 + 5.x CSS = ugly half-styled UI.
+    # Self-heal on panel-pill upgrade so operators don't have to re-run
+    # auracp-install. Best-effort: SHA verify on download; if any step
+    # fails, leave the existing adminer.php in place.
+    if [ -f /opt/auracp/adminer/adminer.php ] && \
+       ! grep -q "VERSION = '5\." /opt/auracp/adminer/adminer.php 2>/dev/null; then
+      tmp_admin=$(mktemp /tmp/adminer.XXXXXX.php)
+      if curl -fsSL "https://github.com/vrana/adminer/releases/download/v5.4.2/adminer-5.4.2.php" -o "$tmp_admin" 2>/dev/null; then
+        got=$(sha256sum "$tmp_admin" | cut -d' ' -f1)
+        if [ "$got" = "5b761efe7049bf586119256324fd417b49e5bb9243b40d9734fe86655e4402fd" ]; then
+          install -m 0644 "$tmp_admin" /opt/auracp/adminer/adminer.php
+        fi
+      fi
+      rm -f "$tmp_admin"
+    fi
     # Reload any installed PHP-FPM versions so an op-code cache (if enabled)
     # picks up the new wrapper. Safe to ignore failures — opcache will
     # re-validate on next access by mtime anyway.
