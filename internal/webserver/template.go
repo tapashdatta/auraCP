@@ -150,10 +150,21 @@ server {
 `
 
 const panelTemplate = `# auraCP control panel — fronts auracpd's :8443 self-signed TLS.
+#
+# v0.2.22: upload pipeline directives explicit at the server level so big
+# multipart uploads through the file manager don't trip nginx's defaults
+# (client_max_body_size 1m, request buffering ON which would force nginx
+# to spool the whole upload to disk before passing it to auracpd — killing
+# our live progress bar and breaking large files entirely).
 server {
     listen 80;
     listen [::]:80;
     server_name {{.Domain}};
+
+    # Allow up to 2 GiB uploads. Adjust at runtime via /etc/nginx/conf.d/.
+    client_max_body_size 2g;
+    client_body_timeout 600s;
+    client_body_buffer_size 256k;
 
     location /.well-known/acme-challenge/ {
         alias {{.ACMEDir}}/;
@@ -168,6 +179,10 @@ server {
         proxy_ssl_verify off;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
     }
     {{- end }}
 }
@@ -185,6 +200,11 @@ server {
 
     add_header Strict-Transport-Security "max-age=31536000" always;
 
+    # Mirror the :80 upload caps — applies to whichever scheme the client used.
+    client_max_body_size 2g;
+    client_body_timeout 600s;
+    client_body_buffer_size 256k;
+
     location / {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;
@@ -192,8 +212,14 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 600s;
+        # request_buffering off → nginx pipes the body straight to auracpd
+        # as it arrives. Required for our upload progress bar to be honest
+        # (without it, the bar finishes when nginx has the bytes, then the
+        # browser waits while nginx re-uploads to auracpd — looks like a hang).
+        proxy_request_buffering off;
         proxy_buffering off;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
     }
 }
 {{- end }}
