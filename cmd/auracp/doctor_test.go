@@ -363,6 +363,67 @@ func TestSslCellRendering(t *testing.T) {
 	}
 }
 
+// panelVhostFixture mimics 00-panel.conf as written by ApplyPanelProxy.
+// Important: the panel vhost has NO `root` directive (it's a proxy) and
+// NO fastcgi_pass (no FPM pool). scanPanelVhost should still extract
+// the domain from `server_name` cleanly.
+const panelVhostFixture = `
+server {
+    listen 80;
+    server_name cp.garuda.sh;
+    client_max_body_size 2g;
+    location /.well-known/acme-challenge/ {
+        alias /var/lib/auracp/acme/;
+    }
+    location / {
+        proxy_pass https://127.0.0.1:8443;
+        proxy_ssl_verify off;
+        proxy_set_header Host $host;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name cp.garuda.sh;
+    ssl_certificate /etc/auracp/ssl/cp.garuda.sh.crt;
+    ssl_certificate_key /etc/auracp/ssl/cp.garuda.sh.key;
+}
+`
+
+// TestPanelSubdomainExtraction proves doctor recognizes the panel
+// vhost as a special case and extracts the subdomain correctly. This
+// is the v0.2.49 hardening that catches "panel cert silently expires
+// → operator locked out" scenarios.
+func TestPanelSubdomainExtraction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "00-panel.conf")
+	if err := os.WriteFile(path, []byte(panelVhostFixture), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := scanPanelVhost(path)
+	if err != nil {
+		t.Fatalf("scanPanelVhost: %v", err)
+	}
+	if s.domain != "cp.garuda.sh" {
+		t.Errorf("panel domain: got %q, want %q", s.domain, "cp.garuda.sh")
+	}
+	if s.siteType != "panel" {
+		t.Errorf("siteType: got %q, want %q", s.siteType, "panel")
+	}
+	// The panel vhost deliberately has no docroot / FPM socket. doctor
+	// must NOT flag those as problems — checkSite has a special branch.
+	checkSite(s)
+	for _, p := range s.problems {
+		if strings.Contains(p, "vhost has no `root") {
+			t.Errorf("panel vhost was flagged for missing root; problem: %q", p)
+		}
+		if strings.Contains(p, "no PHP-FPM pool") {
+			t.Errorf("panel vhost was flagged for missing FPM pool; problem: %q", p)
+		}
+	}
+}
+
 func TestLooksLikePhpVer(t *testing.T) {
 	cases := []struct {
 		in   string

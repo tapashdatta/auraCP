@@ -79,12 +79,13 @@ type site struct {
 
 // regexes — compile once at package load, reuse for every scan.
 var (
-	reNginxRoot     = regexp.MustCompile(`(?m)^\s*root\s+(/[^;]+);`)
-	reNginxFCGI     = regexp.MustCompile(`(?m)^\s*fastcgi_pass\s+unix:([^;]+);`)
-	reNginxProxy    = regexp.MustCompile(`(?m)^\s*proxy_pass\s+`)
-	rePoolUser      = regexp.MustCompile(`(?m)^\s*user\s*=\s*(\S+)\s*$`)
-	rePoolListen    = regexp.MustCompile(`(?m)^\s*listen\s*=\s*(\S+)\s*$`)
-	reHomeUserPath  = regexp.MustCompile(`^/home/([^/]+)/`)
+	reNginxRoot      = regexp.MustCompile(`(?m)^\s*root\s+(/[^;]+);`)
+	reNginxFCGI      = regexp.MustCompile(`(?m)^\s*fastcgi_pass\s+unix:([^;]+);`)
+	reNginxProxy     = regexp.MustCompile(`(?m)^\s*proxy_pass\s+`)
+	reNginxSrvName   = regexp.MustCompile(`(?m)^\s*server_name\s+([^;]+);`)
+	rePoolUser       = regexp.MustCompile(`(?m)^\s*user\s*=\s*(\S+)\s*$`)
+	rePoolListen     = regexp.MustCompile(`(?m)^\s*listen\s*=\s*(\S+)\s*$`)
+	reHomeUserPath   = regexp.MustCompile(`^/home/([^/]+)/`)
 )
 
 func runDoctor() error {
@@ -111,8 +112,30 @@ func runDoctor() error {
 		if !strings.HasSuffix(name, ".conf") {
 			continue
 		}
-		// Skip auracp's own control-plane vhosts (00-default.conf,
-		// 00-panel.conf, anything starting with `00-` by convention).
+		// v0.2.49: the panel vhost (00-panel.conf) gets a SPECIAL parse —
+		// it has no FPM pool, no docroot for a Linux user, but it DOES
+		// have a cert that auracpd renews. Operator locked out of the
+		// panel due to silent cert expiry is the worst class of failure
+		// here, so doctor explicitly checks it.
+		//
+		// 00-default.conf is the catch-all reject; nothing to audit
+		// there (no cert, no proxy target).
+		if name == "00-default.conf" {
+			continue
+		}
+		if name == "00-panel.conf" {
+			s, err := scanPanelVhost(filepath.Join(nginxSitesEnabled, name))
+			if err != nil {
+				s = &site{
+					domain:    "(panel)",
+					vhostPath: filepath.Join(nginxSitesEnabled, name),
+					problems:  []string{"panel vhost scan failed: " + err.Error()},
+				}
+			}
+			sites = append(sites, s)
+			continue
+		}
+		// Any other 00-* file is auraCP's reserved namespace — skip.
 		if strings.HasPrefix(name, "00-") {
 			continue
 		}
@@ -141,6 +164,29 @@ func runDoctor() error {
 		return renderReportJSON(sites)
 	}
 	return renderReport(sites, *verbose)
+}
+
+// scanPanelVhost reads 00-panel.conf. The panel vhost has no FPM pool,
+// no docroot, no Linux site user — it's an nginx → loopback proxy to
+// auracpd's :8443 self-signed TLS. The audit is narrower:
+//   - extract the panel domain from `server_name`
+//   - run the SSL expiry check (operator-locking failure mode)
+// Everything else (vhost↔pool drift, docroot ownership) is irrelevant.
+func scanPanelVhost(path string) (*site, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s := &site{
+		vhostPath: path,
+		siteType:  "panel",
+		domain:    "(panel — no server_name)",
+	}
+	if m := reNginxSrvName.FindSubmatch(body); m != nil {
+		// server_name can be space-separated. Panel only ever uses one.
+		s.domain = strings.Fields(string(m[1]))[0]
+	}
+	return s, nil
 }
 
 // scanOne reads a vhost file and extracts the fields doctor cares about.
@@ -186,6 +232,18 @@ func scanOne(path string) (*site, error) {
 // For non-PHP sites: lighter sanity (docroot exists, owned by vhost
 // user) — different code path because they don't have an FPM pool.
 func checkSite(s *site) {
+	// Panel vhost: cert-only audit. No FPM pool, no docroot/user
+	// invariant — the panel is a proxy, not a user-owned site.
+	// Skip the vhost-user-missing problem because the panel template
+	// deliberately doesn't set `root`.
+	if s.siteType == "panel" {
+		checkCert(s)
+		if len(s.problems) == 0 {
+			s.ok = true
+		}
+		return
+	}
+
 	if s.vhostUser == "" {
 		s.problems = append(s.problems, "vhost has no `root /home/<user>/...` line — can't extract user")
 	}
