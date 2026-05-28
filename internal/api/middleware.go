@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +16,8 @@ const csrfCookie = "auracp_csrf"
 //   - security headers on every response
 //   - a CSRF double-submit token (cookie + matching X-CSRF-Token header on writes)
 //   - login rate-limiting per client IP
+//   - v0.2.20: per-request access log (method, path, status, duration)
+//     so "what happened to my upload?" is answerable from `journalctl`
 func Secure(next http.Handler) http.Handler {
 	rl := newRateLimiter(10, 5*time.Minute) // 10 login attempts / 5 min / IP
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,15 +25,49 @@ func Secure(next http.Handler) http.Handler {
 		ensureCSRFCookie(w, r)
 
 		if isLoginAttempt(r) && !rl.allow(clientIP(r)) {
+			logAPI(r, http.StatusTooManyRequests, 0)
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, slow down"})
 			return
 		}
 		if isUnsafe(r) && strings.HasPrefix(r.URL.Path, "/api/") && !csrfOK(r) {
+			// Explicit reason in the log so an operator can tell a CSRF reject
+			// (our side) apart from a CDN reject (no log line at all).
+			log.Printf("[api] CSRF reject %s %s ip=%s", r.Method, r.URL.Path, clientIP(r))
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "invalid CSRF token"})
+			return
+		}
+		// Wrap the writer to capture the status code; log every /api/* request.
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			start := time.Now()
+			rw := &statusRecorder{ResponseWriter: w, status: 200}
+			next.ServeHTTP(rw, r)
+			logAPI(r, rw.status, time.Since(start))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// statusRecorder remembers the HTTP status the handler chose so the access
+// log can include it. Minimal — no body buffering.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) { s.status = code; s.ResponseWriter.WriteHeader(code) }
+
+func logAPI(r *http.Request, status int, dur time.Duration) {
+	// Compact format: method path → status (Nms). /api/health is the watchdog's
+	// hot loop — skip those so the journal isn't drowned every 60s.
+	if r.URL.Path == "/api/health" {
+		return
+	}
+	if dur == 0 {
+		log.Printf("[api] %s %s -> %d", r.Method, r.URL.Path, status)
+	} else {
+		log.Printf("[api] %s %s -> %d (%dms)", r.Method, r.URL.Path, status, dur.Milliseconds())
+	}
 }
 
 func securityHeaders(w http.ResponseWriter) {
