@@ -26,7 +26,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.2"
+AURACP_VERSION="0.1.3"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -120,13 +120,27 @@ preflight() {
   esac
 
   if [ "$DRY_RUN" -eq 0 ] && command -v ss >/dev/null 2>&1; then
-    for p in 80 443 "$PANEL_PORT"; do
-      if ss -ltn "( sport = :$p )" 2>/dev/null | grep -q LISTEN; then
-        die "Port $p is already in use. Free it before installing."
-      fi
-    done
+    check_port_or_own 80    caddy
+    check_port_or_own 443   caddy
+    check_port_or_own "$PANEL_PORT" auracpd
   fi
   ok "Preflight passed (arch: ${CADDY_ARCH}, panel port: ${PANEL_PORT})."
+}
+
+# check_port_or_own PORT EXPECTED_PROCESS — dies if PORT is held by anything
+# other than the named auraCP service. This lets you re-run the installer on a
+# host where the panel/Caddy is already up (e.g. after `dpkg -i auracp.deb`).
+check_port_or_own() {
+  local port="$1" expected="$2"
+  ss -ltn "( sport = :$port )" 2>/dev/null | grep -q LISTEN || return 0
+  # something is listening — find out what
+  local who
+  who=$(ss -ltnpH "( sport = :$port )" 2>/dev/null | sed -n 's/.*users:((\"\([^\"]*\)\".*/\1/p' | head -1)
+  if [ -z "$who" ] || [ "$who" = "$expected" ]; then
+    ok "Port $port already held by ${who:-${expected}} — leaving it alone."
+    return 0
+  fi
+  die "Port $port is in use by '${who}' (expected ${expected} or free). Free it before installing."
 }
 
 # ──────────────────────────────────────────────────────────────────────────

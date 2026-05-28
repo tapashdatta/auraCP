@@ -78,6 +78,9 @@ run "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null"
 
 msg "Removing auracpd panel…"
 run "systemctl disable --now auracpd"
+# Belt-and-suspenders: kill any leftover process and ensure :8443 is free.
+run "pkill -9 -f /opt/auracp/bin/auracpd 2>/dev/null"
+run "pkill -9 -x auracpd 2>/dev/null"
 # Purge the panel package — handles any installed version of 'auracp'.
 run "apt-get purge -y auracp"
 # Belt-and-suspenders for any leftover auracp-prefixed packages.
@@ -94,6 +97,7 @@ ok "Panel removed."
 # ── 2. web server + PHP + node ──────────────────────────────────────────────
 msg "Removing Caddy…"
 run "systemctl disable --now caddy"
+run "pkill -9 -x caddy 2>/dev/null"          # ensure :80 and :443 are free
 run "rm -f /etc/systemd/system/caddy.service"
 run "rm -f /usr/bin/caddy"
 run "rm -rf /etc/caddy /var/lib/caddy"
