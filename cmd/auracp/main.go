@@ -20,11 +20,24 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version":
-		fmt.Println("auracp 0.1.0")
+		fmt.Println("auracp 0.2.48")
 	case "sites":
 		if err := listSites(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)
 			os.Exit(1)
+		}
+	case "doctor":
+		// v0.2.48: fleet drift check. Walks /etc/nginx/sites-enabled +
+		// /etc/php/*/fpm/pool.d, asserts the vhost↔pool single-source-
+		// of-truth property per site. Exit 0 on green, 1 on drift, 2
+		// on hard error (missing /etc/nginx — panel not installed).
+		err := runDoctor()
+		if err == errDoctorDrift {
+			os.Exit(1)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(2)
 		}
 	default:
 		usage()
@@ -37,7 +50,8 @@ func usage() {
 
 usage:
   auracp version        print version
-  auracp sites          list sites (via the local daemon API)`)
+  auracp sites          list sites (via the local daemon API)
+  auracp doctor [-v]    audit every site for vhost↔pool drift (no daemon needed)`)
 }
 
 func listSites() error {
