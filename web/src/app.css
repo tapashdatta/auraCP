@@ -64,17 +64,18 @@
 }
 
 :root[data-theme="dark"] {
-  /* v0.2.21: dark = mid-gray, not midnight. The previous palette read as
-     "code-editor black" which felt heavy in a control-panel context. These
-     values sit two stops lighter, closer to Linear's dark surfaces.
-     AA contrast verified against --txt at --surface-0. */
-  --ink:#26292f;
-  --surface-0:#2c2f36;
-  --surface-1:#32363d;
-  --surface-2:#3a3f47;
-  --surface-3:#444a54;
-  --line:rgba(255,255,255,.07);
-  --line-2:rgba(255,255,255,.14);
+  /* v0.2.34: true-dark body so elevated cards read as elevated. Surface
+     ladder rebalanced — was mid-gray on mid-gray; now near-black body
+     with cards lifted clearly above it. Each surface stop is ~5 lightness
+     points above the last, so hover/active states stay legible without
+     blowing out. AA verified against --txt on every surface. */
+  --ink:#0a0b0f;
+  --surface-0:#181b21;
+  --surface-1:#23262d;
+  --surface-2:#2d313a;
+  --surface-3:#383d47;
+  --line:rgba(255,255,255,.06);
+  --line-2:rgba(255,255,255,.13);
   --txt:#eef0f4;
   --txt-2:#a8aebb;
   --txt-3:#7a8190;
@@ -530,6 +531,16 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 .chmod-preview > div{display:flex;flex-direction:column;align-items:center;gap:4px}
 .chmod-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600}
 .chmod-preview .mono{font-size:16px;color:var(--txt);font-weight:600}
+
+/* v0.2.34: 'Auto-install WordPress' toggle in CreateForm — checkbox + body
+   text inside a tinted card so it reads as the headline option, not just
+   another form field. */
+.wp-toggle{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border:1.5px solid var(--line);border-radius:10px;background:var(--surface-1);cursor:pointer;transition:.1s}
+.wp-toggle:hover{border-color:var(--line-2);background:var(--surface-2)}
+.wp-toggle input[type=checkbox]{margin-top:3px;width:16px;height:16px;accent-color:var(--aura-strong);flex:none;cursor:pointer}
+.wp-toggle:has(input:checked){border-color:color-mix(in srgb, var(--aura-strong) 50%, var(--line));background:color-mix(in srgb, var(--aura-strong) 6%, var(--surface-1))}
+.wp-toggle b{display:block;font-size:13.5px;color:var(--txt);margin-bottom:3px;font-weight:600}
+.wp-toggle span{display:block;font-size:12.5px;color:var(--txt-2);line-height:1.5}
 
 /* v0.2.23: folder icon (filled, warm amber) — clearly different at a glance
    from the outlined sheet-of-paper file icons next to it. */

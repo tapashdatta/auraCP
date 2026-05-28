@@ -1,6 +1,8 @@
 <script>
   import { go, openSite, ui } from '../lib/store.svelte.js'
   import { apiFetch } from '../lib/api.js'
+  import { alertDialog } from '../lib/dialog.svelte.js'
+  import { toastSuccess } from '../lib/toast.svelte.js'
 
   const META = {
     wordpress:    { title: 'New WordPress Site', sub: 'WordPress via wp-cli with database provisioning' },
@@ -21,6 +23,13 @@
     phpVersion: '', port: type === 'python' ? '8000' : '3000',
     startFile: 'app.js', module: 'main:app', upstream: 'http://127.0.0.1:8088',
     runner: 'systemd',  // 'systemd' | 'pm2'
+    // v0.2.34: WordPress one-click auto-install. wpInstall defaults ON for
+    // WordPress sites; the form expands to collect admin user/email/title.
+    wpInstall: type === 'wordpress',
+    wpTitle: '',
+    wpAdminUser: 'admin',
+    wpAdminPass: randPw(),
+    wpAdminEmail: '',
   })
   let phpVersions = $state([])  // populated from /api/instance/php-versions on mount
   let busy = $state(false)
@@ -66,6 +75,9 @@
     e.preventDefault()
     error = ''
     if (!m.domain || !m.user) { error = 'Domain and site user are required.'; return }
+    if (type === 'wordpress' && m.wpInstall) {
+      if (!m.wpAdminEmail) { error = 'Admin email is required for WordPress auto-install.'; return }
+    }
     busy = true
     const r = await apiFetch('/api/sites', {
       method: 'POST',
@@ -74,11 +86,37 @@
         phpVersion: m.phpVersion, port: Number(m.port),
         startFile: m.startFile, module: m.module, upstream: m.upstream,
         pm2: m.runner === 'pm2',
+        // WordPress-only; ignored by the backend for other types.
+        wpInstall: m.wpInstall, wpTitle: m.wpTitle,
+        wpAdminUser: m.wpAdminUser, wpAdminPass: m.wpAdminPass,
+        wpAdminEmail: m.wpAdminEmail,
       }),
     })
     const d = await r.json().catch(() => ({}))
     busy = false
     if (!r.ok) { error = d.error || 'Could not create site'; return }
+
+    // v0.2.34: if WordPress auto-installed, surface the admin credentials
+    // in a one-shot dialog BEFORE navigating to the site detail. The
+    // password is returned from the API exactly once and never stored
+    // cleartext; if the operator dismisses without copying, they have to
+    // wp user reset-password via SSH.
+    if (d.wpInstall) {
+      await alertDialog({
+        title: 'WordPress is installed and ready',
+        message:
+          `Save these now — the password is shown only once:\n\n` +
+          `Login URL:   ${d.wpInstall.loginUrl}\n` +
+          `Admin user:  ${d.wpInstall.adminUser}\n` +
+          `Admin pass:  ${d.wpInstall.adminPass}\n` +
+          `Admin email: ${d.wpInstall.adminEmail}\n\n` +
+          `Database (saved in the panel; password retrievable via Adminer):\n` +
+          `  Name: ${d.wpInstall.dbName}\n` +
+          `  User: ${d.wpInstall.dbUser}`,
+        confirmText: 'I saved the password',
+      })
+      toastSuccess(`${m.domain} is live — log in at /wp-admin/`)
+    }
     openSite(d)
   }
 </script>
@@ -112,6 +150,45 @@
             </select>
           {/if}
         </label></div>
+      {/if}
+
+      {#if type === 'wordpress'}
+        <!-- v0.2.34: WordPress one-click auto-install. Toggle defaults ON;
+             unchecking creates an empty site (operator wires WP themselves). -->
+        <div class="field">
+          <label class="wp-toggle">
+            <input type="checkbox" bind:checked={m.wpInstall}>
+            <div>
+              <b>Auto-install WordPress now</b>
+              <span>Provisions a MariaDB database + creates wp-config.php + runs the install with the admin you set below. The site is live on first request.</span>
+            </div>
+          </label>
+        </div>
+        {#if m.wpInstall}
+          <div class="field"><label>
+            <span class="label-text">Site Title</span>
+            <input class="input" bind:value={m.wpTitle} placeholder={m.domain || 'My WordPress Site'}>
+          </label></div>
+          <div class="two">
+            <div class="field"><label>
+              <span class="label-text">Admin Username</span>
+              <input class="input" bind:value={m.wpAdminUser} placeholder="admin">
+            </label></div>
+            <div class="field"><label>
+              <span class="label-text">Admin Email <span class="hint">required</span></span>
+              <input class="input" type="email" bind:value={m.wpAdminEmail} placeholder="you@example.com">
+            </label></div>
+          </div>
+          <div class="field"><label>
+            <span class="label-text">Admin Password <span class="hint">auto-generated · shown once after create</span></span>
+            <div class="input-row">
+              <input class="input" bind:value={m.wpAdminPass}>
+              <button type="button" class="gen" onclick={() => m.wpAdminPass = randPw()} title="Regenerate" aria-label="Regenerate admin password">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+              </button>
+            </div>
+          </label></div>
+        {/if}
       {/if}
       {#if type === 'nodejs'}
         <div class="two">

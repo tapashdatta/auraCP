@@ -27,6 +27,7 @@ import (
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/updater"
 	"github.com/auracp/auracp/internal/webserver"
+	"github.com/auracp/auracp/internal/wpinstall"
 )
 
 type Server struct {
@@ -250,23 +251,107 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		StartFile   string `json:"startFile"`
 		Module      string `json:"module"`
 		Upstream    string `json:"upstream"`
+		// v0.2.34: WordPress one-click auto-install
+		WPInstall    bool   `json:"wpInstall"`
+		WPTitle      string `json:"wpTitle"`
+		WPAdminUser  string `json:"wpAdminUser"`
+		WPAdminPass  string `json:"wpAdminPass"`
+		WPAdminEmail string `json:"wpAdminEmail"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	rec, err := s.sites.Create(r.Context(), site.Spec{
+
+	spec := site.Spec{
 		Type: in.Type, Domain: in.Domain, User: in.SiteUser, Password: in.Password,
 		PHPVer: in.PHPVersion, NodeVer: in.NodeVersion, UsePM2: in.PM2,
 		StartFile: in.StartFile, Module: in.Module,
 		Upstream: in.Upstream,
-	})
+	}
+
+	// v0.2.34: WordPress auto-install pre-flight. We provision the DB here
+	// (so its creds land in the store regardless of whether wp-cli succeeds
+	// later) and pass them into site.Create which runs the wp-cli steps.
+	if in.Type == "wordpress" && in.WPInstall {
+		if !wpinstall.Available() {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "wp-cli is not installed on this host. Re-run: sudo auracp-install --yes --php=yes",
+			})
+			return
+		}
+		// Auto-generate DB name/user. Same suffix is reused so the operator
+		// can guess one from the other when troubleshooting.
+		suffix, _ := auth.RandomToken()
+		if len(suffix) > 8 {
+			suffix = suffix[:8]
+		}
+		dbName := "wp_" + suffix
+		dbUser := dbName + "_u"
+		dbPass, perr := auth.RandomPassword()
+		if perr != nil {
+			writeErr(w, http.StatusInternalServerError, perr)
+			return
+		}
+		if err := s.dbs.Create(r.Context(), "mariadb", in.Domain, dbName, dbUser, dbPass); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "create WP database: " + err.Error() + ". MariaDB must be installed on this host.",
+			})
+			return
+		}
+		// Admin password: auto-generate if the operator didn't supply one.
+		// We return the password to the panel once on success so it can be
+		// shown in a modal and copied; nothing of it stays in cleartext.
+		if in.WPAdminPass == "" {
+			in.WPAdminPass, _ = auth.RandomPassword()
+		}
+		if in.WPAdminUser == "" {
+			in.WPAdminUser = "admin"
+		}
+		if in.WPAdminEmail == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "admin email is required for WordPress auto-install"})
+			return
+		}
+		if in.WPTitle == "" {
+			in.WPTitle = in.Domain
+		}
+		spec.WPInstall = true
+		spec.WPDBName = dbName
+		spec.WPDBUser = dbUser
+		spec.WPDBPass = dbPass
+		spec.WPTitle = in.WPTitle
+		spec.WPAdminUser = in.WPAdminUser
+		spec.WPAdminPass = in.WPAdminPass
+		spec.WPAdminEmail = in.WPAdminEmail
+	}
+
+	rec, err := s.sites.Create(r.Context(), spec)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.audit(r, "site.create", rec.Domain)
-	writeJSON(w, http.StatusCreated, rec.View())
+
+	// v0.2.34: include the WP install summary on success so the panel can
+	// surface the admin credentials in a one-shot modal. Nothing else
+	// returns the password from the API; it's not stored in cleartext.
+	resp := map[string]any{
+		"domain": rec.Domain, "user": rec.SiteUser, "type": rec.Type,
+		"app": rec.App, "root": rec.RootPath, "status": rec.Status,
+		"statusText": rec.StatusText,
+	}
+	if spec.WPInstall {
+		resp["wpInstall"] = map[string]any{
+			"adminUser":  spec.WPAdminUser,
+			"adminPass":  spec.WPAdminPass,
+			"adminEmail": spec.WPAdminEmail,
+			"loginUrl":   "https://" + spec.Domain + "/wp-admin/",
+			"dbName":     spec.WPDBName,
+			"dbUser":     spec.WPDBUser,
+			"dbPass":     spec.WPDBPass,
+		}
+	}
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {

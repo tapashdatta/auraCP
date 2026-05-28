@@ -22,6 +22,7 @@ import (
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/validate"
 	"github.com/auracp/auracp/internal/webserver"
+	"github.com/auracp/auracp/internal/wpinstall"
 )
 
 type Manager struct {
@@ -61,6 +62,32 @@ type Spec struct {
 	Upstream  string // reverseproxy (user-supplied URL)
 	NodeVer   string // nodejs: pin to this Node runtime ("" or "default" = managed default)
 	UsePM2    bool   // nodejs: run via pm2-runtime
+
+	// v0.2.34: WordPress one-click auto-install. When Type=wordpress and
+	// WPInstall=true, Create runs wp-cli end-to-end after the site backend
+	// + vhost are up. The DB itself is provisioned by the API handler
+	// before calling Create (so the handler can return useful errors per
+	// step); we just consume the DB creds + the admin info here.
+	WPInstall    bool
+	WPDBName     string
+	WPDBUser     string
+	WPDBPass     string
+	WPTitle      string
+	WPAdminUser  string
+	WPAdminPass  string
+	WPAdminEmail string
+}
+
+// WPResult is the post-install info the API echoes back to the panel once a
+// WordPress auto-install completes — DB creds the operator may want to
+// record, plus the admin password (returned once; never stored cleartext).
+type WPResult struct {
+	DBName     string
+	DBUser     string
+	DBPassword string
+	AdminUser  string
+	AdminPass  string
+	URL        string
 }
 
 func hasBackend(t string) bool {
@@ -183,6 +210,31 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 	}
 	if err := m.store.CreateSite(rec); err != nil {
 		return store.Site{}, err
+	}
+
+	// v0.2.34: WordPress one-click auto-install. Runs AFTER the site record
+	// is persisted so a wp-cli failure leaves a recoverable state — the
+	// docroot may be half-populated but the site exists in the UI, so the
+	// operator can either continue manually via SFTP or delete the site
+	// outright. The DB creds were created by the API handler before us.
+	if s.WPInstall && s.Type == "wordpress" {
+		url := "https://" + s.Domain
+		if err := wpinstall.Install(ctx, m.r, wpinstall.Spec{
+			Domain:     s.Domain,
+			SiteUser:   s.User,
+			DBHost:     "localhost",
+			DBName:     s.WPDBName,
+			DBUser:     s.WPDBUser,
+			DBPass:     s.WPDBPass,
+			URL:        url,
+			Title:      s.WPTitle,
+			AdminUser:  s.WPAdminUser,
+			AdminPass:  s.WPAdminPass,
+			AdminEmail: s.WPAdminEmail,
+		}); err != nil {
+			log.Printf("site %s: wp install: %v", s.Domain, err)
+			return rec, fmt.Errorf("wordpress auto-install failed: %w (site record kept; drop the site to retry)", err)
+		}
 	}
 
 	// 5) issue cert in the background — non-fatal: site keeps working on :80
