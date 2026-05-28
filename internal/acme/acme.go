@@ -371,12 +371,34 @@ func (m *Manager) ensureClient() error {
 	}
 
 	// Register (or load existing registration) — terms accepted programmatically.
-	if reg, ok := loadRegistration(regPath); ok {
+	//
+	// v0.2.43: self-heal when registration.json is missing/partial. lego v4 stores
+	// the account URI on registration.Resource; the JWS signer derives the `kid`
+	// header from that URI. A partial file (Body present, URI empty) makes every
+	// signed request fail with "No Key ID in JWS header :: malformed". So we
+	// validate URI presence, then:
+	//   1. ResolveAccountByKey — looks up an existing LE account by the public
+	//      key we already have. No new-account creation, no rate-limit hit. The
+	//      common case after an upgrade that wrote a partial registration.json.
+	//   2. If no account exists for this key (truly fresh install), Register()
+	//      creates one.
+	// Either way we re-write registration.json with the full Resource so the
+	// next start doesn't repeat the work.
+	if reg, ok := loadRegistration(regPath); ok && reg.URI != "" {
 		acct.Registration = reg
 	} else {
-		reg, err := cli.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
-		if err != nil {
-			return fmt.Errorf("ACME register: %w", err)
+		// Re-resolve before falling back to a fresh Register. lego will sign
+		// the resolve request with the account key and check whether LE knows
+		// about it; on hit it returns the existing Resource (with URI).
+		reg, rerr := cli.Registration.ResolveAccountByKey()
+		if rerr != nil || reg == nil || reg.URI == "" {
+			r2, err := cli.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})
+			if err != nil {
+				return fmt.Errorf("ACME register: %w", err)
+			}
+			reg = r2
+		} else {
+			log.Printf("acme: re-resolved existing LE account via key (registration.json was stale; restored)")
 		}
 		acct.Registration = reg
 		_ = saveRegistration(regPath, reg)
