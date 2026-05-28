@@ -417,6 +417,9 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .toggle.toggle-sm:active::after{width:20px}
 .toggle.toggle-sm.on:active::after{left:14px;width:20px}
 .code{font-family:var(--fs-mono);font-size:12.5px;line-height:1.7;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:16px 18px;color:var(--txt-2);overflow:auto;max-height:360px;white-space:pre-wrap}
+/* Vhost / file editor — same monospace, but full-width and resizable. */
+.vhost-editor{font-family:var(--fs-mono);font-size:12.5px;line-height:1.65;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-sm);padding:14px 16px;color:var(--txt);width:100%;resize:vertical;min-height:280px;outline:none;font-weight:400;tab-size:4}
+.vhost-editor:focus{border-color:var(--aura);box-shadow:0 0 0 3px var(--aura-glow)}
 .code .c{color:var(--txt-3)}
 .code .k{color:var(--aura-strong)}
 .code .s{color:var(--warn)}

@@ -43,15 +43,20 @@ type Spec struct {
 	Type     string // static|php|wordpress|nodejs|python|reverseproxy
 	Domain   string
 	User     string
+	Root     string // override doc-root (defaults to paths.DocRoot(User,Domain) when empty)
 	Upstream string // app types: 127.0.0.1:<port>; reverseproxy: full URL
 
 	PHPVer        string // php/wordpress only — picks which php-fpm socket to fastcgi_pass to
 	Cache         bool   // emit fastcgi_cache / proxy_cache directives
 	CacheTTL      string // e.g. "600s"
-	BasicAuthUser string // currently unused in the template; reserved
-	BasicAuthHash string // currently unused in the template; reserved
+	BasicAuthUser string // shown verbatim in the rendered htpasswd file
+	BasicAuthHash string // bcrypt hash; written to htpasswd next to the vhost
 	CloudflareTok string // hint to the SSL layer (DNS-01); not rendered into nginx
 	BlockBots     bool   // emit a User-Agent deny-list
+
+	// Override: when non-empty, Apply() writes this verbatim instead of the
+	// rendered template. Used by the in-panel vhost editor (PUT /vhost).
+	Override string
 
 	// Filled by Apply() from the certificates table. Empty until lego issues:
 	// the rendered vhost stays HTTP-only with an ACME challenge location so
@@ -81,12 +86,16 @@ func (m *Manager) Render(s Spec) (string, error) {
 		return "", err
 	}
 
+	docroot := s.Root
+	if docroot == "" {
+		docroot = paths.DocRoot(s.User, s.Domain)
+	}
 	d := vhostData{
 		Type:    s.Type,
 		Domain:  s.Domain,
 		User:    s.User,
 		SafeName: strings.NewReplacer(".", "_", "-", "_").Replace(s.Domain),
-		DocRoot: paths.DocRoot(s.User, s.Domain),
+		DocRoot: docroot,
 		LogDir:  paths.LogDir(s.User),
 		ACMEDir: paths.ACMEChallengeDir,
 		CertPath: s.CertPath,
@@ -137,10 +146,21 @@ func (m *Manager) Render(s Spec) (string, error) {
 // reloads nginx. Cert paths come from a callback so the renderer doesn't reach
 // into the store directly; if the site has no cert yet (still pending ACME),
 // CertPath/KeyPath stay empty and the vhost is HTTP-only.
+//
+// When Spec.Override is non-empty, that string is written verbatim instead of
+// the generated template — used by the in-panel vhost editor. The operator
+// owns whatever they wrote; we still pass it through nginx -t via Reload()
+// so syntactically-broken configs never go live.
 func (m *Manager) Apply(ctx context.Context, s Spec) error {
-	content, err := m.Render(s)
-	if err != nil {
-		return err
+	var content string
+	var err error
+	if s.Override != "" {
+		content = s.Override
+	} else {
+		content, err = m.Render(s)
+		if err != nil {
+			return err
+		}
 	}
 	if !m.R.DryRun {
 		if err := os.MkdirAll(paths.NginxSitesAvailable, 0o755); err != nil {

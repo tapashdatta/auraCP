@@ -81,9 +81,12 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("GET /api/sites", srv.requirePerm("sites", "read", srv.listSites))
 	mux.Handle("POST /api/sites", srv.requirePerm("sites", "create", srv.createSite))
 	mux.Handle("GET /api/sites/{domain}", srv.requirePerm("sites", "read", srv.getSite))
+	mux.Handle("PATCH /api/sites/{domain}", srv.requirePerm("sites", "update", srv.patchSite))
 	mux.Handle("DELETE /api/sites/{domain}", srv.requirePerm("sites", "delete", srv.deleteSite))
 	mux.Handle("GET /api/sites/{domain}/config", srv.requirePerm("sites", "read", srv.getSiteConfig))
 	mux.Handle("PATCH /api/sites/{domain}/config", srv.requirePerm("sites", "update", srv.patchSiteConfig))
+	mux.Handle("GET /api/sites/{domain}/vhost", srv.requirePerm("sites", "read", srv.getSiteVhost))
+	mux.Handle("PUT /api/sites/{domain}/vhost", srv.requirePerm("sites", "update", srv.putSiteVhost))
 
 	// databases
 	mux.Handle("GET /api/database-servers", srv.protect(srv.listDatabaseServers))
@@ -195,7 +198,7 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		Type: in.Type, Domain: in.Domain, User: in.SiteUser, Password: in.Password,
 		PHPVer: in.PHPVersion, NodeVer: in.NodeVersion, UsePM2: in.PM2,
 		StartFile: in.StartFile, Module: in.Module,
-		Upstream: in.Upstream, NodeReady: true,
+		Upstream: in.Upstream,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})

@@ -53,6 +53,13 @@ func (s *Store) SetSitePM2(domain string, enabled bool) error {
 	return err
 }
 
+// SetSiteRoot updates the document root path for a site. Used by the in-panel
+// editor to point a Laravel/Symfony/Statamic deployment at .../public.
+func (s *Store) SetSiteRoot(domain, root string) error {
+	_, err := s.DB.Exec(`UPDATE sites SET root_path = ? WHERE domain = ?`, root, domain)
+	return err
+}
+
 // DeleteSite removes a site record by domain.
 func (s *Store) DeleteSite(domain string) error {
 	_, err := s.DB.Exec(`DELETE FROM sites WHERE domain = ?`, domain)

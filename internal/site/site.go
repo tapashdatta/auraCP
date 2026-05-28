@@ -61,7 +61,6 @@ type Spec struct {
 	Upstream  string // reverseproxy (user-supplied URL)
 	NodeVer   string // nodejs: pin to this Node runtime ("" or "default" = managed default)
 	UsePM2    bool   // nodejs: run via pm2-runtime
-	NodeReady bool   // tag node availability on the record (non-Node site types)
 }
 
 func hasBackend(t string) bool {
@@ -170,15 +169,17 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		PM2Enabled: s.UsePM2,
 		Status:     "up", StatusText: "Online",
 	}
-	switch {
-	case s.Type == "nodejs":
+	// NodeVersion is the version PINNED for this site's runtime. Only Node
+	// sites have one; other types (PHP/WordPress/Python/Static/ReverseProxy)
+	// run on their own stacks and should never display a Node tag in the UI.
+	// (Earlier v0.2.x had a 'NodeReady' fallback that tagged everything with
+	// Node 24 — left a 'node 24' badge on WordPress sites in the list.)
+	if s.Type == "nodejs" {
 		v := s.NodeVer
 		if v == "" {
 			v = "default"
 		}
 		rec.NodeVersion = sql.NullString{String: v, Valid: true}
-	case s.NodeReady:
-		rec.NodeVersion = sql.NullString{String: "24", Valid: true}
 	}
 	if err := m.store.CreateSite(rec); err != nil {
 		return store.Site{}, err

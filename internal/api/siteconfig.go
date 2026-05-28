@@ -23,9 +23,11 @@ func (s *Server) reapplyWeb(ctx context.Context, domain string) error {
 		return err
 	}
 	spec := webserver.Spec{
-		Type: st.Type, Domain: domain, User: st.SiteUser, Upstream: st.Upstream,
+		Type: st.Type, Domain: domain, User: st.SiteUser, Root: st.RootPath, Upstream: st.Upstream,
+		PHPVer: st.PHPVersion,
 		Cache: cfg["cache"] == "true", CacheTTL: cfg["cache_ttl"],
 		BlockBots: cfg["block_bots"] == "true",
+		Override:  cfg["vhost_override"],   // verbatim vhost from the in-panel editor
 	}
 	if cfg["basic_auth"] == "true" {
 		spec.BasicAuthUser = cfg["basic_auth_user"]
