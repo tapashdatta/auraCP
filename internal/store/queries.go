@@ -2,12 +2,14 @@ package store
 
 import "database/sql"
 
-const siteCols = `type, domain, site_user, root_path, app, node_version, port, upstream, php_version, status, status_text`
+const siteCols = `type, domain, site_user, root_path, app, node_version, port, upstream, php_version, pm2_enabled, status, status_text`
 
 func scanSite(rows interface{ Scan(...any) error }) (Site, error) {
 	var st Site
+	var pm2 int
 	err := rows.Scan(&st.Type, &st.Domain, &st.SiteUser, &st.RootPath, &st.App,
-		&st.NodeVersion, &st.Port, &st.Upstream, &st.PHPVersion, &st.Status, &st.StatusText)
+		&st.NodeVersion, &st.Port, &st.Upstream, &st.PHPVersion, &pm2, &st.Status, &st.StatusText)
+	st.PM2Enabled = pm2 == 1
 	return st, err
 }
 
@@ -37,10 +39,17 @@ func (s *Store) SiteByDomain(domain string) (Site, error) {
 // CreateSite inserts a new site record (the OS/service work happens elsewhere).
 func (s *Store) CreateSite(st Site) error {
 	_, err := s.DB.Exec(`INSERT INTO sites
-		(type, domain, site_user, root_path, app, node_version, port, upstream, php_version, status, status_text)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(type, domain, site_user, root_path, app, node_version, port, upstream, php_version, pm2_enabled, status, status_text)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		st.Type, st.Domain, st.SiteUser, st.RootPath, st.App, st.NodeVersion,
-		st.Port, st.Upstream, st.PHPVersion, nz(st.Status, "up"), nz(st.StatusText, "Provisioning"))
+		st.Port, st.Upstream, st.PHPVersion, b2i(st.PM2Enabled),
+		nz(st.Status, "up"), nz(st.StatusText, "Provisioning"))
+	return err
+}
+
+// SetSitePM2 toggles PM2 process-manager use for a Node.js site.
+func (s *Store) SetSitePM2(domain string, enabled bool) error {
+	_, err := s.DB.Exec(`UPDATE sites SET pm2_enabled = ? WHERE domain = ?`, b2i(enabled), domain)
 	return err
 }
 

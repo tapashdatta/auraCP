@@ -117,6 +117,31 @@ func (m *Manager) Remove(ctx context.Context, version string) error {
 	return m.Store.DeleteNodeRuntime(version)
 }
 
+// PM2Path returns the pm2-runtime binary path that lives alongside the chosen
+// Node version (PM2 is installed globally inside that prefix).
+func PM2Path(version string) string {
+	if version == "" || version == "default" {
+		return filepath.Join(DefaultDir(), "bin", "pm2-runtime")
+	}
+	return filepath.Join(Dir(version), "bin", "pm2-runtime")
+}
+
+// EnsurePM2 installs (or upgrades) PM2 globally into the prefix of the named
+// Node version, so `pm2-runtime` is available alongside `node`. Idempotent —
+// npm i -g pm2 is fast when already present.
+func (m *Manager) EnsurePM2(ctx context.Context, version string) error {
+	dir := Dir(version)
+	if version == "" || version == "default" {
+		dir = DefaultDir()
+	}
+	npm := filepath.Join(dir, "bin", "npm")
+	if _, err := os.Stat(filepath.Join(dir, "bin", "node")); err != nil && !m.R.DryRun {
+		return fmt.Errorf("node runtime %q not installed", version)
+	}
+	_, err := m.R.Run(ctx, npm, "install", "-g", "--silent", "pm2")
+	return err
+}
+
 // ReconcileDefaultSymlink ensures /opt/auracp/node/default points at the DB's
 // recorded default — used on startup so the symlink is always correct.
 func (m *Manager) ReconcileDefaultSymlink() {

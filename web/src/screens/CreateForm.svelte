@@ -18,6 +18,7 @@
     domain: '', user: '', password: randPw(),
     phpVersion: '8.4', port: type === 'python' ? '8000' : '3000',
     startFile: 'app.js', module: 'main:app', upstream: 'http://127.0.0.1:8088',
+    pm2: false,
   })
   let busy = $state(false)
   let error = $state('')
@@ -35,6 +36,7 @@
         type, domain: m.domain, user: m.user, password: m.password,
         phpVersion: m.phpVersion, port: Number(m.port),
         startFile: m.startFile, module: m.module, upstream: m.upstream,
+        pm2: m.pm2,
       }),
     })
     const d = await r.json().catch(() => ({}))
@@ -65,6 +67,12 @@
         <div class="two">
           <div class="field"><label>App Port</label><input class="input" bind:value={m.port}></div>
           <div class="field"><label>Startup File</label><input class="input" bind:value={m.startFile}></div>
+        </div>
+        <div class="field">
+          <label style="display:flex;gap:8px;align-items:center;font-weight:500">
+            <input type="checkbox" bind:checked={m.pm2}> Run via <b>PM2</b> (pm2-runtime; recommended for production Node apps)
+          </label>
+          <span class="hint" style="margin-left:0">PM2 process name = the domain ({m.domain || 'your-domain'}); systemd unit stays <span class="mono">auracp-site-&lt;domain&gt;</span>.</span>
         </div>
       {/if}
       {#if type === 'python'}

@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"fmt"
 
+	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
 	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/runtime"
@@ -24,14 +25,16 @@ type Manager struct {
 	os    *osuser.Manager
 	web   *webserver.Manager
 	rt    *runtime.Manager
+	node  *noderuntime.Manager
 }
 
-func New(r *system.Runner, st *store.Store) *Manager {
+func New(r *system.Runner, st *store.Store, node *noderuntime.Manager) *Manager {
 	return &Manager{
 		r: r, store: st,
-		os:  osuser.New(r),
-		web: webserver.New(r),
-		rt:  runtime.New(r),
+		os:   osuser.New(r),
+		web:  webserver.New(r),
+		rt:   runtime.New(r),
+		node: node,
 	}
 }
 
@@ -46,6 +49,7 @@ type Spec struct {
 	Module    string // python
 	Upstream  string // reverseproxy (user-supplied URL)
 	NodeVer   string // nodejs: pin to this Node runtime ("" or "default" = managed default)
+	UsePM2    bool   // nodejs: run via pm2-runtime
 	NodeReady bool   // tag node availability on the record (non-Node site types)
 }
 
@@ -104,10 +108,18 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 
 	// 2) backend service (php/node/python); static & proxy have none
 	if hasBackend(s.Type) {
+		// For Node sites that opt into PM2, install pm2 globally inside the
+		// chosen Node prefix before writing the unit (idempotent).
+		if s.Type == "nodejs" && s.UsePM2 && m.node != nil {
+			if err := m.node.EnsurePM2(ctx, s.NodeVer); err != nil {
+				rollback()
+				return store.Site{}, err
+			}
+		}
 		if err := m.rt.Apply(ctx, runtime.Spec{
 			Type: s.Type, Domain: s.Domain, User: s.User, Port: port,
 			StartFile: s.StartFile, Module: s.Module, PHPVer: s.PHPVer,
-			NodeVer: s.NodeVer,
+			NodeVer: s.NodeVer, UsePM2: s.UsePM2,
 		}); err != nil {
 			rollback()
 			return store.Site{}, err
@@ -130,7 +142,8 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		Type: s.Type, Domain: s.Domain, SiteUser: s.User,
 		RootPath: paths.DocRoot(s.User, s.Domain), App: appLabel(s),
 		Port: port, Upstream: upstream, PHPVersion: s.PHPVer,
-		Status: "up", StatusText: "Online",
+		PM2Enabled: s.UsePM2,
+		Status:     "up", StatusText: "Online",
 	}
 	switch {
 	case s.Type == "nodejs":
@@ -159,9 +172,14 @@ func (m *Manager) ReapplyRuntime(ctx context.Context, domain string) error {
 	if !hasBackend(st.Type) {
 		return nil
 	}
+	if st.Type == "nodejs" && st.PM2Enabled && m.node != nil {
+		if err := m.node.EnsurePM2(ctx, st.NodeVersion.String); err != nil {
+			return err
+		}
+	}
 	return m.rt.Apply(ctx, runtime.Spec{
 		Type: st.Type, Domain: domain, User: st.SiteUser, Port: st.Port,
-		PHPVer: st.PHPVersion, NodeVer: st.NodeVersion.String,
+		PHPVer: st.PHPVersion, NodeVer: st.NodeVersion.String, UsePM2: st.PM2Enabled,
 	})
 }
 

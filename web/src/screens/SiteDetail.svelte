@@ -104,6 +104,13 @@
     busy = false
     notice = r.ok ? `Site now runs on Node ${d.version}.` : (d.error || 'Failed')
   }
+  async function togglePM2(enabled) {
+    busy = true
+    const r = await apiFetch(`${base}/pm2`, { method: 'PUT', body: JSON.stringify({ enabled }) })
+    const d = await r.json().catch(() => ({}))
+    busy = false
+    notice = r.ok ? (d.enabled ? 'PM2 enabled — backend restarted via pm2-runtime.' : 'PM2 disabled — back to plain node.') : (d.error || 'Failed')
+  }
   function openDir(name) { filePath = filePath ? `${filePath}/${name}` : name; load('files') }
   function upDir() { filePath = filePath.split('/').slice(0, -1).join('/'); load('files') }
   function setLogKind(k) { logKind = k; load('logs') }
@@ -160,6 +167,11 @@
                 </select></div>
             </div>
             <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply &amp; restart backend</button>
+            <div class="kv" style="margin-top:14px">
+              <span class="k">Run via PM2 (pm2-runtime)</span>
+              <div class="toggle" class:on={!!site.pm2} onclick={() => togglePM2(!site.pm2)}></div>
+            </div>
+            <span class="hint" style="display:block;margin-top:-4px">PM2 process name = the domain (<span class="mono">{site.domain}</span>). systemd unit stays <span class="mono">auracp-site-{site.domain}</span>.</span>
           </div>
         </div>
       {/if}

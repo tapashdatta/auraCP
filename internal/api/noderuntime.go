@@ -60,6 +60,35 @@ func (s *Server) deleteNodeRuntime(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// PUT /api/sites/{domain}/pm2 {enabled}
+func (s *Server) setSitePM2(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	if st.Type != "nodejs" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "site is not a Node.js site"})
+		return
+	}
+	var in struct{ Enabled bool }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.store.SetSitePM2(domain, in.Enabled); err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	if err := s.sites.ReapplyRuntime(r.Context(), domain); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.pm2", domain)
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": in.Enabled})
+}
+
 // PUT /api/sites/{domain}/node-version {version}
 func (s *Server) setSiteNodeVersion(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")

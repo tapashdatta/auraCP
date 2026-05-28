@@ -14,6 +14,7 @@ type Site struct {
 	Port        int            `json:"-"`
 	Upstream    string         `json:"-"`
 	PHPVersion  string         `json:"-"`
+	PM2Enabled  bool           `json:"-"`
 	Status      string         `json:"status"`
 	StatusText  string         `json:"statusText"`
 }
@@ -38,6 +39,7 @@ type SiteView struct {
 	Badge      string  `json:"badge"`
 	Ic         string  `json:"ic"`
 	Node       *string `json:"node"`
+	PM2        bool    `json:"pm2"`
 	Status     string  `json:"status"`
 	StatusText string  `json:"statusText"`
 }
@@ -51,6 +53,7 @@ func (s Site) View() SiteView {
 		Type:   s.Type,
 		Domain: s.Domain, Root: s.RootPath, User: s.SiteUser, App: s.App,
 		Badge: typeBadge[s.Type], Ic: typeIcon[s.Type], Node: node,
+		PM2:    s.PM2Enabled,
 		Status: s.Status, StatusText: s.StatusText,
 	}
 }

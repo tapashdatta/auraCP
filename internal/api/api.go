@@ -21,11 +21,11 @@ import (
 )
 
 type Server struct {
-	store   *store.Store
-	sites   *site.Manager
-	dbs     *db.Manager
-	cron    *cron.Manager
-	backups *backup.Manager
+	store        *store.Store
+	sites        *site.Manager
+	dbs          *db.Manager
+	cron         *cron.Manager
+	backups      *backup.Manager
 	web          *webserver.Manager
 	osu          *osuser.Manager
 	node         *noderuntime.Manager
@@ -116,6 +116,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("POST /api/instance/node-versions/{version}/default", srv.requirePerm("settings", "update", srv.setDefaultNodeRuntime))
 	mux.Handle("DELETE /api/instance/node-versions/{version}", srv.requirePerm("settings", "update", srv.deleteNodeRuntime))
 	mux.Handle("PUT /api/sites/{domain}/node-version", srv.requirePerm("sites", "update", srv.setSiteNodeVersion))
+	mux.Handle("PUT /api/sites/{domain}/pm2", srv.requirePerm("sites", "update", srv.setSitePM2))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
@@ -146,14 +147,16 @@ func (s *Server) getSite(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Type       string `json:"type"`
-		Domain     string `json:"domain"`
-		SiteUser   string `json:"user"`
-		Password   string `json:"password"`
-		PHPVersion string `json:"phpVersion"`
-		StartFile  string `json:"startFile"`
-		Module     string `json:"module"`
-		Upstream   string `json:"upstream"`
+		Type        string `json:"type"`
+		Domain      string `json:"domain"`
+		SiteUser    string `json:"user"`
+		Password    string `json:"password"`
+		PHPVersion  string `json:"phpVersion"`
+		NodeVersion string `json:"nodeVersion"`
+		PM2         bool   `json:"pm2"`
+		StartFile   string `json:"startFile"`
+		Module      string `json:"module"`
+		Upstream    string `json:"upstream"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
@@ -161,7 +164,8 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, err := s.sites.Create(r.Context(), site.Spec{
 		Type: in.Type, Domain: in.Domain, User: in.SiteUser, Password: in.Password,
-		PHPVer: in.PHPVersion, StartFile: in.StartFile, Module: in.Module,
+		PHPVer: in.PHPVersion, NodeVer: in.NodeVersion, UsePM2: in.PM2,
+		StartFile: in.StartFile, Module: in.Module,
 		Upstream: in.Upstream, NodeReady: true,
 	})
 	if err != nil {

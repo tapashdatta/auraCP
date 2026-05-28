@@ -83,7 +83,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	api.Register(mux, st, api.Deps{
-		Sites:        site.New(runner, st),
+		Sites:        site.New(runner, st, node),
 		DBs:          db.New(runner, st, sec),
 		Cron:         cron.New(runner, st),
 		Backups:      backup.New(runner, st),

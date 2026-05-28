@@ -14,6 +14,7 @@ var migrations = []string{
 		port          INTEGER NOT NULL DEFAULT 0,    -- backend loopback port (app types)
 		upstream      TEXT NOT NULL DEFAULT '',      -- reverse-proxy target
 		php_version   TEXT NOT NULL DEFAULT '',      -- php/wordpress only
+		pm2_enabled   INTEGER NOT NULL DEFAULT 0,    -- nodejs only — run via pm2-runtime
 		status        TEXT NOT NULL DEFAULT 'up',    -- up|warn|down
 		status_text   TEXT NOT NULL DEFAULT 'Online',
 		created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP

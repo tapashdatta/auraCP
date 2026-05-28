@@ -29,6 +29,7 @@ type Spec struct {
 	Module    string // python: main:app
 	PHPVer    string // php: 8.3/8.4/8.5
 	NodeVer   string // nodejs: "" or "default" → /opt/auracp/node/default; else /opt/auracp/node/<ver>
+	UsePM2    bool   // nodejs: run app via pm2-runtime (foreground), not plain node
 }
 
 // Apply writes the unit file and (re)starts it. Static & reverse-proxy sites
@@ -109,6 +110,11 @@ func execStart(s Spec) (string, error) {
 		start := s.StartFile
 		if start == "" {
 			start = "app.js"
+		}
+		if s.UsePM2 {
+			// pm2-runtime stays foreground (no separate pm2 daemon), so the systemd
+			// unit owns the lifecycle. The PM2 process name is the site's domain.
+			return fmt.Sprintf("%s --name %s %s/%s", noderuntime.PM2Path(s.NodeVer), s.Domain, root, start), nil
 		}
 		return fmt.Sprintf("%s %s/%s", noderuntime.BinPath(s.NodeVer), root, start), nil
 	case "python":
