@@ -119,6 +119,26 @@ for kr in /etc/apt/keyrings/nodesource.gpg \
   [ -e "$kr" ] && run "rm -f '$kr'"
 done
 
+# ── 0c. auraCP-laid config snippets in shared /etc subdirs ──────────────────
+# Catch any auraCP-named file in the standard "snippet dirs" — defensive sweep
+# so future versions that drop, say, a logrotate or sudoers snippet are cleaned
+# without uninstall.sh needing a per-snippet entry. Glob fails silently when a
+# directory has no matches, which is exactly what we want.
+msg "Removing auraCP-laid config snippets…"
+for d in /etc/apt/preferences.d /etc/sudoers.d /etc/cron.d /etc/cron.daily \
+         /etc/cron.hourly /etc/cron.weekly /etc/logrotate.d /etc/rsyslog.d \
+         /etc/profile.d /etc/security/limits.d /etc/sysctl.d \
+         /etc/fail2ban/jail.d /etc/fail2ban/filter.d /etc/modules-load.d; do
+  [ -d "$d" ] || continue
+  for f in "$d"/auracp* "$d"/*auracp*; do
+    [ -e "$f" ] && run "rm -f '$f'"
+  done
+done
+# Strip any `# auracp` … lines from /etc/hosts (no-op when none present).
+if [ -e /etc/hosts ] && grep -q '# auracp' /etc/hosts 2>/dev/null; then
+  run "sed -i '/# auracp/d' /etc/hosts"
+fi
+
 # ── 1. panel + per-site backends ────────────────────────────────────────────
 msg "Removing per-site backend services…"
 for f in /etc/systemd/system/auracp-site-*.service; do
@@ -236,10 +256,31 @@ if command -v ufw >/dev/null 2>&1; then
 fi
 purge_installed ufw fail2ban
 
-# ── 5. residual / temp + apt cleanup ────────────────────────────────────────
+# ── 5. service users + groups that apt-purge keeps for re-install rebinding ─
+# Packages like mariadb-server, postgresql, redis-server and the docker
+# install script create system users/groups (`mysql`, `postgres`, `redis`,
+# `docker` group) and leave them behind on purge — by design, so a re-install
+# can rebind to existing data directories. We've just removed those data
+# directories, so those accounts are now dead weight. Drop them.
+msg "Removing service users + groups left behind by purged packages…"
+if [ "$KEEP_DB" -eq 0 ]; then
+  for u in mysql postgres; do
+    id "$u" >/dev/null 2>&1 && run "userdel -rf $u 2>/dev/null"
+  done
+fi
+for u in redis _typesense typesense; do
+  id "$u" >/dev/null 2>&1 && run "userdel -rf $u 2>/dev/null"
+done
+if getent group docker >/dev/null 2>&1; then
+  run "groupdel docker 2>/dev/null"
+fi
+
+# ── 6. residual / temp + apt cleanup ────────────────────────────────────────
 msg "Cleaning installer temp files…"
 run "rm -f /tmp/nodesource_setup.sh /tmp/get-docker.sh /tmp/typesense-server.deb"
 run "rm -f /tmp/auracp-cron-* 2>/dev/null"
+# .bak files our own sed -i.bak edits may have left in earlier sections
+run "rm -f /etc/apt/sources.list.bak /etc/hosts.bak"
 # any backup tarballs the panel produced
 run "rm -rf /var/lib/auracp/backups"
 
