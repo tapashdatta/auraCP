@@ -669,7 +669,11 @@
     load('files')
   }
 
-  function isZip(name) { return /\.zip$/i.test(name) }
+  // v0.2.28: recognise .zip, .tar, .tar.gz, .tgz as extractable archives.
+  // The backend's files.IsArchive must stay in sync with this list.
+  function isArchive(name) {
+    return /\.(zip|tar|tgz|tar\.gz)$/i.test(name)
+  }
 </script>
 
 <div class="wrap fade">
@@ -1142,8 +1146,8 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
                 </button>
-              {:else if isZip(f.name)}
-                <button type="button" class="file-row k" onclick={() => unzipItem(f.name)} title="Extract here">
+              {:else if isArchive(f.name)}
+                <button type="button" class="file-row k archive" onclick={() => unzipItem(f.name)} title="Extract here">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M10 12v8M10 16h4"/></svg>
                   {f.name}
                 </button>
@@ -1155,9 +1159,13 @@
               {/if}
               <span class="file-meta">{f.mode} · {fmtSize(f.size)}</span>
               <div class="file-actions">
-                {#if isZip(f.name) && !f.dir}
-                  <button type="button" class="file-act" onclick={() => unzipItem(f.name)} title="Extract here" aria-label="Extract {f.name}">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>
+                {#if isArchive(f.name) && !f.dir}
+                  <!-- v0.2.28: extract button now has a visible label so it
+                       isn't mistaken for one of the icon-only actions. Distinct
+                       colour (aura-strong) draws the eye on a .zip / .tar.gz row. -->
+                  <button type="button" class="file-extract" onclick={() => unzipItem(f.name)} title="Extract here" aria-label="Extract {f.name}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 8v13H3V8M1 3h22v5H1z"/><path d="M10 12h4"/></svg>
+                    <span>Extract</span>
                   </button>
                 {/if}
                 {#if !f.dir}

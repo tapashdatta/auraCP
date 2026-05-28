@@ -23,6 +23,17 @@
  *   readable by the FPM user via include().
  */
 
+// v0.2.28: pin session.save_path before session_start(). The pool config
+// already sets this via php_admin_value, but defending here too means a
+// fresh install with a stale pool config (or an in-flight upgrade) still
+// works. /run/auracp/adminer-sessions is created by tmpfiles.d at boot;
+// fall back to /tmp if it doesn't exist (open_basedir allows both).
+if (is_dir('/run/auracp/adminer-sessions') && is_writable('/run/auracp/adminer-sessions')) {
+    ini_set('session.save_path', '/run/auracp/adminer-sessions');
+} else {
+    ini_set('session.save_path', '/tmp');
+}
+
 session_set_cookie_params([
     'lifetime' => 0,
     'path'     => '/_adminer/',

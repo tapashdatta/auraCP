@@ -6,7 +6,9 @@
 package files
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"os"
@@ -498,9 +500,21 @@ func Zip(siteUser, domain string, subs []string, destSub string) error {
 	return chownToUser(dest, siteUser)
 }
 
-// Unzip extracts <sub> (a .zip) into its containing directory. Every entry's
-// final path is re-checked for containment so a malicious archive can't
-// "Zip Slip" out of the docroot.
+// IsArchive reports whether name ends in a supported archive extension.
+// Used by the API + UI to gate the "Extract" affordance. v0.2.28: covers
+// .zip, .tar.gz, .tgz, .tar.
+func IsArchive(name string) bool {
+	n := strings.ToLower(name)
+	return strings.HasSuffix(n, ".zip") ||
+		strings.HasSuffix(n, ".tar.gz") ||
+		strings.HasSuffix(n, ".tgz") ||
+		strings.HasSuffix(n, ".tar")
+}
+
+// Unzip extracts <sub> (a supported archive) into its containing directory.
+// Supports .zip, .tar.gz, .tgz, .tar. Every entry's final path is re-checked
+// for containment so a malicious archive can't "Zip Slip" out of the docroot.
+// Name kept as Unzip for API compatibility; covers all formats now.
 func Unzip(siteUser, domain, sub string) error {
 	root, target, err := resolve(siteUser, domain, sub)
 	if err != nil {
@@ -511,11 +525,22 @@ func Unzip(siteUser, domain, sub string) error {
 		return err
 	}
 	if fi.IsDir() {
-		return fmt.Errorf("path is a directory; expected a .zip file")
+		return fmt.Errorf("path is a directory; expected an archive file")
 	}
-	if !strings.HasSuffix(strings.ToLower(target), ".zip") {
-		return fmt.Errorf("not a .zip file")
+	low := strings.ToLower(target)
+	switch {
+	case strings.HasSuffix(low, ".zip"):
+		return unzipZip(siteUser, root, target)
+	case strings.HasSuffix(low, ".tar.gz"), strings.HasSuffix(low, ".tgz"):
+		return unzipTar(siteUser, root, target, true)
+	case strings.HasSuffix(low, ".tar"):
+		return unzipTar(siteUser, root, target, false)
+	default:
+		return fmt.Errorf("unsupported archive (expected .zip, .tar.gz, .tgz, or .tar): %s", filepath.Base(target))
 	}
+}
+
+func unzipZip(siteUser, root, target string) error {
 	zr, err := zip.OpenReader(target)
 	if err != nil {
 		return err
@@ -534,7 +559,6 @@ func Unzip(siteUser, domain, sub string) error {
 		if clean != dir && !strings.HasPrefix(clean, dir+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes docroot: %q", f.Name)
 		}
-		// Final containment sanity-check against the site root.
 		if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes site root: %q", f.Name)
 		}
@@ -569,6 +593,82 @@ func Unzip(siteUser, domain, sub string) error {
 		rc.Close()
 		w.Close()
 		_ = chownToUser(clean, siteUser)
+	}
+	return nil
+}
+
+// unzipTar handles plain .tar and gzipped .tar.gz/.tgz. Stream-decompresses
+// so memory usage stays flat regardless of archive size. Same Zip Slip
+// guards as the zip path.
+func unzipTar(siteUser, root, target string, gzipped bool) error {
+	f, err := os.Open(target)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	var src io.Reader = f
+	if gzipped {
+		gz, err := gzip.NewReader(f)
+		if err != nil {
+			return fmt.Errorf("not a valid gzip stream: %w", err)
+		}
+		defer gz.Close()
+		src = gz
+	}
+
+	tr := tar.NewReader(src)
+	dir := filepath.Dir(target)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("tar read failed: %w", err)
+		}
+		// Same safety checks as zip; tar is even more permissive on disk
+		// layout so we're strict about absolute / traversal / symlink entries.
+		if strings.HasPrefix(h.Name, "/") || strings.Contains(h.Name, "..") {
+			return fmt.Errorf("archive contains unsafe path: %q", h.Name)
+		}
+		dst := filepath.Join(dir, h.Name)
+		clean := filepath.Clean(dst)
+		if clean != dir && !strings.HasPrefix(clean, dir+string(os.PathSeparator)) {
+			return fmt.Errorf("archive entry escapes docroot: %q", h.Name)
+		}
+		if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
+			return fmt.Errorf("archive entry escapes site root: %q", h.Name)
+		}
+		mode := os.FileMode(h.Mode).Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		switch h.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(clean, mode|0o100); err != nil {
+				return err
+			}
+			_ = chownToUser(clean, siteUser)
+		case tar.TypeReg, tar.TypeRegA:
+			if err := os.MkdirAll(filepath.Dir(clean), 0o755); err != nil {
+				return err
+			}
+			w, err := os.OpenFile(clean, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(w, tr); err != nil {
+				w.Close()
+				return err
+			}
+			w.Close()
+			_ = chownToUser(clean, siteUser)
+		default:
+			// Symlinks / hardlinks / devices: silently skip. A WordPress
+			// backup tarball won't have any; a malicious one with symlinks
+			// pointing out of the docroot just won't materialise them.
+		}
 	}
 	return nil
 }

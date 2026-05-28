@@ -433,10 +433,17 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .file-del{flex:none;width:30px;height:30px;display:grid;place-items:center;color:var(--txt-3);border-radius:8px;transition:.1s}
 .file-del:hover{color:var(--down);background:var(--down-soft)}
 .file-del svg{width:15px;height:15px}
-.file-actions{display:flex;gap:4px;flex:none}
+.file-actions{display:flex;gap:4px;flex:none;align-items:center}
 .file-act{flex:none;width:30px;height:30px;display:grid;place-items:center;color:var(--txt-3);border-radius:8px;transition:.1s}
 .file-act:hover{color:var(--aura-strong);background:var(--surface-2)}
 .file-act svg{width:15px;height:15px}
+/* v0.2.28: prominent extract button — distinct from the icon-only actions
+   so operators don't miss it on .zip / .tar.gz rows. */
+.file-extract{flex:none;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px;border-radius:8px;font-size:12px;font-weight:600;color:var(--aura-strong);background:color-mix(in srgb, var(--aura-strong) 14%, transparent);border:1px solid color-mix(in srgb, var(--aura-strong) 28%, transparent);transition:.1s;cursor:pointer}
+.file-extract:hover{background:color-mix(in srgb, var(--aura-strong) 22%, transparent);border-color:color-mix(in srgb, var(--aura-strong) 45%, transparent)}
+.file-extract svg{width:14px;height:14px}
+/* Subtle archive row visual cue — slight aura tint on the icon. */
+.file-row.archive .file-ic{color:var(--aura-strong)}
 /* Breadcrumb path strip — sits above the path mono line. Each crumb is a button
    that jumps the file manager to that depth. */
 .crumbs{display:flex;align-items:center;flex-wrap:wrap;gap:2px;margin:6px 0 4px;font-size:13px}

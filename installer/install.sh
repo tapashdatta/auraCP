@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.27"
+AURACP_VERSION="0.2.28"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -814,11 +814,18 @@ install_adminer() {
   cat > /etc/tmpfiles.d/auracp-adminer.conf <<'EOF'
 d /run/auracp 0755 root root -
 d /run/auracp/adminer-sso 0750 root www-data -
+d /run/auracp/adminer-sessions 0700 www-data www-data -
 EOF
   run "systemd-tmpfiles --create /etc/tmpfiles.d/auracp-adminer.conf"
 
   # Dedicated FPM pool for Adminer on the default PHP version. Runs as
   # www-data so the panel doesn't bind it to any single site's identity.
+  #
+  # v0.2.28: explicitly set session.save_path to /run/auracp/adminer-sessions
+  # — the Debian/Ubuntu default of /var/lib/php/sessions isn't in our
+  # open_basedir, so session writes silently failed and the SSO redirect
+  # always landed on "No active panel session". This save_path IS in
+  # open_basedir + writable by the pool user (www-data:www-data 0700).
   local pool="/etc/php/${default_php}/fpm/pool.d/auracp-adminer.conf"
   if [ "$DRY_RUN" -eq 0 ]; then
     cat > "$pool" <<EOF
@@ -833,7 +840,8 @@ pm = ondemand
 pm.max_children = 5
 pm.process_idle_timeout = 30s
 chdir = /opt/auracp/adminer
-php_admin_value[open_basedir] = /opt/auracp/adminer:/run/auracp/adminer-sso:/tmp
+php_admin_value[open_basedir] = /opt/auracp/adminer:/run/auracp/adminer-sso:/run/auracp/adminer-sessions:/tmp
+php_admin_value[session.save_path] = /run/auracp/adminer-sessions
 php_admin_value[upload_max_filesize] = 512M
 php_admin_value[post_max_size] = 512M
 php_admin_value[memory_limit] = 256M
