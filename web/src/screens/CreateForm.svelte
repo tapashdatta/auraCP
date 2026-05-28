@@ -25,8 +25,30 @@
   let phpVersions = $state([])  // populated from /api/instance/php-versions on mount
   let busy = $state(false)
   let error = $state('')
+  // Flag flips the moment the operator hand-edits the site-user field, so we
+  // stop overwriting it with the domain-derived value as they keep typing.
+  let userTouched = $state(false)
 
   function randPw() { return Math.random().toString(36).slice(2, 10) + '-' + Math.random().toString(36).slice(2, 6) }
+
+  // Derive a sensible Linux site-user from the domain — first label only,
+  // lowercased, alphanumeric+dash, with a 4-char random suffix so subdomains
+  // (blog.example.com + shop.example.com) don't collide on the box. Falls
+  // back to a fully random handle when the domain isn't yet a valid one to
+  // strip from. Matches validate.Username: ^[a-z][a-z0-9_-]{0,31}$.
+  function deriveSiteUser(domain) {
+    const first = (domain || '').split('.')[0] || ''
+    const cleaned = first.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 26)
+    const suffix = Math.random().toString(36).slice(2, 6)
+    if (!cleaned || !/^[a-z]/.test(cleaned)) return 'site-' + suffix
+    return cleaned + '-' + suffix
+  }
+
+  // Auto-sync the site user from the domain until the operator manually edits.
+  $effect(() => {
+    if (userTouched) return
+    m.user = deriveSiteUser(m.domain)
+  })
 
   // Fetch installed PHP versions so the dropdown only offers what'll actually
   // work — hard-coding 8.3/8.4/8.5 leaves the user picking a version that
@@ -124,8 +146,11 @@
           <input class="input" bind:value={m.upstream}></div>
       {/if}
 
-      <div class="field"><label>Site User <span class="hint">main SSH user</span></label>
-        <input class="input" bind:value={m.user} placeholder="siteuser"></div>
+      <div class="field"><label>Site User <span class="hint">auto-generated from the domain · editable</span></label>
+        <div class="input-row">
+          <input class="input" bind:value={m.user} oninput={() => userTouched = true} placeholder="siteuser">
+          <button type="button" class="gen" onclick={() => { userTouched = false; m.user = deriveSiteUser(m.domain) }}>Regenerate</button>
+        </div></div>
       <div class="field"><label>Site User Password</label>
         <div class="input-row">
           <input class="input" bind:value={m.password}>
