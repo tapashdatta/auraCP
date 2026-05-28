@@ -243,24 +243,9 @@ func (s *Server) getSite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Type        string `json:"type"`
-		Domain      string `json:"domain"`
-		SiteUser    string `json:"user"`
-		Password    string `json:"password"`
-		PHPVersion  string `json:"phpVersion"`
-		NodeVersion string `json:"nodeVersion"`
-		PM2         bool   `json:"pm2"`
-		StartFile   string `json:"startFile"`
-		Module      string `json:"module"`
-		Upstream    string `json:"upstream"`
-		// v0.2.34: WordPress one-click auto-install
-		WPInstall    bool   `json:"wpInstall"`
-		WPTitle      string `json:"wpTitle"`
-		WPAdminUser  string `json:"wpAdminUser"`
-		WPAdminPass  string `json:"wpAdminPass"`
-		WPAdminEmail string `json:"wpAdminEmail"`
-	}
+	// v0.2.48: lifted to a named type in sites_creator.go so the new
+	// pipeline helper can take it as a parameter.
+	var in createSiteInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
@@ -328,7 +313,22 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 		spec.WPAdminEmail = in.WPAdminEmail
 	}
 
-	rec, err := s.sites.Create(r.Context(), spec)
+	// v0.2.48 feature gate: route through the new creator.RunCreate
+	// pipeline when AURACP_USE_NEW_CREATOR=1. All 5 site types are
+	// ported (php / wordpress / nodejs / python / static / reverseproxy).
+	// Flipping the env var off is a clean fallback — the legacy
+	// site.Manager.Create is ABI-compatible and unchanged.
+	//
+	// The legacy `s.sites.Create` call disappears in v0.2.49 once we've
+	// burned in the new path. Until then this branch is the single
+	// revert hook.
+	var rec store.Site
+	var err error
+	if os.Getenv("AURACP_USE_NEW_CREATOR") == "1" {
+		rec, err = s.createSiteViaNewPipeline(r.Context(), in, spec)
+	} else {
+		rec, err = s.sites.Create(r.Context(), spec)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -358,11 +358,21 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteSite(w http.ResponseWriter, r *http.Request) {
-	if err := s.sites.Delete(r.Context(), r.PathValue("domain")); err != nil {
+	domain := r.PathValue("domain")
+	// v0.2.48 feature gate: same env var as createSite. New path runs
+	// the cross-PHP-version pool sweep + log every step structurally
+	// so post-mortems don't need filesystem archaeology.
+	var err error
+	if os.Getenv("AURACP_USE_NEW_CREATOR") == "1" {
+		err = s.deleteSiteViaNewPipeline(r.Context(), domain)
+	} else {
+		err = s.sites.Delete(r.Context(), domain)
+	}
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	s.audit(r, "site.delete", r.PathValue("domain"))
+	s.audit(r, "site.delete", domain)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

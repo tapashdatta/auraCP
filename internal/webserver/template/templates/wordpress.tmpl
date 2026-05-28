@@ -1,0 +1,70 @@
+# auraCP-managed WordPress site. Differs from php.tmpl only in the
+# WP-specific blocks: wp-admin protection hook, xmlrpc.php deny, and
+# the standard WP rewrite (try_files ... /index.php?$args). Same single-
+# server-block design, same FPM Unix socket, same {{settings}} escape
+# hatch for the operator.
+server {
+    listen 80;
+    listen [::]:80;
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+
+    {{server_name}}
+    {{root}}
+    index index.php index.html;
+
+    {{ssl_certificate}}
+    {{ssl_certificate_key}}
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/auracp/acme/;
+        default_type "text/plain";
+        try_files $uri =404;
+    }
+
+    {{nginx_access_log}}
+    {{nginx_error_log}}
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    server_tokens off;
+    client_max_body_size 64m;
+
+    location ~ /\.(?!well-known) { deny all; }
+
+    # WP-specific hardening.
+    location = /xmlrpc.php { deny all; }
+    location ~ ^/wp-content/uploads/.*\.php$ { deny all; }
+    # wp-admin: operator can attach basic_auth via {{settings}}.
+
+    {{settings}}
+
+    location / {
+        try_files $uri $uri/ /index.php?$args;
+    }
+
+    # Long expiry on assets — keeps WP cache plugins happy without
+    # serving stale PHP.
+    location ~* \.(css|js|jpg|jpeg|gif|png|ico|svg|woff|woff2|ttf|otf|webp|webm|mp4)$ {
+        expires max;
+        access_log off;
+        add_header Cache-Control "public, immutable";
+    }
+
+    location ~ \.php$ {
+        try_files $uri =404;
+        fastcgi_split_path_info ^(.+\.php)(/.+)$;
+        {{php_fpm_socket}}
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param PATH_INFO $fastcgi_path_info;
+        fastcgi_param HTTPS $https if_not_empty;
+        fastcgi_read_timeout 300s;
+    }
+}

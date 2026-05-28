@@ -119,4 +119,19 @@ if (!$isAuthPost && !$hasSession) {
 }
 
 // Active Adminer session — hand off to Adminer normally.
+//
+// v0.2.48: register an Adminer subclass that emits <script src="adminer.js">
+// in the <head>. Adminer 4.x auto-loads adminer.css from its own directory
+// but NOT adminer.js; the only stable injection point is the Adminer
+// subclass's head() override. The subclass is defined inside the function
+// body because the parent `Adminer` class only exists after adminer.php is
+// included — `extends Adminer` at the top level would fail to parse.
+function adminer_object() {
+    return new class extends Adminer {
+        function head(...$args) {
+            parent::head(...$args);
+            echo '<script src="adminer.js" defer></script>' . "\n";
+        }
+    };
+}
 include __DIR__ . '/adminer.php';

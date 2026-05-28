@@ -376,7 +376,11 @@
   // the file input ref so the 'Upload' button can trigger it programmatically.
   let dragOver = $state(false)
   let uploadBusy = $state(false)
-  let uploadMsg = $state('')
+  // v0.2.48: file-browser feedback moved from a persistent bottom note to
+  // the global toast system. No more uploadMsg state — every former
+  // `uploadMsg = …` now calls toast()/toastSuccess()/toastError() with
+  // the same string, so the message auto-dismisses after ~4s instead of
+  // pinning to the bottom of the pane until the next operation clears it.
   let fileInput = $state(null)   // refs the hidden <input type=file>
 
   // v0.2.18: per-upload progress. uploadProg tracks bytes-sent / bytes-total
@@ -451,7 +455,6 @@
 
     uploadBusy = true
     uploadProg = { active: true, loaded: 0, total, files: list.length, name: list[0].relPath }
-    uploadMsg = ''
 
     await new Promise((resolve) => {
       const xhr = new XMLHttpRequest()
@@ -466,19 +469,21 @@
         let d = {}
         try { d = JSON.parse(xhr.responseText) } catch {}
         if (xhr.status < 200 || xhr.status >= 300) {
-          uploadMsg = d.error || `Upload failed: HTTP ${xhr.status}`
+          toastError(d.error || `Upload failed: HTTP ${xhr.status}`)
         } else {
           const errs = Array.isArray(d.errors) ? d.errors.length : 0
-          uploadMsg = errs > 0
-            ? `Uploaded ${d.saved}; ${errs} failed: ${d.errors.join(', ')}`
-            : `Uploaded ${d.saved} file${d.saved > 1 ? 's' : ''} (${fmtBytes(total)}).`
+          if (errs > 0) {
+            toastError(`Uploaded ${d.saved}; ${errs} failed: ${d.errors.join(', ')}`)
+          } else {
+            toastSuccess(`Uploaded ${d.saved} file${d.saved > 1 ? 's' : ''} (${fmtBytes(total)}).`)
+          }
           load('files')
           refreshTreeAt(filePath)   // a new file might be a new folder we should show
         }
         resolve()
       }
-      xhr.onerror = () => { uploadMsg = 'Upload aborted (network error).'; uploadProg = { ...uploadProg, active: false }; resolve() }
-      xhr.onabort = () => { uploadMsg = 'Upload cancelled.'; uploadProg = { ...uploadProg, active: false }; resolve() }
+      xhr.onerror = () => { toastError('Upload aborted (network error).'); uploadProg = { ...uploadProg, active: false }; resolve() }
+      xhr.onabort = () => { toast('Upload cancelled.'); uploadProg = { ...uploadProg, active: false }; resolve() }
       xhr.send(fd)
     })
     uploadXHR = null
@@ -574,8 +579,8 @@
     const sub = filePath ? `${filePath}/${name}` : name
     const r = await apiFetch(`${base}/files?path=${encodeURIComponent(sub)}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Could not delete'; return }
-    uploadMsg = `Deleted ${name}.`
+    if (!r.ok) { toastError(d.error || 'Could not delete'); return }
+    toastSuccess(`Deleted ${name}.`)
     load('files')
     refreshTreeAt(filePath)
   }
@@ -607,8 +612,8 @@
       method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Could not create folder'; return }
-    uploadMsg = `Created ${name}.`
+    if (!r.ok) { toastError(d.error || 'Could not create folder'); return }
+    toastSuccess(`Created ${name}.`)
     load('files')
     refreshTreeAt(filePath)
   }
@@ -620,8 +625,8 @@
       method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Could not create file'; return }
-    uploadMsg = `Created ${name}.`
+    if (!r.ok) { toastError(d.error || 'Could not create file'); return }
+    toastSuccess(`Created ${name}.`)
     load('files')
   }
 
@@ -633,8 +638,8 @@
       method: 'POST', body: JSON.stringify({ path: sub, newName: next.trim() })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Could not rename'; return }
-    uploadMsg = `Renamed to ${next}.`
+    if (!r.ok) { toastError(d.error || 'Could not rename'); return }
+    toastSuccess(`Renamed to ${next}.`)
     load('files')
     refreshTreeAt(filePath)
   }
@@ -683,7 +688,7 @@
     editor.busy = false
     if (!r.ok) { editor.err = d.error || 'Save failed'; return }
     editor.original = editor.content
-    uploadMsg = `Saved ${editor.name}.`
+    toastSuccess(`Saved ${editor.name}.`)
     load('files')
   }
 
@@ -718,11 +723,13 @@
       method: 'POST', body: JSON.stringify({ paths })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Bulk delete failed'; return }
+    if (!r.ok) { toastError(d.error || 'Bulk delete failed'); return }
     const errs = Array.isArray(d.errors) ? d.errors.length : 0
-    uploadMsg = errs > 0
-      ? `Deleted ${d.deleted}; ${errs} failed: ${d.errors.join(', ')}`
-      : `Deleted ${d.deleted} item${d.deleted > 1 ? 's' : ''}.`
+    if (errs > 0) {
+      toastError(`Deleted ${d.deleted}; ${errs} failed: ${d.errors.join(', ')}`)
+    } else {
+      toastSuccess(`Deleted ${d.deleted} item${d.deleted > 1 ? 's' : ''}.`)
+    }
     clearSelection()
     load('files')
     refreshTreeAt(filePath)
@@ -738,8 +745,8 @@
       method: 'POST', body: JSON.stringify({ paths, dest: name.trim() })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Zip failed'; return }
-    uploadMsg = `Created ${name}.`
+    if (!r.ok) { toastError(d.error || 'Zip failed'); return }
+    toastSuccess(`Created ${name}.`)
     clearSelection()
     load('files')
   }
@@ -755,8 +762,8 @@
       method: 'POST', body: JSON.stringify({ path: sub })
     })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { uploadMsg = d.error || 'Extract failed'; return }
-    uploadMsg = `Extracted ${name}.`
+    if (!r.ok) { toastError(d.error || 'Extract failed'); return }
+    toastSuccess(`Extracted ${name}.`)
     load('files')
     refreshTreeAt(filePath)
   }
@@ -799,7 +806,7 @@
     const d = await r.json().catch(() => ({}))
     chmod.busy = false
     if (!r.ok) { chmod.err = d.error || 'Chmod failed'; return }
-    uploadMsg = `${chmod.name} → ${chmodPreview} (${chmodOctal})`
+    toastSuccess(`${chmod.name} → ${chmodPreview} (${chmodOctal})`)
     closeChmod()
     load('files')
   }
@@ -1427,9 +1434,6 @@
         {/if}
       </div>
 
-      {#if uploadMsg}
-        <div class="note" style="margin:14px 18px"><div>{uploadMsg}</div></div>
-      {/if}
         </div><!-- /.fm-main -->
       </div><!-- /.fm-split -->
     </div>

@@ -1,540 +1,1054 @@
-/*
- * auraCP — Adminer theme (v0.2.40 enterprise rewrite)
+/*!
+ * Adminer Control Panel — drop-in theme for Adminer 5.x
+ * --------------------------------------------------------
+ * Replaces the default adminer.css. Matches Adminer's actual DOM
+ * (#menu, #h1, #dbs, #schemas, #tables, #breadcrumb, .jush-*, etc.)
  *
- * Adminer ships an HTML structure unchanged since ~2010: #menu is the left
- * sidebar, #content is the main panel, #breadcrumb floats at the top, forms
- * use <table> for layout, "the version footer" + theme-switcher live at the
- * bottom of #content. We don't control the HTML — only what CSS can reach.
- * But CSS can do a lot when used aggressively.
+ * Design: Manrope, blue #3b82f6 accent, dark-first with light theme.
+ * Switch theme by setting [data-acp-theme="light"|"dark"] on <html>;
+ * the bootstrap script in index.php handles persistence.
  *
- * Design goals for this pass:
- *   • Real enterprise SaaS feel — Linear / Vercel / Supabase territory
- *   • Sticky sidebar that doesn't scroll with the page
- *   • Sticky table headers on long result sets
- *   • Card-style content sections with consistent 24-px gutter
- *   • Strong information hierarchy: 14px body / 11px uppercase metadata /
- *     16px headlines / mono for code + identifiers
- *   • Subtle dividers, no zebra striping, hover-row highlight only
- *   • All buttons read as either primary (aura) or secondary (surface-1)
- *   • Hide Adminer's version footer + theme-switcher (cruft on a managed install)
+ * Drop-in: rename to `adminer.css` and place alongside `adminer.php`.
  */
 
-/* Inlined font import: Manrope display + JetBrains Mono code.
-   Adminer is same-origin with the panel under /_adminer/ so this caches once. */
+/* =========================================================
+   1. Imports & resets
+   ========================================================= */
 @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ─── design tokens ──────────────────────────────────────────────────────── */
-:root {
-    --ink:        #0a0b0f;
-    --surface-0:  #222630;
-    --surface-1:  #2c3039;
-    --surface-2:  #363b46;
-    --surface-3:  #414754;
-    --line:       rgba(255,255,255,.06);
-    --line-2:     rgba(255,255,255,.13);
-    --txt:        #eef0f4;
-    --txt-2:      #a8aebb;
-    --txt-3:      #7a8190;
-    --aura:       #38e3a3;
-    --aura-strong:#38e3a3;
-    --aura-ink:   #04130d;
-    --aura-glow:  rgba(56,227,163,.16);
-    --down:       #ff6063;
-    --down-soft:  rgba(255,96,99,.14);
-    --warn:       #f5b75a;
-    --warn-soft:  rgba(245,183,90,.14);
-    --info:       #a89bff;
-    --radius:     10px;
-    --radius-sm:  6px;
-    --radius-pill:999px;
-    --shadow:     0 1px 2px rgba(0,0,0,.25), 0 12px 28px -16px rgba(0,0,0,.55);
-    --fs-ui:      "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-    --fs-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-
-    /* Layout dimensions */
-    --sidebar-w:  240px;
-    --header-h:   54px;
-    --gutter:     24px;
-}
-
-/* ─── reset + base ───────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; }
 
-body {
-    background: var(--ink);
-    color: var(--txt);
-    font-family: var(--fs-ui);
-    font-size: 13.5px;
-    line-height: 1.55;
-    letter-spacing: -.005em;
-    -webkit-font-smoothing: antialiased;
-    font-feature-settings: "cv11" 1, "ss01" 1;
+/* =========================================================
+   2. Design tokens — dark first, light override
+   ========================================================= */
+:root {
+  --acp-font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --acp-font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --acp-accent:        #3b82f6;
+  --acp-accent-hover:  #60a5fa;
+  --acp-accent-soft:   rgba(59,130,246,0.12);
+  --acp-accent-strong: rgba(59,130,246,0.22);
+  --acp-accent-ring:   rgba(59,130,246,0.32);
+
+  --acp-success: #10b981;
+  --acp-warning: #f59e0b;
+  --acp-danger:  #ef4444;
+  --acp-purple:  #a78bfa;
+
+  --acp-radius-sm: 5px;
+  --acp-radius:    7px;
+  --acp-radius-lg: 10px;
+
+  /* DARK (default) */
+  --acp-bg:           #0a0a0c;
+  --acp-bg-elev:      #111114;
+  --acp-surface:      #131317;
+  --acp-surface-2:    #18181d;
+  --acp-surface-hover:#1e1e24;
+  --acp-border:       #232329;
+  --acp-border-strong:#2c2c34;
+  --acp-text:         #ededf0;
+  --acp-text-muted:   #8b8b94;
+  --acp-text-faint:   #5c5c66;
+  --acp-code-bg:      #0d0d10;
+  --acp-row-stripe:   rgba(255,255,255,0.018);
+  --acp-row-hover:    rgba(255,255,255,0.04);
+  --acp-shadow-md:    0 8px 24px -8px rgba(0,0,0,0.5);
+  --acp-icon-invert:  1;
 }
 
-/* Synthetic top header: built from CSS only, anchored as a fixed bar across
-   the entire viewport. The actual content sits below it via padding-top.
-   This is the trick that makes Adminer feel like a real app — we can't
-   inject DOM, but we can fake a header with a fixed-position pseudo strip. */
-body::before {
-    content: "";
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: var(--header-h);
-    background: var(--surface-0);
-    border-bottom: 1px solid var(--line);
-    z-index: 99;
-    pointer-events: none;
+html[data-acp-theme="light"] {
+  --acp-bg:           #ffffff;
+  --acp-bg-elev:      #fbfbfc;
+  --acp-surface:      #ffffff;
+  --acp-surface-2:    #f6f6f8;
+  --acp-surface-hover:#f1f1f4;
+  --acp-border:       #e8e8ec;
+  --acp-border-strong:#d8d8de;
+  --acp-text:         #0a0a0c;
+  --acp-text-muted:   #57575f;
+  --acp-text-faint:   #9a9aa3;
+  --acp-code-bg:      #f7f7f9;
+  --acp-row-stripe:   rgba(15,15,20,0.02);
+  --acp-row-hover:    rgba(15,15,20,0.04);
+  --acp-shadow-md:    0 8px 24px -10px rgba(15,15,20,0.12);
+  --acp-icon-invert:  0;
 }
 
-/* Top-right brand mark inside the synthetic header. Picks up the page <h1>
-   text via no DOM tricks — we just place a static label here. */
-body::after {
-    content: "auraCP · Database";
-    position: fixed;
-    top: 0;
-    left: var(--gutter);
-    height: var(--header-h);
-    display: flex;
-    align-items: center;
-    z-index: 100;
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: -.015em;
-    color: var(--txt);
-    pointer-events: none;
+/* =========================================================
+   3. Document & body
+   ========================================================= */
+html, body {
+  background: var(--acp-bg);
+  color: var(--acp-text);
+  font-family: var(--acp-font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  cursor: default;
+  margin: 0;
+  padding: 0;
+}
+::selection { background: var(--acp-accent-strong); }
+
+/* Adminer ships ltr/rtl body classes — keep both working */
+.ltr, .rtl { unicode-bidi: plaintext; }
+
+/* Scrollbars */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--acp-border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--acp-text-faint); background-clip: padding-box; }
+
+/* Links — Adminer uses raw <a> everywhere */
+a, a:link {
+  color: var(--acp-accent);
+  text-decoration: none;
+  transition: color 100ms;
+}
+a:visited { color: var(--acp-accent); }
+a:hover, a:visited:hover {
+  color: var(--acp-accent-hover);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
-/* ─── sidebar (#menu) ────────────────────────────────────────────────────── */
+/* Monospace */
+code, pre, .mono, .jush, .jush * {
+  font-family: var(--acp-font-mono);
+}
+
+/* =========================================================
+   4. Layout — #menu sidebar + #content main
+   Adminer sizes the sidebar via inline ~21em assumption.
+   We pin #menu fixed at left and offset #content.
+   ========================================================= */
 #menu {
-    position: fixed;
-    top: var(--header-h);
-    left: 0;
-    bottom: 0;
-    width: var(--sidebar-w);
-    background: var(--surface-0);
-    border-right: 1px solid var(--line);
-    padding: 18px 12px 24px;
-    overflow-y: auto;
-    z-index: 50;
-    font-size: 13px;
+  position: fixed;
+  top: 0; left: 0; bottom: 0;
+  width: 21em;
+  padding: 16px 14px 24px !important;
+  margin: 0;
+  background: var(--acp-bg-elev);
+  border-right: 1px solid var(--acp-border);
+  overflow-y: auto;
+  z-index: 5;
 }
-#menu h1 {
-    margin: 0 6px 14px;
-    padding-bottom: 14px;
-    border-bottom: 1px solid var(--line);
-    font-size: 12px;
-    color: var(--txt-3);
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    font-weight: 700;
-}
-#menu h1 a {
-    color: var(--aura-strong);
-    text-decoration: none;
-    font-size: 12px;
-}
-#menu h1 .h1 { display: none; }   /* hide the dated Adminer logo image */
-#menu p {
-    margin: 18px 6px 6px;
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    color: var(--txt-3);
-    font-weight: 700;
-}
-#menu p:first-of-type { margin-top: 0; }
-#menu p img { display: none; }    /* hide Adminer's inline icon images */
+.rtl #menu { left: auto; right: 0; border-right: 0; border-left: 1px solid var(--acp-border); }
 
-#menu a {
-    display: block;
-    padding: 7px 12px;
-    border-radius: var(--radius-sm);
-    margin: 1px 0;
-    color: var(--txt-2);
-    text-decoration: none;
-    font-size: 13px;
-    transition: background-color .1s, color .1s;
-    word-break: break-word;
-}
-#menu a:hover { background: var(--surface-1); color: var(--txt); }
-#menu a.active, #menu a.select { background: var(--aura-glow); color: var(--aura-strong); font-weight: 600; }
-
-#menu .links, #menu .links br { display: block; }
-#menu .links { margin: 4px 6px 0; }
-#menu form, #menu form input { margin: 6px 0; }
-#menu form input[type=submit] { width: 100%; }
-#menu form select { width: 100%; }
-
-/* Logout button styled distinctly so destructive actions don't look like nav. */
-#logout {
-    position: fixed;
-    top: 0;
-    right: var(--gutter);
-    height: var(--header-h);
-    display: flex;
-    align-items: center;
-    z-index: 100;
-}
-#logout input[type=submit] {
-    background: transparent;
-    color: var(--txt-2);
-    border: 1px solid var(--line-2);
-    box-shadow: none;
-    padding: 6px 14px;
-    font-size: 12px;
-    border-radius: var(--radius-pill);
-}
-#logout input[type=submit]:hover { background: var(--surface-1); color: var(--txt); border-color: var(--txt-3); }
-
-/* ─── main content + breadcrumb ──────────────────────────────────────────── */
 #content {
-    margin: 0 0 0 var(--sidebar-w);
-    padding: calc(var(--header-h) + 16px) var(--gutter) 48px;
-    max-width: none;
-    min-height: 100vh;
-    background: var(--ink);
+  margin: 0 0 0 21em !important;
+  padding: 22px 28px 60px !important;
+  background: var(--acp-bg);
+  min-height: 100vh;
+}
+.rtl #content { margin: 0 21em 0 0 !important; }
+
+/* =========================================================
+   5. Brand header in sidebar (#h1 → "Adminer" with version)
+   ========================================================= */
+#menu h1 {
+  margin: 0 0 14px !important;
+  padding: 0 4px 14px !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--acp-border) !important;
+  font-size: 15px;
+  font-weight: 600;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  letter-spacing: -0.01em;
+}
+.rtl #menu h1 { direction: ltr; }
+#menu #h1, #menu h1 a {
+  color: var(--acp-text) !important;
+  text-decoration: none !important;
+  margin: 0 !important;
+}
+#menu h1 .version {
+  color: var(--acp-text-faint);
+  font-size: 11px;
+  font-weight: 400;
+  margin-left: 6px;
 }
 
+/* Brand chrome injected by index.php */
+.acp-brand { display: inline-flex; align-items: center; gap: 10px; }
+.acp-mark {
+  width: 26px; height: 26px; border-radius: 7px;
+  background: linear-gradient(135deg, var(--acp-accent) 0%, #1d4ed8 100%);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: #fff; font-weight: 700; font-size: 13px;
+  letter-spacing: -0.04em; flex-shrink: 0;
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset, 0 2px 4px rgba(0,0,0,0.2);
+}
+.acp-tagline {
+  padding: 0 4px 12px;
+  font-size: 11px;
+  color: var(--acp-text-faint);
+  letter-spacing: 0.01em;
+}
+
+/* =========================================================
+   6. Menu sections — #menu p, #menu ul carry the nav blocks
+   ========================================================= */
+#menu p, #menu ul {
+  margin: 0 !important;
+  padding: 8px 4px !important;
+  border: 0 !important;
+  background: transparent !important;
+  list-style: none;
+}
+#menu p + p, #menu ul + p, #menu p + ul {
+  border-top: 1px solid var(--acp-border) !important;
+  margin-top: 6px !important;
+  padding-top: 12px !important;
+}
+
+#menu p.error, #menu p.message {
+  margin: 8px 0 !important;
+  padding: 8px 10px !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--acp-radius);
+  font-size: 12px;
+}
+#menu p.error {
+  background: rgba(239,68,68,0.10);
+  border-color: rgba(239,68,68,0.25) !important;
+  color: var(--acp-danger);
+}
+#menu p.message {
+  background: rgba(16,185,129,0.10);
+  border-color: rgba(16,185,129,0.25) !important;
+  color: var(--acp-success);
+}
+
+/* #dbs and #schemas: combobox blocks (System / Server / DB selector) */
+#dbs, #schemas {
+  padding: 6px 4px !important;
+  font-size: 12.5px;
+  color: var(--acp-text-muted);
+}
+#menu #dbs span,
+#menu p label,
+#menu form label {
+  color: var(--acp-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  display: block;
+  margin-bottom: 4px;
+}
+
+#dbs select, #schemas select {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* #logins (re-login dropdown) and #lang (language picker) */
+#logins, #lang {
+  font-size: 12px;
+}
+#lang {
+  padding: 10px 4px !important;
+  border-top: 1px solid var(--acp-border) !important;
+  margin-top: 12px !important;
+  color: var(--acp-text-faint);
+}
+#lang select { width: auto; min-width: 130px; }
+
+/* Sub-nav action links (p.links inside menu) — SQL, Import, Dump, Privileges, etc. */
+#menu p.links, #menu .links {
+  display: flex !important;
+  flex-wrap: wrap;
+  gap: 2px !important;
+  padding: 6px 0 !important;
+  margin: 4px 0 !important;
+  border-top: 1px solid var(--acp-border) !important;
+  border-bottom: 1px solid var(--acp-border) !important;
+}
+#menu p.links a, #menu .links a {
+  display: flex !important;
+  align-items: center;
+  width: auto !important;
+  margin: 0 !important;
+  padding: 6px 10px !important;
+  border-radius: var(--acp-radius-sm);
+  font-size: 12.5px;
+  color: var(--acp-text-muted) !important;
+  text-decoration: none !important;
+}
+#menu p.links a:hover, #menu .links a:hover {
+  background: var(--acp-surface-hover);
+  color: var(--acp-text) !important;
+  text-decoration: none !important;
+}
+#menu p.links a.active, #menu .links a.active {
+  background: var(--acp-accent-soft);
+  color: var(--acp-accent) !important;
+  font-weight: 500;
+}
+
+/* =========================================================
+   7. #tables — table list in the sidebar
+   ========================================================= */
+#menu #tables {
+  font-size: 12.5px !important;
+  padding: 6px 0 !important;
+  margin-top: 4px !important;
+  border-top: 1px solid var(--acp-border) !important;
+}
+#menu #tables li { margin: 0 !important; padding: 0 !important; }
+#menu #tables a, #tables a {
+  display: inline-flex !important;
+  align-items: center;
+  padding: 5px 8px !important;
+  border-radius: var(--acp-radius-sm) !important;
+  background: transparent !important;
+  color: var(--acp-text-muted) !important;
+  text-decoration: none !important;
+  font-size: 12.5px;
+  transition: background 80ms, color 80ms;
+}
+#menu #tables a:hover, #tables a:hover {
+  background: var(--acp-surface-hover) !important;
+  color: var(--acp-text) !important;
+  text-decoration: none !important;
+}
+#menu #tables a.select.active,
+#menu #tables a.structure.active,
+#menu #tables a.select.active + .structure,
+#menu #tables a.active.structure {
+  background: var(--acp-accent-soft) !important;
+  color: var(--acp-accent) !important;
+  font-weight: 500;
+}
+#menu #tables a.view { color: var(--acp-text-faint) !important; }
+
+/* =========================================================
+   8. #breadcrumb
+   Original puts it at left:23em — re-anchor next to our 21em sidebar
+   ========================================================= */
 #breadcrumb {
-    background: transparent;
-    border: none;
-    padding: 0;
-    margin: 0 0 14px;
-    font-size: 12px;
-    color: var(--txt-3);
-    display: block;
+  position: fixed;
+  top: 0;
+  left: 21em;
+  right: 0;
+  z-index: 4;
+  height: 44px;
+  padding: 0 20px !important;
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--acp-bg-elev) !important;
+  border-bottom: 1px solid var(--acp-border);
+  color: var(--acp-text-muted) !important;
+  font-size: 12.5px;
+  font-weight: 500;
 }
-#breadcrumb a { color: var(--txt-2); text-decoration: none; }
-#breadcrumb a:hover { color: var(--txt); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-#breadcrumb::before { content: ""; }   /* drop the leading '»' separator */
+.rtl #breadcrumb { left: 0; right: 21em; }
+#breadcrumb a, #breadcrumb a:link, #breadcrumb a:visited {
+  color: var(--acp-text-muted) !important;
+  font-weight: 400;
+}
+#breadcrumb a:hover { color: var(--acp-text) !important; text-decoration: none !important; }
 
-/* Page title (Adminer renders <h2> after #breadcrumb for the active section) */
-#content h2 {
-    font-size: 22px;
-    font-weight: 700;
-    letter-spacing: -.025em;
-    margin: 4px 0 22px;
-    color: var(--txt);
-}
-#content h3 {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--txt-2);
-    margin: 22px 0 10px;
-    text-transform: none;
-    letter-spacing: -.01em;
-}
-#content h3 + form, #content h3 + table { margin-top: 0; }
+/* push content below the fixed breadcrumb */
+#content { padding-top: 64px !important; }
 
-/* ─── card-style section wrappers ────────────────────────────────────────── */
-/* Adminer wraps each major form/table in a fieldset OR a free-floating
-   <form>. Force-style both as cards so the page reads as a sequence of
-   distinct sections rather than a wall of fields. */
-#content > form, #content > fieldset {
-    background: var(--surface-0);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 18px 22px;
-    margin: 14px 0;
-    box-shadow: var(--shadow);
+/* =========================================================
+   9. Headings
+   h1 = page title  ·  h2 = subsection / fixed action bar at >=1440px
+   ========================================================= */
+h1 {
+  padding: 0 0 14px !important;
+  margin: 0 0 18px !important;
+  background: transparent !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--acp-border) !important;
+  text-align: left !important;
+  color: var(--acp-text) !important;
+  font-size: 22px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.02em;
 }
-#content > p { margin: 8px 0; color: var(--txt-2); }
+h2 {
+  padding: 12px 16px !important;
+  margin: 22px 0 14px !important;
+  background: var(--acp-surface) !important;
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius-lg) !important;
+  color: var(--acp-text) !important;
+  font-size: 15px !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+}
+.ltr h2, .rtl h2 { margin: 22px 0 14px !important; }
+h3 {
+  margin: 18px 0 8px !important;
+  padding: 0 !important;
+  color: var(--acp-text-muted) !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 
-fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 12px 16px; margin: 12px 0; }
-legend {
-    color: var(--txt-2);
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    font-weight: 700;
-    padding: 0 8px;
+/* The "fixed action bar" h2 at >=1440px is a Save/Execute strip */
+@media only screen and (min-width: 1440px) {
+  #content h2 {
+    position: fixed;
+    bottom: 12px;
+    right: 24px;
+    margin: 0 !important;
+    padding: 8px 14px !important;
+    background: var(--acp-surface) !important;
+    border: 1px solid var(--acp-border) !important;
+    border-radius: var(--acp-radius-lg) !important;
+    box-shadow: var(--acp-shadow-md);
+    font-size: 13px !important;
+    z-index: 20;
+  }
+  .ltr #content { margin: 0 0 0 21em !important; padding: 64px 24px 24px !important; border-top: 0 !important; }
+  .rtl #content { margin: 0 21em 0 0 !important; padding: 64px 24px 24px !important; border-top: 0 !important; }
 }
 
-/* ─── links ──────────────────────────────────────────────────────────────── */
-a {
-    color: var(--aura-strong);
-    text-decoration: none;
-    transition: color .1s;
+/* =========================================================
+   10. Fieldsets, forms, inputs, buttons
+   ========================================================= */
+fieldset {
+  margin: 12px 0 !important;
+  padding: 14px 16px !important;
+  background: var(--acp-surface) !important;
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius-lg) !important;
+  font-size: 13px !important;
 }
-a:hover { color: color-mix(in srgb, var(--aura-strong) 75%, white); text-decoration: underline; text-decoration-thickness: 1.5px; text-underline-offset: 3px; }
-a:visited { color: var(--aura-strong); }
+fieldset legend {
+  padding: 0 8px !important;
+  background: transparent !important;
+  border: 0 !important;
+  color: var(--acp-text-muted) !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+fieldset legend span { color: var(--acp-text-faint) !important; font-weight: 400; }
 
-/* Action links inside content (Adminer renders them as " · "-separated
-   anchors). Style them as ghost pills. */
-#content > p > a, #content > h2 + p > a, .links > a {
-    display: inline-block;
-    padding: 5px 12px;
-    border-radius: var(--radius-pill);
-    background: var(--surface-1);
-    border: 1px solid var(--line-2);
-    color: var(--txt);
-    font-size: 12.5px;
-    font-weight: 500;
-    margin: 0 4px 4px 0;
-    text-decoration: none;
-}
-#content > p > a:hover, .links > a:hover { background: var(--surface-2); border-color: var(--txt-3); text-decoration: none; }
+label { color: var(--acp-text-muted); font-size: 13px; }
+label.block { display: block; margin: 4px 0; }
+p label { font-size: 12.5px; }
 
-/* ─── forms ──────────────────────────────────────────────────────────────── */
-input, select, textarea {
-    font-family: var(--fs-ui);
-    font-size: 13.5px;
-    background: var(--surface-1);
-    color: var(--txt);
-    border: 1px solid var(--line-2);
-    border-radius: var(--radius-sm);
-    padding: 8px 11px;
-    line-height: 1.45;
-    transition: border-color .1s, box-shadow .1s;
-    outline: none;
-}
-input:focus, select:focus, textarea:focus {
-    border-color: var(--aura-strong);
-    box-shadow: 0 0 0 3px var(--aura-glow);
+/* Inputs */
+input[type="text"], input[type="password"], input[type="email"],
+input[type="number"], input[type="search"], input[type="url"],
+input[type="tel"], input[type="datetime-local"], input[type="date"],
+input[type="time"], input[type="month"], input[type="week"],
+select, textarea {
+  background: var(--acp-surface-2) !important;
+  border: 1px solid var(--acp-border) !important;
+  color: var(--acp-text) !important;
+  border-radius: var(--acp-radius) !important;
+  padding: 6px 10px !important;
+  height: 32px;
+  font-size: 13px !important;
+  font-family: var(--acp-font-sans) !important;
+  outline: none;
+  transition: border-color 120ms, box-shadow 120ms;
+  box-sizing: border-box;
 }
 textarea {
-    font-family: var(--fs-mono);
-    font-size: 13px;
-    line-height: 1.55;
-    resize: vertical;
-    min-height: 80px;
+  height: auto !important;
+  min-height: 90px;
+  font-family: var(--acp-font-mono) !important;
+  font-size: 12.5px !important;
+  line-height: 1.55;
+  padding: 9px 11px !important;
 }
-input[type=checkbox], input[type=radio] {
-    accent-color: var(--aura-strong);
-    width: 14px; height: 14px;
-    vertical-align: middle;
-    margin: 0 6px 0 0;
+input:focus, select:focus, textarea:focus {
+  border-color: var(--acp-accent) !important;
+  box-shadow: 0 0 0 3px var(--acp-accent-soft);
+}
+input::placeholder, textarea::placeholder { color: var(--acp-text-faint); }
+.size { width: 8ex; }
+
+/* Checkboxes & radios — keep native but tint */
+input[type="checkbox"], input[type="radio"] {
+  accent-color: var(--acp-accent);
+  width: 14px; height: 14px;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
 }
 
-/* Primary button = aura gradient pill */
-input[type=submit], button:not(.icon) {
-    background: linear-gradient(180deg, color-mix(in srgb, var(--aura) 88%, white), var(--aura));
-    color: var(--aura-ink);
-    border: 1px solid transparent;
-    border-radius: var(--radius-pill);
-    padding: 8px 18px;
-    font-weight: 600;
-    font-size: 12.5px;
-    cursor: pointer;
-    transition: filter .1s, transform .08s;
-    box-shadow: 0 1px 2px rgba(0,0,0,.18), 0 10px 22px -10px var(--aura);
-    font-family: var(--fs-ui);
-    letter-spacing: -.005em;
+/* Submit & button — base */
+input[type="submit"], input[type="button"], button {
+  background: var(--acp-surface-2);
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius) !important;
+  color: var(--acp-text);
+  padding: 0 12px !important;
+  height: 32px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--acp-font-sans);
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-input[type=submit]:hover, button:not(.icon):hover { filter: brightness(1.05); transform: translateY(-1px); }
-input[type=submit]:active, button:not(.icon):active { transform: translateY(0); }
-input[type=submit][disabled], button[disabled] { opacity: .55; cursor: not-allowed; transform: none; box-shadow: none; }
-
-/* Secondary buttons (logout, cancel, anything else that should look quiet) */
-input[type=submit][name=logout],
-input[type=submit][value*=Cancel i],
-input[type=submit].cancel {
-    background: var(--surface-1);
-    color: var(--txt);
-    border: 1px solid var(--line-2);
-    box-shadow: none;
+input[type="submit"]:enabled:hover,
+input[type="button"]:enabled:hover,
+button:hover {
+  background: var(--acp-surface-hover) !important;
+  border-color: var(--acp-border-strong) !important;
 }
-input[type=submit][name=logout]:hover,
-input[type=submit][value*=Cancel i]:hover { background: var(--surface-2); border-color: var(--txt-3); }
+input[type="submit"]:disabled, button:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
 
-/* Form table layouts — Adminer uses <table> for forms (legacy). Override
-   to make spacing readable. */
-form table { border: none; background: transparent; box-shadow: none; }
-form table th, form table td { border: none; padding: 6px 10px; vertical-align: middle; background: transparent; }
-form table th { text-align: right; color: var(--txt-2); font-weight: 500; font-size: 12.5px; padding-right: 14px; }
-form table tr:hover { background: transparent; }
+/* "Primary" submit: the main action of any form (named Login, Save, Execute, …) */
+input[type="submit"][value="Login"],
+input[type="submit"][value="Save"],
+input[type="submit"][value="Execute"],
+input[type="submit"][value="Connect"],
+input[type="submit"][value="Import"],
+input[type="submit"][value="Export"],
+input[type="submit"][value="Send"],
+input[type="submit"][value="Continue"] {
+  background: var(--acp-accent) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+}
+input[type="submit"][value="Login"]:hover,
+input[type="submit"][value="Save"]:hover,
+input[type="submit"][value="Execute"]:hover,
+input[type="submit"][value="Connect"]:hover,
+input[type="submit"][value="Import"]:hover,
+input[type="submit"][value="Export"]:hover,
+input[type="submit"][value="Send"]:hover,
+input[type="submit"][value="Continue"]:hover {
+  background: var(--acp-accent-hover) !important;
+}
 
-/* ─── data tables ────────────────────────────────────────────────────────── */
+/* Logout (sits top-right in the original) */
+.logout {
+  position: absolute;
+  top: 14px; right: 24px;
+  margin: 0 !important;
+}
+.logout input[type="submit"] {
+  background: transparent !important;
+  border: 1px solid var(--acp-border) !important;
+  color: var(--acp-text-muted) !important;
+  height: 28px;
+  font-size: 12px;
+}
+.logout input[type="submit"]:hover {
+  color: var(--acp-danger) !important;
+  border-color: rgba(239,68,68,0.3) !important;
+}
+
+/* p.links above tables — secondary action row */
+p.links, .links {
+  margin: 8px 0 14px !important;
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+p.links a, .links a {
+  display: inline-flex !important;
+  align-items: center;
+  margin: 0 !important;
+  padding: 0 10px !important;
+  height: 28px;
+  border-radius: var(--acp-radius-sm);
+  background: var(--acp-surface-2);
+  border: 1px solid var(--acp-border);
+  color: var(--acp-text) !important;
+  font-size: 12.5px;
+  text-decoration: none !important;
+}
+p.links a:hover, .links a:hover {
+  background: var(--acp-surface-hover);
+  border-color: var(--acp-border-strong);
+  text-decoration: none !important;
+}
+
+/* Count helper paragraph */
+p.count {
+  font-size: 12px !important;
+  color: var(--acp-text-muted);
+  margin: 8px 0 !important;
+}
+
+/* =========================================================
+   11. Tables (data grids)
+   ========================================================= */
 table {
-    width: 100%;
-    border-collapse: separate;
-    border-spacing: 0;
-    margin: 0;
-    background: var(--surface-0);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    overflow: hidden;
-    font-size: 13px;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background: var(--acp-surface);
+  border: 1px solid var(--acp-border);
+  border-radius: var(--acp-radius-lg);
+  overflow: hidden;
+  margin: 6px 0 14px !important;
+  width: auto;
 }
-th, td {
-    padding: 10px 14px;
-    border: none;
-    border-bottom: 1px solid var(--line);
-    text-align: left;
-    vertical-align: top;
-}
-tr:last-child th, tr:last-child td { border-bottom: none; }
-thead th, table.checkable th {
-    background: var(--surface-1);
-    color: var(--txt-3);
-    font-weight: 600;
-    font-size: 10.5px;
-    text-transform: uppercase;
-    letter-spacing: .08em;
-    border-bottom: 1px solid var(--line-2);
-    position: sticky;
-    top: var(--header-h);
-    z-index: 10;
-}
-tbody tr:hover { background: var(--surface-1); }
+table, td, th { border: 0; }
 
-/* Cell-type accents — Adminer adds td classes for known types. */
-td.number, td.bigint, td.int, td.tinyint, td.decimal, td.float, td.double {
-    font-family: var(--fs-mono);
-    text-align: right;
-    color: var(--info);
-    font-feature-settings: "tnum" 1;
+/* Header */
+thead { position: sticky; top: 44px; z-index: 1; }
+thead tr { height: auto; }
+thead th, thead td {
+  background: var(--acp-surface-2) !important;
+  color: var(--acp-text-faint) !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 9px 12px !important;
+  text-align: left !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--acp-border) !important;
 }
-td.varchar, td.text, td.char, td.string {
-    font-family: var(--fs-mono);
-    font-size: 12.5px;
-    color: var(--txt-2);
+thead th { white-space: nowrap; }
+thead th a, thead th a:link, thead th a:visited {
+  color: var(--acp-text-faint) !important;
+  font-weight: 500;
 }
-td.null { color: var(--txt-3); font-style: italic; }
-td.function, td.type { color: var(--txt-3); font-size: 11.5px; }
+thead th a:hover { color: var(--acp-text) !important; text-decoration: none !important; }
 
-/* Checkboxes inside tables compact */
-td input[type=checkbox] { margin: 0; }
-
-/* Action links inside a row */
-td a { color: var(--aura-strong); }
-
-/* ─── messages ───────────────────────────────────────────────────────────── */
-.error, .message {
-    padding: 11px 16px;
-    border-radius: var(--radius-sm);
-    border: 1px solid transparent;
-    margin: 12px 0;
-    font-size: 13px;
-    line-height: 1.5;
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
+/* Body cells */
+tbody { font-size: 13px !important; }
+tbody td, tbody th {
+  padding: 8px 12px !important;
+  border: 0 !important;
+  border-bottom: 1px solid var(--acp-border) !important;
+  vertical-align: middle;
+  background: var(--acp-surface) !important;
+  color: var(--acp-text) !important;
 }
-.error  { background: var(--down-soft); color: var(--down); border-color: color-mix(in srgb, var(--down) 32%, transparent); }
-.message{ background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 32%, transparent); }
-.error::before  { content: "⚠"; flex: none; }
-.message::before{ content: "✓"; flex: none; font-weight: 700; }
+tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0 !important; }
+tbody th { background: var(--acp-surface-2) !important; color: var(--acp-text-muted) !important; font-weight: 500; }
 
-/* ─── SQL editor + code blocks ───────────────────────────────────────────── */
-.sqlarea, textarea[name="query"] {
-    background: #0d1015;
-    color: var(--txt);
-    font-family: var(--fs-mono);
-    font-size: 13px;
-    line-height: 1.55;
-    border: 1px solid var(--line-2);
-    border-radius: var(--radius-sm);
-    padding: 14px 16px;
-    tab-size: 2;
-    min-height: 140px;
+/* Row body links — Adminer styles them light on dark by default */
+tbody a, tbody a:link, tbody a:visited {
+  color: var(--acp-accent) !important;
 }
-.sqlarea:focus, textarea[name="query"]:focus {
-    border-color: var(--aura-strong);
-    box-shadow: 0 0 0 3px var(--aura-glow);
+tbody a:hover { color: var(--acp-accent-hover) !important; }
+
+/* Zebra striping (Adminer toggles `.odds` class) */
+.odds tbody tr:nth-child(2n) td,
+table.odds tbody tr:nth-child(2n) td {
+  background: var(--acp-row-stripe) !important;
+}
+.odds tbody tr:nth-child(2n) th { background: var(--acp-surface-2) !important; }
+
+/* Hover */
+tbody tr:hover td,
+tbody tr:hover th {
+  background: var(--acp-row-hover) !important;
 }
 
-code, pre, kbd, samp {
-    font-family: var(--fs-mono);
-    font-size: 12.5px;
-    color: var(--txt);
+/* Checked rows */
+.js .checkable thead .checked td,
+.js .checkable thead .checked th {
+  background: var(--acp-accent) !important;
+  color: #fff !important;
 }
+.js .checkable .checked td,
+table.checkable tbody tr.checked td,
+table.checkable tbody tr.checked th {
+  background: var(--acp-accent-soft) !important;
+  color: var(--acp-text) !important;
+}
+.js .checkable.odds tr.checked:nth-child(2n) td,
+.js .checkable.odds tr.checked:nth-child(2n) th {
+  background: var(--acp-accent-soft) !important;
+}
+table.checkable tbody tr.checked:hover td,
+table.checkable tbody tr.checked:hover th {
+  background: var(--acp-accent-strong) !important;
+}
+table.checkable tbody tr.checked a { color: var(--acp-accent-hover) !important; }
+
+/* Numeric cell – right-aligned mono */
+table td.number, table td[class*="number"] {
+  text-align: right;
+  font-family: var(--acp-font-mono);
+  font-size: 12.5px;
+}
+/* NULL cells */
+table td i, table td .null, tbody td[id*="null"] i {
+  color: var(--acp-text-faint) !important;
+  font-style: italic;
+}
+
+/* Edit-fields hover override from original */
+#edit-fields tbody tr:hover td, #edit-fields tbody tr:hover th {
+  background: var(--acp-row-hover) !important;
+}
+
+/* Column hover popup */
+.js .column {
+  position: absolute;
+  background: var(--acp-surface) !important;
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius);
+  opacity: 0.98;
+  padding: 4px 10px !important;
+  margin-top: 28px;
+  color: var(--acp-text) !important;
+  box-shadow: var(--acp-shadow-md);
+}
+
+/* =========================================================
+   12. Code, pre, SQL highlighter (jush.js)
+   ========================================================= */
+code, .code-inline {
+  background: var(--acp-code-bg) !important;
+  border: 1px solid var(--acp-border);
+  padding: 1px 6px !important;
+  border-radius: 5px;
+  font-size: 12px !important;
+  color: var(--acp-text) !important;
+}
+table code { background: var(--acp-code-bg) !important; padding: 1px 6px !important; }
 pre {
-    background: var(--surface-1);
-    border: 1px solid var(--line);
-    border-radius: var(--radius-sm);
-    padding: 10px 14px;
-    overflow-x: auto;
+  background: var(--acp-code-bg) !important;
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius-lg) !important;
+  padding: 12px 14px !important;
+  font-size: 12.5px;
+  color: var(--acp-text);
+  overflow-x: auto;
 }
 
-/* Syntax-highlighted SQL output (Adminer's "jush" library) */
-.jush-php, .jush-sql, .jush, .jush * { font-family: var(--fs-mono); }
-.jush-sql_string, .jush-php_string { color: #e2a857; }
-.jush-sql_function, .jush-php_function { color: var(--info); }
-.jush-sql_number, .jush-php_number { color: #79c0ff; }
-.jush-sql_comment, .jush-php_comment { color: var(--txt-3); font-style: italic; }
-.jush-sql_keyword, .jush-php_reserved { color: var(--aura-strong); font-weight: 600; }
-
-/* ─── pagination ─────────────────────────────────────────────────────────── */
-.pages a, .pages b, .pages {
-    padding: 5px 12px;
-    border-radius: var(--radius-pill);
-    background: var(--surface-1);
-    border: 1px solid var(--line-2);
-    color: var(--txt);
-    font-size: 12px;
-    margin-right: 4px;
-    display: inline-block;
-    text-decoration: none;
+/* jush — the SQL/PHP token highlighter */
+code.jush-sql, code.jush-sqlset, code.jush-sqlstatus {
+  background: var(--acp-code-bg) !important;
+  color: var(--acp-text) !important;
+  display: inline-block;
+  padding: 2px 7px !important;
 }
-.pages a:hover { background: var(--surface-2); }
-.pages b { background: var(--aura-glow); color: var(--aura-strong); border-color: color-mix(in srgb, var(--aura-strong) 38%, transparent); font-weight: 600; }
+span.jush { font-size: 100%; }
+.jush-sql_code, .jush-sqlset .jush-sql_code,
+.jush-fun, span.jush-key, span.jush-sql_key { color: var(--acp-accent) !important; font-weight: 600; }
+.jush-quo, span.jush-quo, span.jush-apo { color: var(--acp-purple) !important; }
+.jush-num, span.jush-num { color: var(--acp-warning) !important; }
+.jush-com, span.jush-com { color: var(--acp-text-faint) !important; font-style: italic; }
+span.jush-bac { color: var(--acp-danger) !important; }
+code.jush-sqlset span.jush, code.jush-sqlstatus span.jush { color: var(--acp-accent) !important; }
+code.jush-sqlset span.jush a, code.jush-sqlstatus span.jush a { color: var(--acp-accent) !important; }
+a.jush-help:hover, a.jush-custom:hover { color: var(--acp-accent-hover) !important; }
 
-/* ─── scrollbar (Webkit + Firefox) ───────────────────────────────────────── */
-::-webkit-scrollbar      { width: 10px; height: 10px; }
-::-webkit-scrollbar-track{ background: var(--ink); }
-::-webkit-scrollbar-thumb{ background: var(--surface-2); border-radius: 5px; border: 2px solid var(--ink); }
-::-webkit-scrollbar-thumb:hover { background: var(--surface-3); }
-* { scrollbar-color: var(--surface-2) var(--ink); scrollbar-width: thin; }
-
-::selection { background: var(--aura-glow); color: var(--txt); }
-
-/* ─── hide Adminer cruft ─────────────────────────────────────────────────── */
-/* Version footer ("Adminer 4.8.1") + alternate theme switcher links */
-#content > p:last-child a[href*="adminer.org"],
-#content > p > a[href*="?"][href$="-en.css"],
-#content > p > a[href*="?"][href$="-fr.css"] { display: none; }
-
-/* Adminer's small image icons embedded inline (sort arrows, edit icons) —
-   tone them so they're readable against the dark surfaces but don't look
-   like wireframes. */
-img[src*="arrow"], img[src*="up.gif"], img[src*="down.gif"] {
-    filter: brightness(1.6) invert(.85); opacity: .7;
+/* =========================================================
+   13. Messages, errors, warnings
+   ========================================================= */
+.message, .error, .warning {
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 14px !important;
+  margin: 8px 0 14px !important;
+  border: 1px solid transparent !important;
+  border-radius: var(--acp-radius-lg) !important;
+  font-size: 13px !important;
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
 }
-input[type=image] { filter: brightness(1.6) invert(.85); opacity: .7; }
-input[type=image]:hover { opacity: 1; }
+.message {
+  background: rgba(16,185,129,0.10);
+  border-color: rgba(16,185,129,0.30) !important;
+  color: var(--acp-success);
+}
+.error {
+  background: rgba(239,68,68,0.10);
+  border-color: rgba(239,68,68,0.30) !important;
+  color: var(--acp-danger);
+}
+.warning {
+  background: rgba(245,158,11,0.10);
+  border-color: rgba(245,158,11,0.30) !important;
+  color: var(--acp-warning);
+}
+.message .time, .error .time { color: var(--acp-text-faint) !important; font-size: 11.5px; }
+.message a, .error a { color: inherit !important; text-decoration: underline; }
 
-/* ─── responsive — collapse the sidebar below 880 px ─────────────────────── */
-@media (max-width: 880px) {
-    :root { --sidebar-w: 0px; }
-    #menu {
-        position: static;
-        width: 100%;
-        height: auto;
-        border-right: none;
-        border-bottom: 1px solid var(--line);
-        padding: 14px 16px;
-    }
-    #content { margin: 0; padding: calc(var(--header-h) + 14px) 14px 32px; }
-    body::after { font-size: 13px; }
-    thead th { position: static; }   /* sticky breaks inside a non-static parent */
+/* =========================================================
+   14. Pagination, footer, load more
+   ========================================================= */
+.pages {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  margin: 12px 0 !important;
+}
+.pages a, .pages span {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 28px; padding: 0 10px;
+  border: 1px solid var(--acp-border);
+  border-radius: var(--acp-radius-sm);
+  background: var(--acp-surface-2);
+  color: var(--acp-text-muted) !important;
+  font-size: 12.5px;
+  text-decoration: none !important;
+}
+.pages a:hover { background: var(--acp-surface-hover); color: var(--acp-text) !important; }
+.pages .active, .pages strong {
+  background: var(--acp-accent) !important;
+  border-color: transparent !important;
+  color: #fff !important;
+  font-weight: 500;
 }
 
-/* ─── light mode override ────────────────────────────────────────────────── */
-@media (prefers-color-scheme: light) {
-    :root {
-        --ink:        #f4ebdc;
-        --surface-0:  #ffffff;
-        --surface-1:  #faf6f0;
-        --surface-2:  #f0eadf;
-        --surface-3:  #e4dcc8;
-        --line:       rgba(60,40,20,.10);
-        --line-2:     rgba(60,40,20,.18);
-        --txt:        #2b1e10;
-        --txt-2:      #5b4630;
-        --txt-3:      #846b50;
-        --aura:       #18a86b;
-        --aura-strong:#18a86b;
-        --aura-ink:   #ffffff;
-        --aura-glow:  rgba(24,168,107,.12);
-        --down:       #c5364a;
-        --down-soft:  rgba(197,54,74,.10);
-        --info:       #4a6cf7;
-        --shadow:     0 1px 2px rgba(80,55,30,.08), 0 12px 28px -16px rgba(80,55,30,.22);
-    }
-    .sqlarea, textarea[name="query"] { background: #fbf7ee; color: var(--txt); }
-    input[type=image] { filter: none; opacity: .55; }
-    input[type=image]:hover { opacity: 1; }
-    img[src*="arrow"], img[src*="up.gif"], img[src*="down.gif"] { filter: none; opacity: .55; }
+.footer {
+  border-top: 0 !important;
+  background: var(--acp-bg) !important;
+  margin: 16px 0 0 !important;
+}
+.footer > div {
+  background: var(--acp-bg-elev) !important;
+  border: 1px solid var(--acp-border);
+  border-radius: var(--acp-radius-lg);
+  padding: 12px 14px !important;
+}
+.footer + div { font-size: 12.5px; }
+
+.loadmore {
+  color: var(--acp-accent) !important;
+  font-size: 12.5px !important;
+  margin: 6px 0 !important;
+  display: inline-block;
+}
+
+#sum-Data_length, #sum-Index_length, #sum-Data_free {
+  background: var(--acp-accent-soft) !important;
+  color: var(--acp-accent) !important;
+}
+
+/* =========================================================
+   15. Help bubble, version, hidden noise
+   ========================================================= */
+#help {
+  background: var(--acp-surface) !important;
+  border: 1px solid var(--acp-border);
+  border-radius: var(--acp-radius);
+  color: var(--acp-text);
+  padding: 6px 10px !important;
+  font-size: 12px;
+  box-shadow: var(--acp-shadow-md);
+}
+#help a { color: var(--acp-accent) !important; }
+
+#version { color: var(--acp-text-faint) !important; font-size: 11px; margin-left: 6px; }
+.time { color: var(--acp-text-faint); font-size: 11.5px; }
+a sup { color: var(--acp-text-faint); margin: 0 4px; font-size: 10px; }
+
+/* Hide the original PNG arrow icons that were tinted blue —
+   they don't read in dark mode. Action links still readable as text. */
+#menu li a[href*="&select="] {
+  background: none !important;
+  height: auto !important;
+  width: auto !important;
+  display: inline-flex !important;
+  padding: 4px 8px !important;
+  text-decoration: none !important;
+  color: var(--acp-text-muted) !important;
+}
+#menu li a[href*="&select="]:hover {
+  background: var(--acp-surface-hover) !important;
+  color: var(--acp-text) !important;
+}
+#menu li a[href*="&select="]::before {
+  content: "▸ select";
+  font-size: 11px;
+  color: inherit;
+  margin: 0;
+}
+
+/* Adminer's inline PNG sprites on action links — in dark mode they read
+   as muddy blue squares. Invert + slightly desaturate so they read on
+   both backgrounds. Light mode keeps originals. */
+html[data-acp-theme="dark"] p a[href$="&sql="],
+html[data-acp-theme="dark"] p a[href$="&import="],
+html[data-acp-theme="dark"] p a[href*="&dump="],
+html[data-acp-theme="dark"] p a[href$="&database="],
+html[data-acp-theme="dark"] p a[href$="&privileges="],
+html[data-acp-theme="dark"] p a[href$="&user="],
+html[data-acp-theme="dark"] p a[href$="&processlist="],
+html[data-acp-theme="dark"] p a[href$="&variables="],
+html[data-acp-theme="dark"] p a[href$="&status="],
+html[data-acp-theme="dark"] p a[href$="&replication="],
+html[data-acp-theme="dark"] p a[href*="&refresh="],
+html[data-acp-theme="dark"] p a[href$="&create="],
+html[data-acp-theme="dark"] p a[href$="&view="],
+html[data-acp-theme="dark"] p a[href$="&procedure="],
+html[data-acp-theme="dark"] p a[href$="&function="],
+html[data-acp-theme="dark"] p a[href$="&event="],
+html[data-acp-theme="dark"] p a[href*="&foreign="],
+html[data-acp-theme="dark"] p a[href*="&trigger="],
+html[data-acp-theme="dark"] p a[href*="&schema="],
+html[data-acp-theme="dark"] p a[href*="&db="][href$="&database="],
+html[data-acp-theme="dark"] h2 ~ p a[href*="&select="],
+html[data-acp-theme="dark"] #content h2 ~ p a[href*="&table="],
+html[data-acp-theme="dark"] table a[href*="&edit="][href*="&where"],
+html[data-acp-theme="dark"] table thead #all-page ~ a,
+html[data-acp-theme="dark"] #table thead tr td a.edit-all,
+html[data-acp-theme="dark"] #fieldset-history a.edit-all,
+html[data-acp-theme="dark"] td code.jush-sql + a[href*="&sql="],
+html[data-acp-theme="dark"] td a[href*="&foreign="][href*="&name="],
+html[data-acp-theme="dark"] #menu #dbs span {
+  filter: invert(0.92) hue-rotate(180deg) saturate(0.85) brightness(1.1);
+}
+
+/* =========================================================
+   16. Schema diagram (#schema)
+   ========================================================= */
+#schema {
+  font-size: 12px;
+  color: var(--acp-text);
+}
+#schema .table {
+  background: var(--acp-surface) !important;
+  border: 1px solid var(--acp-border) !important;
+  border-radius: var(--acp-radius-lg);
+  padding: 8px 10px !important;
+  cursor: move;
+  position: absolute;
+  box-shadow: var(--acp-shadow-md);
+  color: var(--acp-text);
+}
+#schema a { color: var(--acp-accent) !important; }
+#schema i > span { color: var(--acp-text-faint); }
+#schema .table > span[title*="int"]    { color: var(--acp-warning); }
+#schema .table > span[title*="decimal"]{ color: var(--acp-warning); }
+#schema .binary { color: var(--acp-danger); }
+#schema .date   { color: var(--acp-purple); }
+#schema .char   { color: var(--acp-success); }
+#schema .enum   { color: var(--acp-accent); }
+
+/* =========================================================
+   17. Login screen — Adminer renders it without #menu
+   The "Connect" submit is auto-styled primary above.
+   ========================================================= */
+body.nojs.no-menu,
+body:not(.nojs):has(form[action]):not(:has(#menu)) {
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(59,130,246,0.10), transparent 50%),
+    radial-gradient(80% 60% at 100% 100%, rgba(139,92,246,0.07), transparent 60%),
+    var(--acp-bg) !important;
+}
+
+/* If a login wrapper is injected by our index.php (.acp-login-shell): */
+.acp-login-shell {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  overflow: auto;
+  background:
+    radial-gradient(120% 80% at 0% 0%, rgba(59,130,246,0.12), transparent 50%),
+    radial-gradient(80% 60% at 100% 100%, rgba(139,92,246,0.08), transparent 60%),
+    var(--acp-bg);
+  z-index: 10;
+}
+.acp-login-card {
+  width: 440px; max-width: 100%;
+  background: var(--acp-surface);
+  border: 1px solid var(--acp-border);
+  border-radius: 14px;
+  padding: 28px;
+  box-shadow: var(--acp-shadow-md);
+}
+.acp-login-header {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 20px;
+}
+.acp-login-header .acp-mark { width: 38px; height: 38px; border-radius: 10px; font-size: 16px; }
+.acp-login-title {
+  margin: 0 !important; padding: 0 !important;
+  border: 0 !important;
+  font-size: 18px !important; line-height: 1.2;
+}
+.acp-login-sub { margin: 2px 0 0; color: var(--acp-text-muted); font-size: 12.5px; }
+.acp-login-card table {
+  background: transparent !important;
+  border: 0 !important;
+  width: 100%;
+  margin: 0 !important;
+}
+.acp-login-card table th, .acp-login-card table td {
+  background: transparent !important;
+  border: 0 !important;
+  padding: 5px 0 !important;
+  text-transform: none !important;
+  letter-spacing: 0;
+  font-size: 12.5px !important;
+  font-weight: 500 !important;
+  color: var(--acp-text-muted) !important;
+}
+.acp-login-card table th { width: 100px; padding-right: 12px !important; }
+.acp-login-card input[type="submit"] {
+  width: 100%;
+  justify-content: center;
+  height: 38px !important;
+  margin-top: 10px;
+}
+
+/* =========================================================
+   18. Theme toggle button (injected by index.php)
+   ========================================================= */
+.acp-theme-toggle {
+  margin-top: 14px !important;
+  width: 100%;
+  background: transparent !important;
+  border: 1px solid var(--acp-border) !important;
+  color: var(--acp-text-muted) !important;
+  border-radius: var(--acp-radius);
+  height: 32px;
+  font-size: 12.5px;
+  font-weight: 500;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.acp-theme-toggle:hover {
+  background: var(--acp-surface-hover) !important;
+  color: var(--acp-text) !important;
+}
+.acp-theme-toggle-icon {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--acp-accent);
+  box-shadow: inset -4px 0 0 var(--acp-bg-elev);
+}
+.acp-footer-note {
+  margin: 14px 4px 0 !important;
+  padding: 10px 0 0 !important;
+  border-top: 1px solid var(--acp-border);
+  font-size: 11px !important;
+  color: var(--acp-text-faint) !important;
+}
+
+/* =========================================================
+   19. RTL fixups for tables (preserve text direction)
+   ========================================================= */
+.rtl table tbody td, .rtl table tbody th { text-align: right !important; }
+.ltr table tbody td, .ltr table tbody th { text-align: left !important; }
+
+/* =========================================================
+   20. Misc — small print, hidden ajaxstatus, etc.
+   ========================================================= */
+#ajaxstatus { display: none !important; }
+div#ajaxstatus + .message a:first-child { color: var(--acp-danger) !important; }
+table.checkable thead a[href*="&refresh="],
+table.checkable thead a[href*="&dbsize="] {
+  color: var(--acp-text-muted) !important;
 }

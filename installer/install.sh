@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.47"
+AURACP_VERSION="0.2.48"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -870,6 +870,12 @@ install_adminer() {
   fi
   if [ -f /opt/auracp/packaging/adminer.css ]; then
     run "install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css"
+  fi
+  # v0.2.48: companion JS — drives theme-toggle persistence, brand chrome,
+  # login-shell wrap. Loaded by the SSO wrapper's adminer_object() subclass
+  # via <script src="adminer.js" defer>.
+  if [ -f /opt/auracp/packaging/adminer.js ]; then
+    run "install -m 0644 /opt/auracp/packaging/adminer.js /opt/auracp/adminer/adminer.js"
   fi
   # Tmpfile for the SSO token directory — /run is tmpfs so this re-creates
   # on every boot; mode 0700 root:www-data so only PHP-FPM can read tokens.

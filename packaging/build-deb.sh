@@ -43,6 +43,11 @@ install -m 0644 "$ROOT/packaging/adminer-wrapper.php" "$PKG/opt/auracp/packaging
 # v0.2.39: ship the Adminer theme CSS alongside the wrapper. Adminer
 # auto-loads adminer.css from its own directory if present.
 install -m 0644 "$ROOT/packaging/adminer.css" "$PKG/opt/auracp/packaging/adminer.css"
+# v0.2.48: ship the Adminer bootstrap JS too — theme persistence, brand
+# chrome injection, login-shell wrap. Adminer 4.x doesn't auto-load
+# adminer.js (it auto-loads adminer.css only), so the SSO wrapper's
+# adminer_object() subclass emits a <script> tag in head() pointing at it.
+install -m 0644 "$ROOT/packaging/adminer.js"  "$PKG/opt/auracp/packaging/adminer.js"
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
@@ -120,6 +125,12 @@ if [ -d /run/systemd/system ]; then
     # v0.2.39: refresh the theme CSS too so design changes self-deploy.
     if [ -f /opt/auracp/packaging/adminer.css ]; then
       install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css
+    fi
+    # v0.2.48: refresh the bootstrap JS the same way. Required for theme
+    # toggle + brand chrome — without it, only the CSS lands and the head()
+    # override in the wrapper points at a missing file (404, no chrome).
+    if [ -f /opt/auracp/packaging/adminer.js ]; then
+      install -m 0644 /opt/auracp/packaging/adminer.js /opt/auracp/adminer/adminer.js
     fi
     # Stale subclass file from < v0.2.31 — current wrapper doesn't use it.
     rm -f /opt/auracp/adminer/adminer-plugins.php

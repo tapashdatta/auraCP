@@ -475,7 +475,12 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .empty-fm-hint{font-size:12.5px;color:var(--txt-3);margin-top:6px !important}
 /* In-browser text editor: full-screen-ish modal with monospace textarea. No
    heavy CodeMirror dependency — just a plain textarea that grows to fit. */
-.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.42);backdrop-filter:blur(4px);z-index:100;animation:auracp-fade-in .12s ease}
+/* v0.2.48: modal overlay was z-index:100 with rgba(0,0,0,.42) — visually
+   left the floating topbar peeking through (its sticky stacking context
+   sits at 50 but the translucent backdrop didn't fully hide it). Bumped
+   to z-index:500 and opacity .72 + heavier blur so the editor is a
+   focused-context modal, not a card-over-pane. Card +1 above the back. */
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%);z-index:500;animation:auracp-fade-in .12s ease}
 /* v0.2.38: file-editor modal sized off the *dynamic* viewport (dvh)
    so the bottom doesn't disappear behind iOS Safari's collapsing
    address bar / iPad multitasking dock. Capped to 960×720 — bigger
@@ -487,7 +492,7 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
   height:min(720px, calc(100dvh - 32px));
   background:var(--surface-0);border:1px solid var(--line);border-radius:14px;
   box-shadow:0 24px 64px rgba(0,0,0,.32);
-  display:flex;flex-direction:column;z-index:101;
+  display:flex;flex-direction:column;z-index:501;
   animation:auracp-fade-in .14s ease;overflow:hidden}
 .modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none}
 .modal-head h3{margin:0 0 4px;font-size:15.5px;font-weight:600}
