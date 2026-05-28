@@ -46,6 +46,14 @@
   --radius-lg:26px;
   --radius-pill:999px;
 
+  /* Inverted solid (always opposite of page background) — used by .btn-dark,
+     active nav pills, active chips, etc. The pair flips in dark mode below.
+     Without this we'd use --txt as a background, which in dark mode is
+     #e6eaf2 (light) on white text — invisible. */
+  --solid-bg:#1a1612;
+  --solid-fg:#ffffff;
+  --solid-bg-hover:#2b261f;
+
   /* Typography: one variable font (Manrope) covers display + UI; JetBrains
      Mono stays for code/identifiers. Manrope ships tnum for tabular figures
      and a CSS-zero alternate; we opt into both on the hero numeral. */
@@ -85,6 +93,11 @@
   --warn-rgb:245,183,90;
   --down-rgb:255,96,99;
   --info-rgb:168,155,255;
+
+  /* Inverted solid for dark — a near-white chip on the dark background. */
+  --solid-bg:#e6eaf2;
+  --solid-fg:#0a0c11;
+  --solid-bg-hover:#f5f8ff;
 }
 
 *{box-sizing:border-box;margin:0;padding:0}
@@ -138,7 +151,7 @@ input,select{font-family:inherit}
 .nav{display:flex;align-items:center;gap:2px;margin-left:4px}
 .nav button{padding:8px 14px;border-radius:var(--radius-pill);color:var(--txt-2);font-weight:500;font-size:13.5px;transition:.1s;position:relative;cursor:pointer}
 .nav button:hover{color:var(--txt);background:var(--surface-1)}
-.nav button.active{color:#fff;background:var(--txt)}
+.nav button.active{color:var(--solid-fg);background:var(--solid-bg)}
 .instance-pill{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 10px;border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--surface-1);font-size:12.5px;color:var(--txt-2)}
 .instance-pill .mono{color:var(--txt);font-size:12px}
 /* Update-available badge in the top bar — amber pill so it stands out
@@ -165,8 +178,8 @@ input,select{font-family:inherit}
 .btn-primary:hover{filter:brightness(1.04);transform:translateY(-1px);box-shadow:0 2px 4px rgba(0,0,0,.14), 0 14px 28px -10px var(--aura)}
 .btn-ghost{background:var(--surface-0);border-color:var(--line);color:var(--txt);box-shadow:var(--shadow)}
 .btn-ghost:hover{background:var(--surface-1);border-color:var(--line-2);transform:translateY(-1px)}
-.btn-dark{background:var(--txt);color:#fff}
-.btn-dark:hover{filter:brightness(1.1);transform:translateY(-1px)}
+.btn-dark{background:var(--solid-bg);color:var(--solid-fg)}
+.btn-dark:hover{background:var(--solid-bg-hover);transform:translateY(-1px)}
 .btn-square{border-radius:var(--radius-sm)}
 .btn svg{width:15px;height:15px}
 
@@ -212,7 +225,7 @@ input,select{font-family:inherit}
 .filter input{background:none;border:none;outline:none;color:var(--txt);font-size:13px;width:100%}
 .chip{padding:6px 14px;border:1px solid var(--line);border-radius:var(--radius-pill);font-size:12.5px;color:var(--txt-2);background:var(--surface-0);cursor:pointer;transition:.1s;font-weight:500}
 .chip:hover{border-color:var(--line-2);color:var(--txt)}
-.chip.on{color:#fff;border-color:var(--txt);background:var(--txt);font-weight:600}
+.chip.on{color:var(--solid-fg);border-color:var(--solid-bg);background:var(--solid-bg);font-weight:600}
 
 table{width:100%;border-collapse:collapse}
 thead th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--txt-3);font-weight:600;padding:12px 16px;border-bottom:1px solid var(--line);background:var(--surface-1)}
