@@ -111,6 +111,15 @@ each site's pool config names its pinned version, so changing one site's PHP doe
 
 ## 5. Site-creation flow (the central path)
 
+Two paths coexist as of v0.2.48 — the legacy `internal/site/site.go::Manager.Create` (default)
+and the new single-source-of-truth pipeline `internal/site/creator/RunCreate` (opt-in via
+`AURACP_USE_NEW_CREATOR=1`). The legacy path is removed in v0.2.49 once production validation
+is complete; see [CLOUDPANEL-STUDY.md](CLOUDPANEL-STUDY.md) for the derivation. Both paths
+write the same on-disk artifacts; the new path additionally guarantees they all derive from
+a single in-memory record in one transactional pass.
+
+**Legacy path (`site.Manager.Create`):**
+
 1. Validate domain + type + version pins.
 2. `osuser`: create Linux user, htdocs/logs dirs, SFTP jail.
 3. Type-specific backend:
@@ -127,7 +136,43 @@ each site's pool config names its pinned version, so changing one site's PHP doe
    paths and nginx reloads — the HTTPS server{} block goes live with the new cert.
 7. Optional cron entries; persist everything to SQLite. Renewal scheduler picks the cert up daily.
 
-All steps are idempotent and recorded in the audit log; failures roll back created resources.
+**New path (`creator.RunCreate`, v0.2.48 opt-in):**
+
+Identical net result, structurally tighter. Every step reads from one in-memory `creator.Spec`
+threaded through one `processor.SiteContext`. There is no path by which the vhost can name
+one Linux user while the FPM pool names a different one — both substitutions come from the
+same field in the same function call. Drift is structurally impossible (proved by
+[`TestDriftImpossibility`](../internal/webserver/template/template_test.go)).
+
+1. **Preflight** — type / domain / user validation + cross-PHP-version stale-pool detection.
+   Zero filesystem writes if any check fails; the operator sees the conflict by path.
+2. **CreateUser** → useradd with skel, set password.
+3. **CreateRootDirectory** → `mkdir /home/<user>/htdocs/<domain>`, chown.
+4. **CreateLogrotateFile** → one entry per site user covers nginx + FPM + app logs.
+5. **CreateSslCertFiles** → openssl self-signed seed (30-day); lego upgrades to LE in the
+   background goroutine that runs after the synchronous pipeline returns.
+6. **CreateIndexPhp** / **CreateIndexHtml** (site-type-specific) → "Hello World" seed so a
+   fresh site doesn't 403; skipped if operator content already exists.
+7. **CreatePhpFpmPool** / **AllocatePort + CreateSystemdUnit** — delegates to the existing
+   `phpruntime` / `runtime` managers; pool/unit config carries the same `siteUser` field that
+   the vhost's `root` directive will reference.
+8. **CreateNginxVhost** — `embed.FS` loads `<type>.tmpl`, the type's Template subtype runs
+   its ordered Processor chain against the `SiteContext`, strips any unmatched `{{xxx}}`,
+   collapses blank-line runs. Atomic stage→`nginx -t`→swap symlink — broken configs can't
+   reach disk's live symlink.
+9. **ReloadNginx** — one reload per pipeline (legacy path did 2-3).
+10. **ResetPermissions** — `chown -R <user>:<user> /home/<user>`, `chmod 750`.
+11. **SmokeProbe** — curl `https://<domain>/` against `127.0.0.1`, refuse `status=active`
+    on empty body. The exact `a-4zwq`/`a-ukfs` symptom is caught at create time.
+12. **Persist `store.Site` record + spawn ACME goroutine** (re-renders vhost when cert lands).
+
+Every step emits a structured slog line:
+`step="CreatePhpFpmPool" site="a.garuda.sh" took_ms=47`. Post-mortem is `journalctl -u
+auracpd | grep <domain>` — no external log shipper needed.
+
+The mirror operation `creator.RunDelete` sweeps `/etc/nginx/sites-{available,enabled}/<domain>.conf`,
+every installed PHP version's `pool.d/<domain>.conf`, the cert + htpasswd files, then the
+Linux user. No orphan can survive a delete to be tripped over by the next create.
 
 ---
 
@@ -180,8 +225,14 @@ cmd/auracpd     daemon: HTTPS API on :8443 + embedded SPA + ACME renewal loop
 cmd/auracp      CLI (auracp site:create …)
 internal/
   api           REST/JSON handlers, session auth, TOTP, permissions
-  site          lifecycle orchestrator (calls runtime + phpruntime + webserver + acme)
+                  sites_creator.go — v0.2.48 dispatch into the new pipeline (env-gated)
+  site          legacy lifecycle orchestrator (calls runtime + phpruntime + webserver + acme)
+                  → being retired in v0.2.49 in favor of site/creator/
+  site/creator  v0.2.48 — single transactional pipeline (RunCreate, RunDelete, Preflight),
+                  per-type Creator subtypes (php, nodejs, python, static, reverseproxy)
   webserver     nginx render (templates) + reload  (v0.2.0: was Caddy)
+                  webserver/processor — v0.2.48 per-{{placeholder}} substitution functions
+                  webserver/template — v0.2.48 embed.FS bundled .tmpl files + per-type chain
   phpruntime    multi-version PHP-FPM manager + per-site pool config writer  (v0.2.0)
   runtime       node/python systemd units (PHP no longer has per-site units)
   noderuntime   multi-version Node manager (nodejs.org tarballs)

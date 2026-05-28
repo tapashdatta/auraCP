@@ -123,3 +123,5 @@ Requires Go ≥ 1.23 and Node 24 (dev only — the shipped binary needs neither)
 - [docs/PLAN.md](docs/PLAN.md) — milestones & status
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — dev setup & conventions
 - [docs/TESTING.md](docs/TESTING.md) — Debian/Ubuntu VM validation checklist
+- [docs/CLOUDPANEL-STUDY.md](docs/CLOUDPANEL-STUDY.md) — derivation of the v0.2.48 single-pipeline architecture
+- [docs/V0.2.48-VALIDATION.md](docs/V0.2.48-VALIDATION.md) — checklist for the opt-in pipeline rollout
