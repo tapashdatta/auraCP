@@ -27,6 +27,9 @@
   let config = $state({})
   let sslStatus = $state(null)
   let sslBusy = $state(false)
+  // v0.2.42: HTTP-01 reachability pre-flight result. { ok, step, reason, hint, url }
+  let preflight = $state(null)
+  let preflightBusy = $state(false)
   let sshUsers = $state([])
   let nodeRuntimes = $state([])
   let nodePick = $state(site.node || 'default')
@@ -153,6 +156,22 @@
   // HTTP-01, ~30–60s for DNS-01 (TXT propagation), so we show a 'busy'
   // state on the button. On success we refresh the status to reflect the
   // new cert in the UI immediately.
+  // v0.2.42: round-trip an actual HTTP-01 challenge file from outside the
+  // server to confirm port 80 + DNS + nginx all line up before issuance.
+  // Mirrors what lego will do during a real Obtain — same path, same nginx
+  // location, same firewall. If this passes, the real issuance will too.
+  async function runPreflight() {
+    preflightBusy = true
+    preflight = null
+    const r = await apiFetch(`${base}/ssl/preflight`)
+    preflightBusy = false
+    if (!r.ok) {
+      preflight = { ok: false, step: 'api', reason: `pre-flight endpoint returned HTTP ${r.status}` }
+      return
+    }
+    preflight = await r.json()
+  }
+
   async function renewCert() {
     sslBusy = true
     const r = await apiFetch(`${base}/ssl/renew`, { method: 'POST' })
@@ -955,12 +974,15 @@
     </div></div>
 
   {:else if active === 'ssl'}
-    <!-- v0.2.40: SSL/TLS tab — live TLS + stored issuance state. When lego
-         left a lastError on the cert record, that's surfaced verbatim with
-         a Retry button next to it. CF DNS-01 toggle gets a clearer banner
-         when the host's CF token isn't configured yet. -->
-    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3><p>Issued + renewed by auracpd via <span class="mono">go-acme/lego</span>. HTTP-01 by default; switch to DNS-01 for Cloudflare-proxied domains.</p></div>
-      {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}</div>
+    <!-- v0.2.42: SSL/TLS — HTTP-01 is the default and only path unless
+         the operator explicitly opts in to Cloudflare DNS-01. No automatic
+         fallback. New: pre-flight reachability probe answers "would
+         HTTP-01 work right now?" without burning an ACME attempt. -->
+    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3>
+      <p>Free Let's Encrypt certificate via <span class="mono">/.well-known/acme-challenge/</span> on port 80. Auto-renewed every ~60 days.</p>
+    </div>
+      {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}
+    </div>
       <div class="section-b" style="padding-top:4px">
         {#if sslStatus === null}
           <div class="kv"><span class="k">Status</span><span class="v">checking…</span></div>
@@ -970,50 +992,73 @@
           <div class="kv"><span class="k">Expires</span><span class="v">{sslStatus.expires ? new Date(sslStatus.expires).toLocaleString() : '—'}{#if sslStatus.expires}<span class="hint" style="margin-left:8px">({Math.max(0, Math.round((new Date(sslStatus.expires) - Date.now()) / 86400000))} days left)</span>{/if}</span></div>
         {:else}
           <div class="kv"><span class="k">Live status</span><span class="v">{sslStatus?.message || 'no certificate served yet'}</span></div>
-          <div class="kv"><span class="k">Provider</span><span class="v">Let's Encrypt (auto, in-process via lego)</span></div>
           {#if sslStatus?.stored?.lastError}
             <div class="note ssl-fail" style="margin:14px 0 6px"><div>
-              <b>Issuance failed</b> (attempt {sslStatus.stored.attempts || 1})<br>
-              <span class="mono" style="font-size:12px;color:var(--down)">{sslStatus.stored.lastError}</span>
+              <b>Last issuance failed</b> (attempt {sslStatus.stored.attempts || 1})<br>
+              <span class="mono" style="font-size:12px;color:var(--down);white-space:pre-wrap">{sslStatus.stored.lastError}</span>
             </div></div>
-            <!-- Detect the common 'orange-cloud blocks HTTP-01' pattern from
-                 the error text and surface the DNS-01 remediation inline. -->
-            {#if /cloudflare|http-01|connection refused|timeout|404|403/i.test(sslStatus.stored.lastError) && !sslStatus.cloudflareDNS}
-              <div class="hint" style="margin:6px 0 0">
-                Looks like HTTP-01 can't reach this server. If the domain is proxied through Cloudflare
-                (<b>orange cloud</b>), switch to DNS-01 below — it works without exposing port 80.
-              </div>
-            {/if}
           {:else if sslStatus?.stored?.status === 'pending'}
             <div class="hint" style="margin-top:8px">
               Cert issuance is in progress. First request after site create can take 10–60s.
             </div>
-          {:else}
-            <div class="hint" style="margin-top:8px">
-              No cert on file yet. Click <b>Retry issuance</b> below; watch <span class="mono">journalctl -u auracpd</span> if it fails.
-            </div>
           {/if}
+        {/if}
+
+        <!-- v0.2.42: pre-flight HTTP-01 reachability probe. Round-trips a
+             test token through the same path lego would use. -->
+        <div class="preflight-row">
+          <button class="btn btn-ghost" onclick={runPreflight} disabled={preflightBusy}>
+            {preflightBusy ? 'Probing…' : (preflight ? 'Re-check reachability' : 'Test HTTP-01 reachability')}
+          </button>
+          {#if preflight}
+            {#if preflight.ok}
+              <span class="pf-pill pf-ok">✓ HTTP-01 ready</span>
+            {:else}
+              <span class="pf-pill pf-bad">✗ HTTP-01 unreachable</span>
+            {/if}
+          {/if}
+        </div>
+        {#if preflight && !preflight.ok}
+          <div class="note ssl-fail" style="margin-top:6px"><div>
+            <b>HTTP-01 won't work for this domain.</b><br>
+            <span class="mono" style="font-size:12px">{preflight.url || ''}</span><br>
+            <span style="font-size:12.5px;color:var(--down)">{preflight.reason}</span>
+            {#if preflight.hint}<br><span style="font-size:12.5px;color:var(--txt-2);margin-top:6px;display:inline-block">{preflight.hint}</span>{/if}
+          </div></div>
+        {:else if preflight && preflight.ok}
+          <div class="hint" style="margin-top:6px">Port 80, DNS, and the ACME location all line up. Issuance will work.</div>
         {/if}
 
         <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy}>
-            {sslBusy ? 'Issuing…' : (sslStatus?.status === 'active' ? 'Renew now' : 'Retry issuance')}
+            {sslBusy ? 'Issuing…' : (sslStatus?.status === 'active' ? 'Renew now' : 'Issue / retry')}
           </button>
           <button class="btn btn-ghost" onclick={() => load('ssl')}>Re-check status</button>
         </div>
 
-        <div class="kv" style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
-          <span class="k">Cloudflare DNS-01 <span class="hint">wildcard / proxied domains</span></span>
+        <!-- v0.2.42: DNS-01 section is now a clearly-labelled OPT-IN, not
+             an auto-fallback. Most sites won't need this; it's specifically
+             for Cloudflare-proxied (orange-cloud) domains and wildcard certs. -->
+        <h3 style="margin-top:24px;padding-top:18px;border-top:1px solid var(--line);font-size:14px">Alternate method: Cloudflare DNS-01 <span class="hint" style="font-weight:400">optional</span></h3>
+        <p class="hint" style="margin:4px 0 12px">
+          Use this only if you need a wildcard cert (<span class="mono">*.example.com</span>), or your domain is Cloudflare-proxied
+          (orange cloud) and HTTP-01 can't reach this server. When enabled, lego writes a TXT record via
+          your Cloudflare API token instead of serving a challenge file.
+        </p>
+        <div class="kv">
+          <span class="k">Use Cloudflare DNS-01 for this site</span>
           <span class="kv-right">{#if savedFlash['cloudflare_dns']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cloudflare_dns')} aria-label="Toggle Cloudflare DNS-01 challenge" class="toggle" class:on={isOn('cloudflare_dns')} onclick={() => toggleConfig('cloudflare_dns')}></button></span>
         </div>
-        {#if isOn('cloudflare_dns') && sslStatus?.cloudflareTokenSet === false}
-          <div class="note ssl-fail" style="margin-top:10px"><div>
-            DNS-01 needs a Cloudflare API token at the panel level.
-            Configure it under <button type="button" class="linkish" onclick={() => go('instance')}>Settings → Cloudflare</button>,
-            then click <b>Retry issuance</b>.
-          </div></div>
-        {:else}
-          <div class="hint" style="margin-left:0">Token configured under <b>Settings → Cloudflare</b>. Use DNS-01 for wildcards, or when CF orange-cloud blocks HTTP-01.</div>
+        {#if isOn('cloudflare_dns')}
+          {#if sslStatus?.cloudflareTokenSet === false}
+            <div class="note ssl-fail" style="margin-top:10px"><div>
+              <b>No Cloudflare API token configured.</b> Set one under
+              <button type="button" class="linkish" onclick={() => go('instance')}>Settings → Cloudflare</button>,
+              then click <b>Issue / retry</b>.
+            </div></div>
+          {:else}
+            <div class="hint" style="margin-left:0;margin-top:6px">Token is configured. Click <b>Issue / retry</b> above to issue via DNS-01.</div>
+          {/if}
         {/if}
       </div></div>
 

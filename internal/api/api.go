@@ -127,6 +127,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("DELETE /api/sites/{domain}/ssh-users/{username}", srv.requirePerm("ssh_users", "delete", srv.deleteSSHUser))
 	mux.Handle("GET /api/sites/{domain}/ssl", srv.requirePerm("sites", "read", srv.siteSSL))
 	mux.Handle("POST /api/sites/{domain}/ssl/renew", srv.requirePerm("sites", "update", srv.siteRenewCert))
+	mux.Handle("GET /api/sites/{domain}/ssl/preflight", srv.requirePerm("sites", "read", srv.siteSSLPreflight))
 
 	// instance + admin + cloudflare
 	mux.Handle("GET /api/instance", srv.protect(srv.instanceInfo))

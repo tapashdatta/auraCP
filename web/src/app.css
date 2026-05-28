@@ -630,6 +630,14 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 .cf-spin{display:inline-block;width:10px;height:10px;border:1.5px solid currentColor;border-top-color:transparent;border-radius:50%;animation:cf-spin .6s linear infinite}
 @keyframes cf-spin{to{transform:rotate(360deg)}}
 
+/* v0.2.42: pre-flight reachability row on the SSL/TLS tab. Button + result
+   pill on one line so the operator can see at a glance whether HTTP-01
+   will work without burning an actual issuance attempt. */
+.preflight-row{display:flex;align-items:center;gap:10px;margin-top:14px;flex-wrap:wrap}
+.pf-pill{display:inline-flex;align-items:center;padding:4px 11px;border-radius:var(--radius-pill);font-size:11.5px;font-weight:600;letter-spacing:.01em}
+.pf-ok {background:var(--aura-glow); color:var(--aura-strong); border:1px solid color-mix(in srgb, var(--aura-strong) 32%, transparent)}
+.pf-bad{background:var(--down-soft); color:var(--down); border:1px solid color-mix(in srgb, var(--down) 32%, transparent)}
+
 /* v0.2.18: live upload progress bar */
 .upload-prog{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-1)}
 .upload-prog-info{display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}

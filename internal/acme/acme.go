@@ -26,6 +26,7 @@ import (
 	mathrand "math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,13 +41,11 @@ import (
 	"github.com/auracp/auracp/internal/store"
 )
 
-// IssueOpts configures a single issuance call. Zero value = default behaviour
-// (HTTP-01 first, automatic DNS-01 fallback if a Cloudflare token is
-// configured at the instance level + the HTTP-01 attempt failed). v0.2.41.
+// IssueOpts configures a single issuance call. Zero value = HTTP-01 only
+// (the standard ACME path; needs port 80 reachable to the public IP).
+// ForceDNS01 = use Cloudflare DNS-01 instead (needs an instance CF token).
+// v0.2.42 made these strictly disjoint — no automatic fallback either way.
 type IssueOpts struct {
-	// ForceDNS01 skips HTTP-01 entirely. Useful for explicit operator intent
-	// (per-site cloudflare_dns toggle ON) and for wildcard certs which only
-	// LE can satisfy via DNS-01.
 	ForceDNS01 bool
 }
 
@@ -112,10 +111,20 @@ func (m *Manager) EnsureCert(ctx context.Context, domain string) error {
 
 // IssueOnce attempts to issue a cert exactly once, regardless of current
 // state. Used for the "force renew" admin path and the renewal loop.
-// Default behaviour (zero IssueOpts): try HTTP-01 first; on failure, fall
-// back to DNS-01 via Cloudflare iff the operator has configured a CF API
-// token at the instance level. Pass ForceDNS01:true to skip HTTP-01 (e.g.
-// when the site is known to be CF-proxied or you want a wildcard cert).
+//
+// v0.2.42 — strict separation of methods (no automatic fallback):
+//   • Default: HTTP-01 only via /.well-known/acme-challenge/. Fails fast
+//     with a clear error if the domain isn't reachable on port 80; the
+//     operator decides whether to flip to DNS-01 explicitly.
+//   • ForceDNS01: skip HTTP-01 entirely and use Cloudflare DNS-01.
+//     Required for wildcards and Cloudflare-proxied domains. Requires the
+//     operator to have configured a CF API token at the instance level
+//     AND turned the per-site cloudflare_dns toggle on.
+//
+// Why no automatic fallback: silently trying DNS-01 after HTTP-01 fails
+// hides the actual problem and demands a CF token operators may not want
+// to grant. The right default is "the standard way, and tell me clearly
+// when it can't work".
 func (m *Manager) IssueOnce(ctx context.Context, domain string, opts ...IssueOpts) error {
 	var o IssueOpts
 	if len(opts) > 0 {
@@ -145,56 +154,68 @@ func (m *Manager) issue(ctx context.Context, domain string, opts IssueOpts) erro
 		Bundle:  true,
 	}
 
-	cfTok := m.cloudflareToken()
-
-	// Step 1: HTTP-01, unless the operator explicitly demanded DNS-01.
-	var httpErr error
-	if !opts.ForceDNS01 {
-		if err := m.setHTTP01(); err != nil {
-			return err
-		}
-		res, err := m.client.Certificate.Obtain(req)
-		if err == nil {
-			return m.saveIssuedCert(ctx, domain, &prev, res, "http-01")
-		}
-		httpErr = err
-		log.Printf("acme: HTTP-01 failed for %s: %v", domain, err)
-	}
-
-	// Step 2: DNS-01 via Cloudflare — runs if (a) caller forced it, OR
-	// (b) HTTP-01 failed AND the operator has configured a CF token.
-	if opts.ForceDNS01 || cfTok != "" {
+	// ForceDNS01: operator explicitly chose Cloudflare DNS-01 for this site
+	// (per-site toggle ON, or wildcard request). Refuse if no CF token.
+	if opts.ForceDNS01 {
+		cfTok := m.cloudflareToken()
 		if cfTok == "" {
-			// Forced but no token — no way to perform DNS-01. Surface a
-			// clear error rather than letting lego return a cryptic one.
 			prev.Status = "failed"
-			prev.LastError = "DNS-01 requested but no Cloudflare token configured (Settings → Cloudflare)"
+			prev.LastError = "DNS-01 was selected but no Cloudflare API token is configured. Configure one under Settings → Cloudflare, or turn off Cloudflare DNS-01 on this site to use HTTP-01."
 			_ = m.store.UpsertCertificate(prev)
-			return fmt.Errorf("DNS-01 requested but no Cloudflare token configured")
+			return fmt.Errorf("DNS-01 selected but no Cloudflare token configured")
 		}
 		if err := m.setDNS01Cloudflare(cfTok); err != nil {
 			prev.Status = "failed"
-			prev.LastError = errMsg("DNS-01 setup failed", err, httpErr)
+			prev.LastError = "DNS-01 setup failed: " + err.Error()
 			_ = m.store.UpsertCertificate(prev)
 			return fmt.Errorf("DNS-01 setup: %w", err)
 		}
-		log.Printf("acme: retrying %s via DNS-01 (Cloudflare)", domain)
+		log.Printf("acme: issuing %s via DNS-01 (Cloudflare, operator-selected)", domain)
 		res, err := m.client.Certificate.Obtain(req)
-		if err == nil {
-			return m.saveIssuedCert(ctx, domain, &prev, res, "dns-01")
+		if err != nil {
+			prev.Status = "failed"
+			prev.LastError = "DNS-01 (Cloudflare): " + err.Error()
+			_ = m.store.UpsertCertificate(prev)
+			return fmt.Errorf("obtain cert for %s (DNS-01): %w", domain, err)
 		}
-		// Both attempts failed — record the more useful (later) error first.
-		prev.Status = "failed"
-		prev.LastError = errMsg("DNS-01", err, httpErr)
-		_ = m.store.UpsertCertificate(prev)
-		return fmt.Errorf("obtain cert for %s (DNS-01 fallback after HTTP-01): %w", domain, err)
+		return m.saveIssuedCert(ctx, domain, &prev, res, "dns-01")
 	}
 
-	// No CF token AND HTTP-01 failed — single-error path.
-	prev.Status = "failed"
-	prev.LastError = httpErr.Error()
-	_ = m.store.UpsertCertificate(prev)
-	return fmt.Errorf("obtain cert for %s (HTTP-01): %w", domain, httpErr)
+	// Default path: HTTP-01 only. No silent fallback.
+	if err := m.setHTTP01(); err != nil {
+		return err
+	}
+	res, err := m.client.Certificate.Obtain(req)
+	if err != nil {
+		// Helpful hint when the error pattern matches "Cloudflare proxy
+		// in the way" — direct the operator to the opt-in DNS-01 path
+		// rather than silently doing it for them.
+		hint := ""
+		if looksLikeProxiedDomain(err) && m.cloudflareToken() != "" {
+			hint = " (this looks like a proxied / firewalled origin; enable Cloudflare DNS-01 in this site's SSL tab to issue via DNS instead)"
+		}
+		prev.Status = "failed"
+		prev.LastError = err.Error() + hint
+		_ = m.store.UpsertCertificate(prev)
+		return fmt.Errorf("obtain cert for %s (HTTP-01): %w%s", domain, err, hint)
+	}
+	return m.saveIssuedCert(ctx, domain, &prev, res, "http-01")
+}
+
+// looksLikeProxiedDomain matches lego/LE error text that typically means the
+// HTTP-01 probe was answered by something other than our nginx — Cloudflare,
+// a WAF, or some other reverse-proxy that didn't pass the challenge through.
+func looksLikeProxiedDomain(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, k := range []string{"cloudflare", "unauthorized", "incorrect", "404", "403", "connection refused", "timeout", "dns problem"} {
+		if strings.Contains(s, k) {
+			return true
+		}
+	}
+	return false
 }
 
 // saveIssuedCert persists the cert to disk + updates the store row.
@@ -249,20 +270,6 @@ func (m *Manager) setDNS01Cloudflare(token string) error {
 	return m.client.Challenge.SetDNS01Provider(prov)
 }
 
-// errMsg formats one-or-two-error messages for the store's lastError column.
-// Always non-empty so the UI never renders a blank failure card.
-func errMsg(label string, primary error, fallbackContext error) string {
-	if primary == nil && fallbackContext == nil {
-		return ""
-	}
-	if primary != nil && fallbackContext != nil {
-		return label + ": " + primary.Error() + "; HTTP-01 (prior attempt): " + fallbackContext.Error()
-	}
-	if primary != nil {
-		return label + ": " + primary.Error()
-	}
-	return label + ": " + fallbackContext.Error()
-}
 
 // StartRenewalLoop kicks off the daily renewal scheduler. Each tick: pull all
 // certs expiring within 30 days, jitter, renew. Failures recorded in

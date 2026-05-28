@@ -1,11 +1,20 @@
 package api
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"time"
 
 	"github.com/auracp/auracp/internal/acme"
+	"github.com/auracp/auracp/internal/auth"
+	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/ssl"
 )
 
@@ -55,6 +64,89 @@ func (s *Server) siteSSL(w http.ResponseWriter, r *http.Request) {
 		out["cloudflareTokenSet"] = cfTokenSet
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// GET /api/sites/{domain}/ssl/preflight — probe whether HTTP-01 would
+// succeed RIGHT NOW for this domain, without burning an ACME attempt.
+//
+// We write a random token to the ACME challenge dir, hit the public URL
+// http://<domain>/.well-known/acme-challenge/<token>, and check whether
+// the byte we just wrote comes back. Same path lego would take; same
+// nginx location block; same firewall + DNS chain. If this works, the
+// real issuance will too. If it doesn't, the response tells the operator
+// exactly which step failed and what to do about it.
+//
+// v0.2.42 — non-destructive: token is removed regardless of outcome.
+func (s *Server) siteSSLPreflight(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	tok, _ := auth.RandomToken()
+	if len(tok) > 32 {
+		tok = tok[:32]
+	}
+	// Best-effort make sure the challenge dir exists (auracpd creates it on
+	// install but if it was deleted manually, the probe should still try).
+	_ = os.MkdirAll(paths.ACMEChallengeDir, 0o755)
+	tokPath := filepath.Join(paths.ACMEChallengeDir, tok)
+	expected := []byte("auracp-preflight\n")
+	if err := os.WriteFile(tokPath, expected, 0o644); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"step":   "local",
+			"reason": "could not write challenge file: " + err.Error(),
+		})
+		return
+	}
+	defer os.Remove(tokPath)
+
+	url := "http://" + domain + "/.well-known/acme-challenge/" + tok
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req.Header.Set("User-Agent", "auracp-preflight/1.0")
+	resp, err := (&http.Client{
+		Timeout: 8 * time.Second,
+		// Don't follow redirects — Let's Encrypt doesn't either. Either we
+		// answer directly or we don't.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}).Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"step":   "network",
+			"url":    url,
+			"reason": err.Error(),
+			"hint":   "domain DNS may not point at this server, port 80 may be blocked, or a proxy is dropping the request before it reaches us.",
+		})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
+		if bytes.HasPrefix(body, expected[:len(expected)-1]) {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"ok":     true,
+				"step":   "ok",
+				"url":    url,
+				"reason": "HTTP-01 challenge round-trip succeeded; issuance should work",
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":     false,
+			"step":   "content",
+			"url":    url,
+			"reason": "HTTP-01 endpoint responded 200 but with the wrong body — something between you and the server is intercepting and answering the challenge URL itself.",
+			"hint":   "typically a Cloudflare proxy (orange cloud), a WAF, or a misconfigured upstream nginx.",
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":     false,
+		"step":   "status",
+		"url":    url,
+		"reason": fmt.Sprintf("HTTP-01 endpoint returned %d %s", resp.StatusCode, resp.Status),
+		"hint":   "if this looks like a Cloudflare error page or a proxied response, switch to Cloudflare DNS-01 on this site's SSL tab.",
+	})
 }
 
 // POST /api/sites/{domain}/ssl/renew — site-scoped retry, gated on
