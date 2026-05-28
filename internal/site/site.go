@@ -45,7 +45,8 @@ type Spec struct {
 	StartFile string // nodejs
 	Module    string // python
 	Upstream  string // reverseproxy (user-supplied URL)
-	NodeReady bool   // tag node availability on the record
+	NodeVer   string // nodejs: pin to this Node runtime ("" or "default" = managed default)
+	NodeReady bool   // tag node availability on the record (non-Node site types)
 }
 
 func hasBackend(t string) bool {
@@ -106,6 +107,7 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		if err := m.rt.Apply(ctx, runtime.Spec{
 			Type: s.Type, Domain: s.Domain, User: s.User, Port: port,
 			StartFile: s.StartFile, Module: s.Module, PHPVer: s.PHPVer,
+			NodeVer: s.NodeVer,
 		}); err != nil {
 			rollback()
 			return store.Site{}, err
@@ -130,13 +132,37 @@ func (m *Manager) Create(ctx context.Context, s Spec) (store.Site, error) {
 		Port: port, Upstream: upstream, PHPVersion: s.PHPVer,
 		Status: "up", StatusText: "Online",
 	}
-	if s.NodeReady {
+	switch {
+	case s.Type == "nodejs":
+		v := s.NodeVer
+		if v == "" {
+			v = "default"
+		}
+		rec.NodeVersion = sql.NullString{String: v, Valid: true}
+	case s.NodeReady:
 		rec.NodeVersion = sql.NullString{String: "24", Valid: true}
 	}
 	if err := m.store.CreateSite(rec); err != nil {
 		return store.Site{}, err
 	}
 	return rec, nil
+}
+
+// ReapplyRuntime re-renders & restarts a site's backend systemd unit (e.g.
+// after the operator changes its pinned Node version). No-op for site types
+// without a backend (static / reverseproxy).
+func (m *Manager) ReapplyRuntime(ctx context.Context, domain string) error {
+	st, err := m.store.SiteByDomain(domain)
+	if err != nil {
+		return err
+	}
+	if !hasBackend(st.Type) {
+		return nil
+	}
+	return m.rt.Apply(ctx, runtime.Spec{
+		Type: st.Type, Domain: domain, User: st.SiteUser, Port: st.Port,
+		PHPVer: st.PHPVersion, NodeVer: st.NodeVersion.String,
+	})
 }
 
 // Delete tears a site down: vhost, backend, user, and record.

@@ -12,6 +12,9 @@
   let remote = $state({ configured: false, type: '', kind: 's3', params: '', target: '' })
   let remoteMsg = $state('')
   let audit = $state([])
+  let nodes = $state([])
+  let newNode = $state({ version: '', makeDefault: false })
+  let nodeMsg = $state('')
 
   async function load() {
     const r = await apiFetch('/api/instance')
@@ -26,8 +29,31 @@
     if (a.ok) audit = await a.json()
     const pd = await apiFetch('/api/settings/panel-domain')
     if (pd.ok) { panel.domain = (await pd.json()).domain || ''; panel.input = panel.domain }
+    const nv = await apiFetch('/api/instance/node-versions')
+    if (nv.ok) nodes = await nv.json()
   }
   onMount(load)
+
+  async function installNode() {
+    nodeMsg = `Installing Node ${newNode.version}…`
+    const r = await apiFetch('/api/instance/node-versions', {
+      method: 'POST', body: JSON.stringify({ version: newNode.version, makeDefault: newNode.makeDefault }),
+    })
+    const d = await r.json().catch(() => ({}))
+    nodeMsg = r.ok ? `Installed Node ${d.version}.` : (d.error || 'Failed')
+    if (r.ok) { newNode.version = ''; load() }
+  }
+  async function makeDefaultNode(v) {
+    await apiFetch(`/api/instance/node-versions/${encodeURIComponent(v)}/default`, { method: 'POST' })
+    load()
+  }
+  async function removeNode(v) {
+    if (!confirm(`Remove Node ${v}? (sites pinned to it will be rejected)`)) return
+    const r = await apiFetch(`/api/instance/node-versions/${encodeURIComponent(v)}`, { method: 'DELETE' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) nodeMsg = d.error || 'Failed'
+    load()
+  }
 
   async function savePanelDomain() {
     panelMsg = 'Applying… (Caddy will obtain the certificate)'
@@ -120,6 +146,32 @@
         <textarea class="input" rows="4" style="font-family:var(--fs-mono)" bind:value={remote.params}></textarea></div>
       <button class="btn btn-primary" onclick={saveRemote} disabled={!remote.target}>Save Remote</button>
       {#if remoteMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{remoteMsg}</span>{/if}
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px"><div class="section-h"><div><h3>Node.js Runtimes</h3>
+    <p>Installed under <span class="mono">/opt/auracp/node/&lt;version&gt;</span> · sites can pin to any of these</p></div></div>
+    {#if nodes.length === 0}<div class="empty">No managed Node runtimes yet. Install one below.</div>
+    {:else}
+      <table><thead><tr><th>Version</th><th>Default</th><th></th></tr></thead><tbody>
+        {#each nodes as n}
+          <tr><td><span class="mono">{n.version}</span></td>
+            <td><span class="status"><span class="sdot {n.isDefault ? 's-up' : 's-down'}"></span>{n.isDefault ? 'default' : '—'}</span></td>
+            <td style="text-align:right">
+              {#if !n.isDefault}<span class="manage" onclick={() => makeDefaultNode(n.version)}>Make default</span>{/if}
+              <span class="manage" onclick={() => removeNode(n.version)}>Remove</span>
+            </td></tr>
+        {/each}
+      </tbody></table>
+    {/if}
+    <div class="section-b" style="border-top:1px solid var(--line)">
+      <div class="two">
+        <div class="field"><label>Install Node version <span class="hint">e.g. 22.11.0, 20.18.0, 18.20.4</span></label>
+          <input class="input" bind:value={newNode.version} placeholder="22.11.0"></div>
+        <div class="field" style="display:flex;align-items:end"><label style="display:flex;gap:8px;align-items:center;font-weight:500"><input type="checkbox" bind:checked={newNode.makeDefault}> Make this the default</label></div>
+      </div>
+      <button class="btn btn-primary" onclick={installNode} disabled={!newNode.version}>Install</button>
+      {#if nodeMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{nodeMsg}</span>{/if}
     </div>
   </div>
 

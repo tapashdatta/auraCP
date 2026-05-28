@@ -30,6 +30,7 @@ var typeIcon = map[string]string{
 
 // SiteView is the JSON shape the UI consumes (matches web/src/lib/data.js).
 type SiteView struct {
+	Type       string  `json:"type"`
 	Domain     string  `json:"domain"`
 	Root       string  `json:"root"`
 	User       string  `json:"user"`
@@ -47,6 +48,7 @@ func (s Site) View() SiteView {
 		node = &s.NodeVersion.String
 	}
 	return SiteView{
+		Type:   s.Type,
 		Domain: s.Domain, Root: s.RootPath, User: s.SiteUser, App: s.App,
 		Badge: typeBadge[s.Type], Ic: typeIcon[s.Type], Node: node,
 		Status: s.Status, StatusText: s.StatusText,

@@ -23,6 +23,8 @@
   let config = $state({})
   let sslStatus = $state(null)
   let sshUsers = $state([])
+  let nodeRuntimes = $state([])
+  let nodePick = $state(site.node || 'default')
   let newSSH = $state({ username: '', type: 'sftp', password: '' })
   let basicAuth = $state({ user: '', password: '' })
 
@@ -35,7 +37,10 @@
     else if (tab === 'cron') cron = await getJSON(`${base}/cron`, [])
     else if (tab === 'logs') logs = (await getJSON(`${base}/logs?kind=${logKind}`, { lines: [] })).lines
     else if (tab === 'files') files = (await getJSON(`${base}/files?path=${encodeURIComponent(filePath)}`, { entries: [] })).entries
-    else if (tab === 'settings') backups = await getJSON(`${base}/backups`, [])
+    else if (tab === 'settings') {
+      backups = await getJSON(`${base}/backups`, [])
+      if (site.type === 'nodejs') nodeRuntimes = await getJSON('/api/instance/node-versions', [])
+    }
     else if (tab === 'cache' || tab === 'ssl' || tab === 'security') config = await getJSON(`${base}/config`, {})
     else if (tab === 'sshftp') sshUsers = await getJSON(`${base}/ssh-users`, [])
     if (tab === 'ssl') sslStatus = await getJSON(`${base}/ssl`, null)
@@ -92,6 +97,13 @@
   async function makeBackup() {
     busy = true; await apiFetch(`${base}/backups`, { method: 'POST' }); busy = false; load('settings')
   }
+  async function saveNodeVersion() {
+    busy = true
+    const r = await apiFetch(`${base}/node-version`, { method: 'PUT', body: JSON.stringify({ version: nodePick }) })
+    const d = await r.json().catch(() => ({}))
+    busy = false
+    notice = r.ok ? `Site now runs on Node ${d.version}.` : (d.error || 'Failed')
+  }
   function openDir(name) { filePath = filePath ? `${filePath}/${name}` : name; load('files') }
   function upDir() { filePath = filePath.split('/').slice(0, -1).join('/'); load('files') }
   function setLogKind(k) { logKind = k; load('logs') }
@@ -135,6 +147,22 @@
         <div class="kv"><span class="k">Force HTTPS redirect</span><span class="v">enabled (auto)</span></div>
         <div class="kv"><span class="k">HTTP/3 (QUIC)</span><span class="v">enabled (auto)</span></div>
       </div></div>
+      {#if site.type === 'nodejs'}
+        <div class="section"><div class="section-h"><div><h3>Node.js runtime</h3>
+          <p>Pin this site to a specific Node version. Manage installed versions in <b>Instance → Node.js Runtimes</b>.</p></div></div>
+          <div class="section-b">
+            <div class="kv"><span class="k">Current</span><span class="v">{site.node || 'default'}</span></div>
+            <div class="two">
+              <div class="field"><label>Use Node version</label>
+                <select class="select ui" bind:value={nodePick}>
+                  <option value="default">default (auracp-managed)</option>
+                  {#each nodeRuntimes as n}<option value={n.version}>{n.version}{n.isDefault ? ' (default)' : ''}</option>{/each}
+                </select></div>
+            </div>
+            <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply &amp; restart backend</button>
+          </div>
+        </div>
+      {/if}
       <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Local site archive (document root + databases)</p></div>
         <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
         {#if backups.length === 0}

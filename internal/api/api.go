@@ -11,6 +11,7 @@ import (
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
+	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
@@ -27,6 +28,7 @@ type Server struct {
 	backups *backup.Manager
 	web          *webserver.Manager
 	osu          *osuser.Manager
+	node         *noderuntime.Manager
 	secret       *secret.Box
 	runner       *system.Runner
 	panelBackend string
@@ -40,6 +42,7 @@ type Deps struct {
 	Backups      *backup.Manager
 	Web          *webserver.Manager
 	OS           *osuser.Manager
+	Node         *noderuntime.Manager
 	Secret       *secret.Box
 	Runner       *system.Runner
 	PanelBackend string
@@ -48,7 +51,7 @@ type Deps struct {
 // Register wires the API routes onto mux.
 func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	srv := &Server{store: s, sites: d.Sites, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
-		web: d.Web, osu: d.OS, secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
+		web: d.Web, osu: d.OS, node: d.Node, secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
 
 	// public
 	mux.HandleFunc("GET /api/health", srv.health)
@@ -106,6 +109,13 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	mux.Handle("GET /api/backups/remote", srv.requirePerm("settings", "read", srv.getRemoteBackup))
 	mux.Handle("POST /api/backups/remote", srv.requirePerm("settings", "update", srv.setRemoteBackup))
 	mux.Handle("GET /api/audit", srv.requireAdmin(srv.auditLog))
+
+	// Node.js runtime management
+	mux.Handle("GET /api/instance/node-versions", srv.requirePerm("settings", "read", srv.listNodeRuntimes))
+	mux.Handle("POST /api/instance/node-versions", srv.requirePerm("settings", "update", srv.installNodeRuntime))
+	mux.Handle("POST /api/instance/node-versions/{version}/default", srv.requirePerm("settings", "update", srv.setDefaultNodeRuntime))
+	mux.Handle("DELETE /api/instance/node-versions/{version}", srv.requirePerm("settings", "update", srv.deleteNodeRuntime))
+	mux.Handle("PUT /api/sites/{domain}/node-version", srv.requirePerm("sites", "update", srv.setSiteNodeVersion))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

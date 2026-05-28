@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/validate"
@@ -27,6 +28,7 @@ type Spec struct {
 	StartFile string // nodejs: app.js
 	Module    string // python: main:app
 	PHPVer    string // php: 8.3/8.4/8.5
+	NodeVer   string // nodejs: "" or "default" → /opt/auracp/node/default; else /opt/auracp/node/<ver>
 }
 
 // Apply writes the unit file and (re)starts it. Static & reverse-proxy sites
@@ -108,7 +110,7 @@ func execStart(s Spec) (string, error) {
 		if start == "" {
 			start = "app.js"
 		}
-		return fmt.Sprintf("/usr/bin/node %s/%s", root, start), nil
+		return fmt.Sprintf("%s %s/%s", noderuntime.BinPath(s.NodeVer), root, start), nil
 	case "python":
 		mod := s.Module
 		if mod == "" {

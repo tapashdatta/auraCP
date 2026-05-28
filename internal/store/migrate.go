@@ -53,6 +53,12 @@ var migrations = []string{
 		key   TEXT PRIMARY KEY,
 		value TEXT NOT NULL
 	)`,
+	`CREATE TABLE IF NOT EXISTS node_runtimes (
+		version    TEXT PRIMARY KEY,             -- e.g. "22.11.0"
+		path       TEXT NOT NULL,                -- /opt/auracp/node/<version>
+		is_default INTEGER NOT NULL DEFAULT 0,
+		created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`,
 	`CREATE TABLE IF NOT EXISTS audit_log (
 		id      INTEGER PRIMARY KEY AUTOINCREMENT,
 		ts      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

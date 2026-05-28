@@ -15,6 +15,7 @@ import (
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
+	"github.com/auracp/auracp/internal/noderuntime"
 	"github.com/auracp/auracp/internal/osuser"
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/site"
@@ -63,6 +64,8 @@ func main() {
 	panelBackend := scheme + "://127.0.0.1:" + port
 
 	web := webserver.New(runner)
+	node := noderuntime.New(runner, st)
+	node.ReconcileDefaultSymlink()
 
 	// Reconcile the panel domain: persist the flag (if given), then (re)apply the
 	// Caddy front for whatever domain is configured — this triggers Caddy's
@@ -86,6 +89,7 @@ func main() {
 		Backups:      backup.New(runner, st),
 		Web:          web,
 		OS:           osuser.New(runner),
+		Node:         node,
 		Secret:       sec,
 		Runner:       runner,
 		PanelBackend: panelBackend,
