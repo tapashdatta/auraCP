@@ -85,6 +85,8 @@ func (m *Manager) Install(ctx context.Context, version string, makeDefault bool)
 	if err := validate.PHPVersion(version); err != nil {
 		return err
 	}
+	// opcache is statically embedded in php<ver>-cli/-fpm since PHP 7.0
+	// (no separate php<ver>-opcache package on deb.sury.org).
 	pkgs := []string{
 		"php" + version + "-fpm",
 		"php" + version + "-cli",
@@ -98,7 +100,6 @@ func (m *Manager) Install(ctx context.Context, version string, makeDefault bool)
 		"php" + version + "-mysql",
 		"php" + version + "-pgsql",
 		"php" + version + "-redis",
-		"php" + version + "-opcache",
 	}
 	args := append([]string{"install", "-y", "--no-install-recommends"}, pkgs...)
 	if _, err := m.R.Run(ctx, "apt-get", args...); err != nil {

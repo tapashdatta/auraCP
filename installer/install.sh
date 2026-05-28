@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.0"
+AURACP_VERSION="0.2.1"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -633,10 +633,12 @@ install_php_fpm() {
     | run "tee /etc/apt/sources.list.d/sury-php.list >/dev/null"
   run "apt-get update -y"
   local v="$PHP_VERSION"
+  # NOTE: opcache is statically embedded in php<ver>-cli and php<ver>-fpm
+  # since PHP 7.0 — there's no separate php<ver>-opcache package to list.
   run "apt-get install -y --no-install-recommends \
        php${v}-fpm php${v}-cli php${v}-mbstring php${v}-xml php${v}-curl \
        php${v}-gd php${v}-zip php${v}-bcmath php${v}-intl php${v}-mysql \
-       php${v}-pgsql php${v}-redis php${v}-opcache"
+       php${v}-pgsql php${v}-redis"
   # auraCP owns all PHP-FPM pools — disable the default `www` pool the package
   # auto-creates so it doesn't conflict with per-site pools the panel writes.
   if [ "$DRY_RUN" -eq 0 ] && [ -f "/etc/php/${v}/fpm/pool.d/www.conf" ]; then
