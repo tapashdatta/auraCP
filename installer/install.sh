@@ -30,7 +30,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.17"
+AURACP_VERSION="0.1.18"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -536,10 +536,14 @@ install_caddy() { # required — custom build with Cloudflare DNS + Souin cache
   # be writable by the caddy service user or you get "permission denied" spam.
   run "chown -R caddy:caddy /var/lib/caddy"
   run "[ -f /etc/caddy/Caddyfile ] || printf 'import sites/*\\n' > /etc/caddy/Caddyfile"
+  # AmbientCapabilities is what lets the unprivileged caddy user bind :80/:443.
+  # Without it the unit fails on startup with `bind: permission denied` —
+  # Caddy's own packaging includes this directive for the same reason.
   install_unit caddy "Caddy web server" \
     "/usr/bin/caddy run --config /etc/caddy/Caddyfile" \
     caddy \
-    "/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force"
+    "/usr/bin/caddy reload --config /etc/caddy/Caddyfile --force" \
+    "AmbientCapabilities=CAP_NET_BIND_SERVICE"
   ok "Caddy ready."
 }
 
@@ -732,12 +736,15 @@ install_auracpd() { # required — the control plane
   ok "auracpd installed and started on :${PANEL_PORT}."
 }
 
-# install_unit NAME DESC EXECSTART USER [EXECRELOAD]
+# install_unit NAME DESC EXECSTART USER [EXECRELOAD] [EXTRA_SERVICE_DIRECTIVES]
 # Optional ExecReload lets `systemctl reload <name>` succeed — required for
 # Caddy so auracpd can apply a new panel domain / site config without
 # restarting the whole web server (which would drop in-flight connections).
+# Optional extra-directives is a raw multi-line string injected into [Service]
+# — used by Caddy for AmbientCapabilities=CAP_NET_BIND_SERVICE so the
+# unprivileged caddy user can bind :80 and :443.
 install_unit() {
-  local name="$1" desc="$2" exec="$3" user="$4" reload="${5:-}"
+  local name="$1" desc="$2" exec="$3" user="$4" reload="${5:-}" extra="${6:-}"
   if [ "$DRY_RUN" -eq 1 ]; then
     printf '%s\n' "${C_DIM}[dry-run]${C_RESET} write /etc/systemd/system/${name}.service (User=${user})"
     printf '%s\n' "${C_DIM}[dry-run]${C_RESET} systemctl enable --now ${name}"
@@ -747,6 +754,7 @@ install_unit() {
     printf '[Unit]\nDescription=%s\nAfter=network-online.target\nWants=network-online.target\n\n' "$desc"
     printf '[Service]\nType=simple\nUser=%s\nExecStart=%s\n' "$user" "$exec"
     [ -n "$reload" ] && printf 'ExecReload=%s\n' "$reload"
+    [ -n "$extra" ]  && printf '%s\n' "$extra"
     printf 'Restart=always\nRestartSec=3\nLimitNOFILE=1048576\n\n'
     printf '[Install]\nWantedBy=multi-user.target\n'
   } > "/etc/systemd/system/${name}.service"
