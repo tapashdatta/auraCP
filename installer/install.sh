@@ -30,7 +30,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.1.15"
+AURACP_VERSION="0.1.16"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS — the baseline default
@@ -447,10 +447,64 @@ print_plan() {
 }
 mark() { yesno "$1" && echo "${C_GRN}install${C_RESET}" || echo "${C_DIM}skip${C_RESET}"; }
 
+# Plain-text version of the plan for embedding inside whiptail's --yesno box
+# (whiptail strips ANSI). Same content as print_plan, no colour, dot-leader
+# alignment for legibility in the dialog's monospaced render.
+build_plan() {
+  local mariadb_l postgres_l node_l php_l python_l redis_l \
+        typesense_l docker_l security_l panel_l
+  yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"  || mariadb_l="skip"
+  yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})" || postgres_l="skip"
+  yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"           || node_l="skip"
+  yesno "$OPT_PHP"       && php_l="install"     || php_l="skip"
+  yesno "$OPT_PYTHON"    && python_l="install"  || python_l="skip"
+  yesno "$OPT_REDIS"     && redis_l="install"   || redis_l="skip"
+  yesno "$OPT_TYPESENSE" && typesense_l="install" || typesense_l="skip"
+  yesno "$OPT_DOCKER"    && docker_l="install"  || docker_l="skip"
+  yesno "$OPT_SECURITY"  && security_l="install" || security_l="skip"
+  if [ -n "$PANEL_DOMAIN" ]; then panel_l="https://${PANEL_DOMAIN}"
+  else panel_l="https://<server-ip>:${PANEL_PORT}"; fi
+  cat <<EOF
+auraCP ${AURACP_VERSION} on ${OS_ID:-?} ${OS_CODENAME:-?} (${CADDY_ARCH})
+
+  auracpd + CLI .......  required
+  Caddy ...............  required
+  MariaDB .............  ${mariadb_l}
+  PostgreSQL ..........  ${postgres_l}
+  Node.js .............  ${node_l}
+  PHP / FrankenPHP ....  ${php_l}
+  Python 3 ............  ${python_l}
+  Redis ...............  ${redis_l}
+  Typesense ...........  ${typesense_l}
+  Docker ..............  ${docker_l}
+  UFW + fail2ban ......  ${security_l}
+
+  Panel URL ...........  ${panel_l}
+
+Proceed with this installation?
+EOF
+}
+
 confirm() {
-  [ "$DRY_RUN" -eq 1 ] && return 0
-  [ "$ASSUME_YES" -eq 1 ] && return 0
-  [ -t 0 ] || return 0
+  # Non-interactive paths still want the plan in the log, so print it then go.
+  [ "$DRY_RUN" -eq 1 ]    && { print_plan; return 0; }
+  [ "$ASSUME_YES" -eq 1 ] && { print_plan; return 0; }
+  [ -r /dev/tty ]         || { print_plan; return 0; }
+
+  # TUI path: plan + confirm both inside one whiptail dialog. Consistent with
+  # the rest of the installer's TUI; "Install" / "Cancel" buttons make intent
+  # clearer than the generic Yes/No, and Esc/Cancel aborts.
+  if [ "$INTERACTIVE" -ne 0 ] && command -v whiptail >/dev/null 2>&1; then
+    if whiptail --title "auraCP installer — review" \
+        --yes-button "Install" --no-button "Cancel" \
+        --yesno "$(build_plan)" 24 70 < /dev/tty; then
+      return 0
+    fi
+    die "Aborted."
+  fi
+
+  # Fallback (no whiptail / preset mode): colour plan on stdout + readline.
+  print_plan
   local a; read -r -p "Proceed with this plan? [Y/n]: " a < /dev/tty || true
   case "${a:-y}" in y|Y|"") ;; *) die "Aborted." ;; esac
 }
@@ -747,8 +801,7 @@ main() {
   preflight
   select_components
   prompt_panel_domain
-  print_plan
-  confirm
+  confirm                 # whiptail dialog (plan + Install/Cancel) or readline fallback
 
   apt_refresh
   install_base
