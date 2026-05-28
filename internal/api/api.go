@@ -122,6 +122,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	// instance + admin + cloudflare
 	mux.Handle("GET /api/instance", srv.protect(srv.instanceInfo))
 	mux.Handle("GET /api/instance/services", srv.requireAdmin(srv.instanceServices))
+	mux.Handle("POST /api/instance/services/{name}/restart", srv.requireAdmin(srv.instanceServiceRestart))
 	mux.Handle("GET /api/admin/users", srv.requirePerm("users", "read", srv.listAdminUsers))
 	mux.Handle("POST /api/admin/users", srv.requirePerm("users", "create", srv.createAdminUser))
 	mux.Handle("PUT /api/admin/users/{email}", srv.requirePerm("users", "update", srv.updateAdminUser))

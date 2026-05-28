@@ -41,6 +41,33 @@ func (s *Server) instanceServices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, instance.Services(r.Context(), s.runner))
 }
 
+// POST /api/instance/services/{name}/restart — admin-only. Refuses any unit
+// not in instance.RestartableServices so the API can't be abused to send
+// arbitrary `systemctl restart <unit>` commands.
+func (s *Server) instanceServiceRestart(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !instance.CanRestart(name) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "this unit cannot be restarted from the panel"})
+		return
+	}
+	out, err := s.runner.Run(r.Context(), "systemctl", "restart", name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error(), "output": out})
+		return
+	}
+	// Re-probe the unit so the UI can immediately reflect the new state.
+	probe, _ := s.runner.Run(r.Context(), "systemctl", "is-active", name)
+	s.audit(r, "service.restart", name)
+	writeJSON(w, http.StatusOK, map[string]string{"name": name, "state": trimEol(probe)})
+}
+
+func trimEol(s string) string {
+	for len(s) > 0 && (s[len(s)-1] == '\n' || s[len(s)-1] == '\r' || s[len(s)-1] == ' ') {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
 // GET /api/admin/users
 func (s *Server) listAdminUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := s.store.ListUsers()

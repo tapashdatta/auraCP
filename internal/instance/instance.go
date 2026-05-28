@@ -94,6 +94,29 @@ func diskInfo(path string) (usedGB, totalGB int64) {
 	return (total - free) / gb, total / gb
 }
 
+// RestartableServices is the whitelist of unit names the panel will accept a
+// restart request for. Strictly limited to the same list Services() probes
+// minus auracpd itself (restarting auracpd via its own HTTP API yanks the
+// rug — the watchdog catches that case anyway, but we shouldn't make it
+// easy to brick the panel from the UI).
+var RestartableServices = map[string]bool{
+	"nginx":            true,
+	"php8.3-fpm":       true,
+	"php8.4-fpm":       true,
+	"php8.5-fpm":       true,
+	"mariadb":          true,
+	"postgresql":       true,
+	"redis-server":     true,
+	"docker":           true,
+	"typesense-server": true,
+	"fail2ban":         true,
+}
+
+// CanRestart reports whether name is in the panel-managed restart whitelist.
+// Refusing arbitrary unit names keeps the panel from being a remote `systemctl
+// restart` shell — only the units auracpd is responsible for can be touched.
+func CanRestart(name string) bool { return RestartableServices[name] }
+
 // Services returns active/inactive/unknown for the known managed services.
 //
 // v0.2.0 stack: auracpd + nginx + per-version PHP-FPM + databases + optional

@@ -211,27 +211,142 @@
   let uploadMsg = $state('')
   let fileInput = $state(null)   // refs the hidden <input type=file>
 
+  // v0.2.18: per-upload progress. uploadProg tracks bytes-sent / bytes-total
+  // for the in-flight upload so we can render a real progress bar + ETA. We
+  // use XMLHttpRequest because fetch() still doesn't expose upload progress
+  // events in any browser (the body is a stream the browser owns; XHR's
+  // upload.onprogress is the only portable way).
+  let uploadProg = $state({ active: false, loaded: 0, total: 0, files: 0, name: '' })
+  let uploadXHR = $state(null)  // exposes Cancel button
+
+  function csrf() {
+    const m = document.cookie.match(/(?:^|;\s*)auracp_csrf=([^;]+)/)
+    return m ? decodeURIComponent(m[1]) : ''
+  }
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B'
+    if (n < 1<<20) return (n/1024).toFixed(1) + ' KB'
+    if (n < 1<<30) return (n/(1<<20)).toFixed(1) + ' MB'
+    return (n/(1<<30)).toFixed(2) + ' GB'
+  }
+
   async function uploadFiles(fileList) {
     if (!fileList || fileList.length === 0) return
-    uploadBusy = true
-    uploadMsg = `Uploading ${fileList.length} file${fileList.length > 1 ? 's' : ''}…`
+    const list = Array.from(fileList)
+    const total = list.reduce((s, f) => s + f.size, 0)
     const fd = new FormData()
     fd.append('path', filePath)
-    for (const f of fileList) fd.append('files', f, f.name)
-    try {
-      const r = await apiFetch(`${base}/files`, { method: 'POST', body: fd })
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) { uploadMsg = d.error || `Upload failed: ${r.status}`; uploadBusy = false; return }
-      const errs = Array.isArray(d.errors) ? d.errors.length : 0
-      uploadMsg = errs > 0
-        ? `Uploaded ${d.saved}; ${errs} failed: ${d.errors.join(', ')}`
-        : `Uploaded ${d.saved} file${d.saved > 1 ? 's' : ''}.`
-      load('files')
-    } catch (e) {
-      uploadMsg = 'Upload aborted: ' + (e?.message || 'unknown error')
-    }
+    for (const f of list) fd.append('files', f, f.name)
+
+    uploadBusy = true
+    uploadProg = { active: true, loaded: 0, total, files: list.length, name: list[0].name }
+    uploadMsg = ''
+
+    await new Promise((resolve) => {
+      const xhr = new XMLHttpRequest()
+      uploadXHR = xhr
+      xhr.open('POST', `${base}/files`)
+      xhr.setRequestHeader('X-CSRF-Token', csrf())
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) uploadProg = { ...uploadProg, loaded: e.loaded, total: e.total || total }
+      }
+      xhr.onload = () => {
+        uploadProg = { ...uploadProg, active: false }
+        let d = {}
+        try { d = JSON.parse(xhr.responseText) } catch {}
+        if (xhr.status < 200 || xhr.status >= 300) {
+          uploadMsg = d.error || `Upload failed: HTTP ${xhr.status}`
+        } else {
+          const errs = Array.isArray(d.errors) ? d.errors.length : 0
+          uploadMsg = errs > 0
+            ? `Uploaded ${d.saved}; ${errs} failed: ${d.errors.join(', ')}`
+            : `Uploaded ${d.saved} file${d.saved > 1 ? 's' : ''} (${fmtBytes(total)}).`
+          load('files')
+          refreshTreeAt(filePath)   // a new file might be a new folder we should show
+        }
+        resolve()
+      }
+      xhr.onerror = () => { uploadMsg = 'Upload aborted (network error).'; uploadProg = { ...uploadProg, active: false }; resolve() }
+      xhr.onabort = () => { uploadMsg = 'Upload cancelled.'; uploadProg = { ...uploadProg, active: false }; resolve() }
+      xhr.send(fd)
+    })
+    uploadXHR = null
     uploadBusy = false
   }
+  function cancelUpload() { if (uploadXHR) uploadXHR.abort() }
+
+  // ─── v0.2.18: folder tree (lazy-loaded) ────────────────────────────────
+  // The root node represents the document root itself. Children are loaded
+  // on first expand and cached; subsequent expands toggle visibility without
+  // re-fetching. Only directories are stored — files belong on the right pane.
+  let tree = $state({ name: site.domain || '/', path: '', children: null, expanded: true, loading: false })
+
+  async function fetchDirs(path) {
+    const r = await apiFetch(`${base}/files?path=${encodeURIComponent(path)}`)
+    if (!r.ok) return []
+    const d = await r.json()
+    return (d.entries || [])
+      .filter(e => e.dir)
+      .map(e => ({
+        name: e.name,
+        path: path ? `${path}/${e.name}` : e.name,
+        children: null,
+        expanded: false,
+        loading: false,
+      }))
+  }
+
+  // Find a node by its path. Returns null if not in the loaded portion of the
+  // tree (which is fine — the caller just won't refresh that subtree).
+  function findNode(path, node = tree) {
+    if (node.path === path) return node
+    if (!node.children) return null
+    for (const c of node.children) {
+      const hit = findNode(path, c)
+      if (hit) return hit
+    }
+    return null
+  }
+
+  async function toggleNode(node) {
+    if (node.expanded) { node.expanded = false; return }
+    if (node.children === null) {
+      node.loading = true
+      node.children = await fetchDirs(node.path)
+      node.loading = false
+    }
+    node.expanded = true
+  }
+
+  async function selectTreeNode(node) {
+    selected = {}
+    filePath = node.path
+    // Ensure the clicked node is also expanded so its subtree is visible.
+    if (node.children === null) {
+      node.loading = true
+      node.children = await fetchDirs(node.path)
+      node.loading = false
+    }
+    node.expanded = true
+    load('files')
+  }
+
+  // After an upload / mkdir / unzip / rename, the tree underneath `path`
+  // might have grown. Refresh just that node's children — cheap.
+  async function refreshTreeAt(path) {
+    const node = findNode(path)
+    if (!node) return
+    node.children = await fetchDirs(node.path)
+    node.expanded = true
+  }
+
+  // Lazy-load the tree's root the first time the Files tab is opened.
+  $effect(() => {
+    if (active === 'files' && tree.children === null && !tree.loading) {
+      tree.loading = true
+      fetchDirs('').then(c => { tree.children = c; tree.loading = false })
+    }
+  })
   function onDrop(e) {
     e.preventDefault(); dragOver = false
     uploadFiles(e.dataTransfer?.files)
@@ -246,6 +361,7 @@
     if (!r.ok) { uploadMsg = d.error || 'Could not delete'; return }
     uploadMsg = `Deleted ${name}.`
     load('files')
+    refreshTreeAt(filePath)
   }
   function downloadFile(name) {
     // Build the URL with credentials = sessionid cookie; same-origin so a
@@ -278,6 +394,7 @@
     if (!r.ok) { uploadMsg = d.error || 'Could not create folder'; return }
     uploadMsg = `Created ${name}.`
     load('files')
+    refreshTreeAt(filePath)
   }
 
   async function touchFile() {
@@ -303,6 +420,7 @@
     if (!r.ok) { uploadMsg = d.error || 'Could not rename'; return }
     uploadMsg = `Renamed to ${next}.`
     load('files')
+    refreshTreeAt(filePath)
   }
 
   // ─── in-browser text editor ────────────────────────────────────────────
@@ -385,6 +503,7 @@
       : `Deleted ${d.deleted} item${d.deleted > 1 ? 's' : ''}.`
     clearSelection()
     load('files')
+    refreshTreeAt(filePath)
   }
 
   async function bulkZip() {
@@ -413,6 +532,7 @@
     if (!r.ok) { uploadMsg = d.error || 'Extract failed'; return }
     uploadMsg = `Extracted ${name}.`
     load('files')
+    refreshTreeAt(filePath)
   }
 
   // ─── chmod modal ────────────────────────────────────────────────────────
@@ -692,7 +812,36 @@
     </div>
 
   {:else if active === 'files'}
-    <div class="section fade" role="region" aria-label="File manager"
+    {#snippet treeNode(node)}
+      <li>
+        <div class="tree-row" class:active={node.path === filePath}>
+          {#if node.children !== null && node.children.length === 0 && !node.loading}
+            <span class="tree-spacer" aria-hidden="true"></span>
+          {:else}
+            <button type="button" class="tree-toggle" onclick={() => toggleNode(node)} aria-label={node.expanded ? 'Collapse' : 'Expand'}>
+              {#if node.loading}
+                <span class="tree-spin"></span>
+              {:else}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true" style="transform:rotate({node.expanded ? 90 : 0}deg);transition:transform .12s"><path d="M9 6l6 6-6 6"/></svg>
+              {/if}
+            </button>
+          {/if}
+          <button type="button" class="tree-label" onclick={() => selectTreeNode(node)}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" class="tree-ic"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/></svg>
+            <span>{node.name}</span>
+          </button>
+        </div>
+        {#if node.expanded && node.children && node.children.length > 0}
+          <ul class="tree-children">
+            {#each node.children as child (child.path)}
+              {@render treeNode(child)}
+            {/each}
+          </ul>
+        {/if}
+      </li>
+    {/snippet}
+
+    <div class="section fade fm-section" role="region" aria-label="File manager"
          ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop}
          class:drop-active={dragOver}>
       <div class="section-h">
@@ -731,6 +880,36 @@
       {#if dragOver}
         <div class="drop-overlay">Drop files to upload to <span class="mono">{filePath || '/'}</span></div>
       {/if}
+
+      <!-- v0.2.18: live upload progress bar. Shows total bytes, percent, and
+           a Cancel button. Sits above the bulk-action bar so an in-flight
+           upload doesn't get buried under the list. -->
+      {#if uploadProg.active}
+        <div class="upload-prog">
+          <div class="upload-prog-info">
+            <span><b>Uploading {uploadProg.files} file{uploadProg.files > 1 ? 's' : ''}</b></span>
+            <span class="mono">{fmtBytes(uploadProg.loaded)} / {fmtBytes(uploadProg.total)} · {Math.round(uploadProg.loaded / (uploadProg.total || 1) * 100)}%</span>
+            <button type="button" class="manage" onclick={cancelUpload}>Cancel</button>
+          </div>
+          <div class="upload-prog-bar"><div class="upload-prog-fill" style="width:{Math.round(uploadProg.loaded / (uploadProg.total || 1) * 100)}%"></div></div>
+        </div>
+      {/if}
+
+      <!-- v0.2.18: split layout — folder tree on the left, file list on the
+           right. Below 760 px the tree drops above the list so the panel
+           stays usable on tablets. -->
+      <div class="fm-split">
+        <aside class="fm-tree" aria-label="Folder tree">
+          <div class="fm-tree-head"><span>Folders</span></div>
+          {#if tree.children === null}
+            <div class="fm-tree-empty">Loading…</div>
+          {:else}
+            <ul class="tree-root">
+              {@render treeNode(tree)}
+            </ul>
+          {/if}
+        </aside>
+        <div class="fm-main">
 
       <!-- v0.2.17: sticky bulk-action bar appears when one or more rows are
            checked. Pinned to the top of the file list so it's always reachable
@@ -827,6 +1006,8 @@
       {#if uploadMsg}
         <div class="note" style="margin:14px 18px"><div>{uploadMsg}</div></div>
       {/if}
+        </div><!-- /.fm-main -->
+      </div><!-- /.fm-split -->
     </div>
 
     <!-- In-browser editor modal. Plain <textarea> with monospace styling —

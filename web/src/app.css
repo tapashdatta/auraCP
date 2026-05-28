@@ -467,6 +467,43 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .chmod-preview > div{display:flex;flex-direction:column;align-items:center;gap:4px}
 .chmod-label{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--txt-3);font-weight:600}
 .chmod-preview .mono{font-size:16px;color:var(--txt);font-weight:600}
+
+/* v0.2.18: live upload progress bar */
+.upload-prog{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--surface-1)}
+.upload-prog-info{display:flex;align-items:center;gap:12px;margin-bottom:8px;font-size:13px;flex-wrap:wrap}
+.upload-prog-info .mono{color:var(--txt-2);font-size:12px;font-family:var(--fs-mono)}
+.upload-prog-info .manage{margin-left:auto}
+.upload-prog-bar{height:6px;border-radius:3px;background:var(--surface-2);overflow:hidden;position:relative}
+.upload-prog-fill{height:100%;background:linear-gradient(90deg, var(--aura), var(--aura-strong));border-radius:3px;transition:width .12s ease-out;box-shadow:0 0 6px color-mix(in srgb, var(--aura-strong) 60%, transparent)}
+
+/* v0.2.18: folder tree sidebar inside the File Manager. Two columns on
+   wide viewports; stacks (tree-above-list) under 760 px. */
+.fm-section{position:relative}
+.fm-split{display:grid;grid-template-columns:240px minmax(0, 1fr);gap:0}
+@media (max-width:760px){ .fm-split{grid-template-columns:1fr} }
+.fm-tree{border-right:1px solid var(--line);padding:8px 0;min-height:240px;max-height:70vh;overflow:auto}
+@media (max-width:760px){ .fm-tree{border-right:none;border-bottom:1px solid var(--line);max-height:240px} }
+.fm-tree-head{padding:8px 16px 10px;font-size:11px;font-weight:600;letter-spacing:.05em;color:var(--txt-3);text-transform:uppercase}
+.fm-tree-empty{padding:14px 18px;font-size:12.5px;color:var(--txt-3)}
+.fm-main{min-width:0}    /* let the file list shrink inside the grid cell */
+
+.tree-root, .tree-children{list-style:none;padding:0;margin:0}
+.tree-children{padding-left:18px}
+.tree-row{display:flex;align-items:center;gap:2px;padding:1px 8px;border-radius:6px;margin:1px 6px}
+.tree-row:hover{background:var(--surface-1)}
+.tree-row.active{background:var(--aura-glow)}
+.tree-row.active .tree-label{color:var(--aura-strong);font-weight:600}
+.tree-row.active .tree-ic{color:var(--aura-strong)}
+.tree-toggle{width:18px;height:24px;display:grid;place-items:center;color:var(--txt-3);border-radius:4px;flex:none;background:transparent;border:none;cursor:pointer}
+.tree-toggle:hover{color:var(--txt);background:var(--surface-2)}
+.tree-toggle svg{width:11px;height:11px}
+.tree-spacer{width:18px;height:24px;flex:none}
+.tree-label{display:flex;align-items:center;gap:7px;padding:4px 6px;font-size:13px;color:var(--txt-2);background:transparent;border:none;cursor:pointer;flex:1;min-width:0;text-align:left}
+.tree-label:hover{color:var(--txt)}
+.tree-label span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tree-ic{width:14px;height:14px;color:var(--txt-3);flex:none}
+.tree-spin{width:11px;height:11px;border:1.5px solid var(--txt-3);border-top-color:transparent;border-radius:50%;animation:auracp-spin .6s linear infinite}
+@keyframes auracp-spin{to{transform:rotate(360deg)}}
 /* Drag-and-drop overlay on the file manager section — softly highlights the
    container while files hover, with a clear instruction. */
 .section.drop-active{border:1.5px dashed var(--aura);background:var(--aura-glow)}

@@ -85,6 +85,28 @@
     load()
   }
 
+  // v0.2.18: per-service restart. Backend whitelists which units the panel
+  // can restart (everything we manage *except* auracpd itself). Disable the
+  // button mid-flight; refresh just that row once systemctl returns.
+  let restarting = $state({})    // {service: true} while in-flight
+  async function restartService(name) {
+    if (restarting[name]) return
+    if (!confirm(`Restart ${name}? Any in-flight requests handled by this service will be dropped.`)) return
+    restarting = { ...restarting, [name]: true }
+    const r = await apiFetch(`/api/instance/services/${encodeURIComponent(name)}/restart`, { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    restarting = { ...restarting, [name]: false }
+    if (!r.ok) { alert(d.error || `Restart failed: HTTP ${r.status}`); return }
+    if (d.state) services = { ...services, [name]: d.state }
+  }
+  // Non-restartable units (e.g. auracpd itself) get no button — we don't want
+  // the UI to suggest an action that can't be taken.
+  const RESTARTABLE = new Set([
+    'nginx', 'php8.3-fpm', 'php8.4-fpm', 'php8.5-fpm',
+    'mariadb', 'postgresql', 'redis-server', 'docker',
+    'typesense-server', 'fail2ban',
+  ])
+
   async function savePanelDomain() {
     panelMsg = 'Applying… (auracpd will obtain the Let\'s Encrypt cert)'
     const r = await apiFetch('/api/settings/panel-domain', { method: 'POST', body: JSON.stringify({ domain: panel.input.trim() }) })
@@ -137,14 +159,6 @@
        Activity (full audit log table) spans both columns; everything else
        sits in one of the two columns so the page uses horizontal space. -->
   <div class="instance-grid">
-    <div class="card"><div class="section-h"><div><h3>Services</h3><p>auraCP-managed system units</p></div></div>
-      <table><thead><tr><th>Service</th><th>Status</th></tr></thead><tbody>
-        {#each Object.entries(services) as [name, state]}
-          <tr><td><span class="mono">{name}</span></td><td><span class="status"><span class="sdot {stateClass(state)}"></span>{state || 'unknown'}</span></td></tr>
-        {/each}
-      </tbody></table>
-    </div>
-
     <!-- Updates card — current vs latest from GitHub Releases. -->
     <div class="card"><div class="section-h"><div><h3>auraCP Updates</h3><p>Checks GitHub Releases hourly · in-place upgrade via dpkg</p></div>
       {#if update.available}
@@ -251,6 +265,29 @@
         <button class="btn btn-primary" onclick={installNode} disabled={!newNode.version}>Install</button>
         {#if nodeMsg}<span style="margin-left:12px;color:var(--txt-2);font-size:13px">{nodeMsg}</span>{/if}
       </div>
+    </div>
+
+    <!-- v0.2.18: Services moved here (was at top) so the page reads as
+         "configure stuff, then status / recent activity". Per-row Restart
+         issues `systemctl restart` via the panel, whitelisted server-side. -->
+    <div class="card span-2"><div class="section-h"><div><h3>Services</h3><p>auraCP-managed system units · click Restart to bounce one</p></div></div>
+      <table><thead><tr><th>Service</th><th>Status</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+        {#each Object.entries(services) as [name, state]}
+          <tr>
+            <td><span class="mono">{name}</span></td>
+            <td><span class="status"><span class="sdot {stateClass(state)}"></span>{state || 'unknown'}</span></td>
+            <td style="text-align:right">
+              {#if RESTARTABLE.has(name)}
+                <button type="button" class="manage" onclick={() => restartService(name)} disabled={restarting[name]}>
+                  {restarting[name] ? 'Restarting…' : 'Restart'}
+                </button>
+              {:else}
+                <span style="color:var(--txt-3);font-size:12px">—</span>
+              {/if}
+            </td>
+          </tr>
+        {/each}
+      </tbody></table>
     </div>
 
     <!-- Recent activity — full width; tabular event log -->
