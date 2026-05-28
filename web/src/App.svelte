@@ -4,6 +4,7 @@
   import { session, checkAuth } from './lib/auth.svelte.js'
   import TopBar from './lib/components/TopBar.svelte'
   import DialogHost from './lib/components/DialogHost.svelte'
+  import ToastHost from './lib/components/ToastHost.svelte'
   import Login from './screens/Login.svelte'
   import Sites from './screens/Sites.svelte'
   import AddSite from './screens/AddSite.svelte'
@@ -42,3 +43,7 @@
 <!-- Modal dialog host — rendered above all screens, listens for any call
      to confirmDialog / promptDialog / alertDialog. -->
 <DialogHost />
+
+<!-- Toast host — transient feedback that auto-dismisses after 4 s (6 s for
+     errors). Listens to lib/toast.svelte.js. -->
+<ToastHost />

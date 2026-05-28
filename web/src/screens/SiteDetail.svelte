@@ -4,6 +4,7 @@
   import { apiFetch } from '../lib/api.js'
   import { brandIcons, tabIcons } from '../lib/icons.js'
   import { confirmDialog, promptDialog, alertDialog } from '../lib/dialog.svelte.js'
+  import { toast, toastSuccess, toastError } from '../lib/toast.svelte.js'
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
   let active = $state('settings')
@@ -229,19 +230,31 @@
     load('databases')
   }
   async function addCron() {
+    notice = ''
     busy = true
-    const r = await apiFetch(`${base}/cron`, { method: 'POST', body: JSON.stringify(newCron) })
-    const d = await r.json().catch(() => ({}))
-    busy = false
-    if (!r.ok) { notice = d.error || `Could not add cron job: ${r.status}`; return }
-    notice = `Cron job added; ${site.user}'s crontab refreshed.`
-    newCron = { schedule: '', command: '' }
-    load('cron')
+    try {
+      const r = await apiFetch(`${base}/cron`, { method: 'POST', body: JSON.stringify(newCron) })
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) {
+        toastError(d.error
+          ? `Could not add cron job: ${d.error}`
+          : `Could not add cron job (HTTP ${r.status}). The cron daemon may not be installed — try: sudo apt install cron`)
+        return
+      }
+      toastSuccess(`Cron job added; ${site.user}'s crontab refreshed`)
+      newCron = { schedule: '', command: '' }
+      load('cron')
+    } catch (e) {
+      toastError('Add failed: ' + (e?.message || 'unknown error'))
+    } finally {
+      busy = false
+    }
   }
   async function delCron(id) {
     const r = await apiFetch(`${base}/cron/${id}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
-    if (!r.ok) { notice = d.error || `Could not delete: ${r.status}`; return }
+    if (!r.ok) { toastError(d.error || `Could not delete: ${r.status}`); return }
+    toastSuccess('Cron job removed')
     load('cron')
   }
   async function makeBackup() {
@@ -1321,6 +1334,7 @@
             </label></div>
           </div>
           <button class="btn btn-primary" onclick={addCron} disabled={busy || !newCron.schedule || !newCron.command}>Add Cron Job</button>
+          {#if notice}<div class="note" style="margin-top:14px"><div>{notice}</div></div>{/if}
         </div>
       </div>
     </div>

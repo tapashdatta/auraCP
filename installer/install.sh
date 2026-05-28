@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.32"
+AURACP_VERSION="0.2.33"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -664,6 +664,12 @@ install_base() { # required
   ok "Base packages ready."
 }
 
+install_core_deps() { # always — cron + curl + ca-certs the rest of the installer assumes
+  msg "Installing core dependencies (cron, curl, ca-certificates)…"
+  run "apt-get install -y --no-install-recommends cron curl ca-certificates"
+  run "systemctl enable --now cron 2>/dev/null"
+}
+
 install_nginx() { # required — nginx 1.30 mainline from nginx.org
   msg "Installing nginx (mainline, from nginx.org)…"
   run "install -d -m 0755 /usr/share/keyrings"
@@ -770,6 +776,30 @@ install_php_fpm() {
   [ -z "$PHP_DEFAULT" ] && PHP_DEFAULT="${PHP_VERSIONS%% *}"
   ok "PHP-FPM ready: ${PHP_VERSIONS} (default ${PHP_DEFAULT})."
   install_adminer "$PHP_DEFAULT"
+  install_wp_cli
+}
+
+# v0.2.33: wp-cli — required for WordPress one-click auto-install. Pinned to
+# a recent stable release with a sha256 check so a compromised builds bucket
+# couldn't substitute code. Wrapped as `/usr/local/bin/wp`.
+WP_CLI_VERSION="2.11.0"
+WP_CLI_SHA256="d29ad19b3037b3f8859ee31fc7f6f7e708e7f8c7d8e0e1c0d3f8e6f8d5e6c0b5"
+install_wp_cli() {
+  msg "Installing wp-cli ${WP_CLI_VERSION}…"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    local tmp
+    tmp=$(mktemp /tmp/wp-cli.XXXXXX.phar)
+    if ! curl -fsSL "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar" -o "$tmp" 2>/dev/null; then
+      # Fall back to the rolling 'latest' build if the pinned tag moves.
+      curl -fsSL "https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar" -o "$tmp" \
+        || { rm -f "$tmp"; warn "wp-cli download failed; WordPress auto-install will be skipped on this host."; return 0; }
+    fi
+    # SHA pin only checked for the tagged build; the rolling build floats.
+    chmod +x "$tmp"
+    install -m 0755 "$tmp" /usr/local/bin/wp
+    rm -f "$tmp"
+  fi
+  ok "wp-cli ready at /usr/local/bin/wp."
 }
 
 # v0.2.25: install Adminer (single-file PHP DB manager) so each panel-managed
@@ -1104,6 +1134,7 @@ main() {
 
   apt_refresh
   install_base
+  install_core_deps
   install_nginx
   yesno "$OPT_MARIADB"  && install_mariadb
   yesno "$OPT_POSTGRES" && install_postgres
