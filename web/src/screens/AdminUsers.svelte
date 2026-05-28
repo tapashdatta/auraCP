@@ -3,6 +3,7 @@
   import { go } from '../lib/store.svelte.js'
   import { apiFetch } from '../lib/api.js'
   import { brandIcons } from '../lib/icons.js'
+  import { confirmDialog } from '../lib/dialog.svelte.js'
 
   const RES = ['sites', 'databases', 'backups', 'cron', 'files', 'ssh_users', 'users', 'settings']
   const ACT = ['create', 'read', 'update', 'delete']
@@ -73,7 +74,11 @@
   }
 
   async function resetRole(role) {
-    if (!confirm(`Reset ${roleLabel[role]} permissions to the compiled defaults?`)) return
+    if (!(await confirmDialog({
+      title: `Reset ${roleLabel[role]} permissions?`,
+      message: 'Reverts the per-resource CRUD matrix to the compiled defaults. New users created afterward use the new defaults; existing users keep their per-user overrides.',
+      confirmText: 'Reset', danger: true,
+    }))) return
     const r = await apiFetch('/api/admin/roles/' + encodeURIComponent(role), { method: 'DELETE' })
     if (!r.ok) { const d = await r.json().catch(() => ({})); rolesMsg = d.error || 'Reset failed'; return }
     rolesMsg = `${roleLabel[role]} reverted to defaults.`
@@ -162,7 +167,11 @@
   }
 
   async function del(email) {
-    if (!confirm(`Delete ${email}?`)) return
+    if (!(await confirmDialog({
+      title: `Delete ${email}?`,
+      message: 'Their panel access is revoked immediately. The user record is removed; any sites they were scoped to remain.',
+      confirmText: 'Delete', danger: true,
+    }))) return
     const r = await apiFetch('/api/admin/users/' + encodeURIComponent(email), { method: 'DELETE' })
     if (r.ok) load()
     else { const d = await r.json().catch(() => ({})); error = d.error || 'Failed' }

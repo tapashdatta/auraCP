@@ -176,7 +176,13 @@
           <tr><td colspan="5"><div class="empty">No sites match the current filter.</div></td></tr>
         {/if}
         {#each filtered as s}
-          <tr>
+          <!-- v0.2.31: whole row is clickable; the Manage button stays as a
+               focusable affordance for keyboard navigation. Pointer cursor +
+               hover highlight signal that clicking anywhere on the row jumps
+               into the site's detail view. -->
+          <tr class="site-row" tabindex="0" role="link" aria-label="Open {s.domain}"
+              onclick={() => openSite(s)}
+              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSite(s) } }}>
             <td><div class="domain"><div class="fav brand">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic}{/if}</div><div class="nm">{s.domain}<small>{s.root}</small></div></div></td>
             <td><span class="mono">{s.user}</span></td>
             <td>
@@ -185,7 +191,7 @@
             </td>
             <td><span class="status"><span class="sdot s-{s.status}"></span>{s.statusText}</span></td>
             <td style="text-align:right">
-              <button type="button" class="manage" onclick={() => openSite(s)}>Manage
+              <button type="button" class="manage" onclick={(e) => { e.stopPropagation(); openSite(s) }}>Manage
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
               </button>
             </td>

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte'
   import { go } from '../lib/store.svelte.js'
   import { apiFetch } from '../lib/api.js'
+  import { confirmDialog, alertDialog } from '../lib/dialog.svelte.js'
 
   let info = $state(null)
   let services = $state({})
@@ -48,7 +49,11 @@
 
   async function applyUpdate() {
     if (!update.available || updateBusy) return
-    if (!confirm(`Upgrade auracpd from ${update.current} to ${update.latestPlain}? The panel will restart automatically.`)) return
+    if (!(await confirmDialog({
+      title: `Upgrade to auraCP ${update.latestPlain}?`,
+      message: `Current: ${update.current}\nTarget:  ${update.latestPlain}\n\nThe panel will restart automatically. The page will reload when the new daemon is responding.`,
+      confirmText: 'Upgrade now', cancelText: 'Cancel',
+    }))) return
     updateBusy = true
     updateMsg = `Upgrading to ${update.latestPlain}…`
     await apiFetch('/api/instance/update', { method: 'POST' })
@@ -78,7 +83,11 @@
     load()
   }
   async function removeNode(v) {
-    if (!confirm(`Remove Node ${v}? (sites pinned to it will be rejected)`)) return
+    if (!(await confirmDialog({
+      title: `Remove Node ${v}?`,
+      message: 'Sites pinned to this Node version will be rejected on the next restart.',
+      confirmText: 'Remove', danger: true,
+    }))) return
     const r = await apiFetch(`/api/instance/node-versions/${encodeURIComponent(v)}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) nodeMsg = d.error || 'Failed'
@@ -108,12 +117,16 @@
   }
   async function restartService(name) {
     if (restarting[name]) return
-    if (!confirm(`Restart ${name}? Any in-flight requests handled by this service will be dropped.`)) return
+    if (!(await confirmDialog({
+      title: `Restart ${name}?`,
+      message: 'Any in-flight requests handled by this service will be dropped.',
+      confirmText: 'Restart',
+    }))) return
     restarting = { ...restarting, [name]: true }
     const r = await apiFetch(`/api/instance/services/${encodeURIComponent(name)}/restart`, { method: 'POST' })
     const d = await r.json().catch(() => ({}))
     restarting = { ...restarting, [name]: false }
-    if (!r.ok) { alert(d.error || `Restart failed: HTTP ${r.status}`); return }
+    if (!r.ok) { await alertDialog({ title: 'Restart failed', message: d.error || `HTTP ${r.status}`, danger: true }); return }
     if (d.state) services = { ...services, [name]: d.state }
   }
   // Non-restartable units (e.g. auracpd itself) get no button — we don't want
@@ -176,29 +189,31 @@
        Activity (full audit log table) spans both columns; everything else
        sits in one of the two columns so the page uses horizontal space. -->
   <div class="instance-grid">
-    <!-- Updates card — current vs latest from GitHub Releases. -->
-    <div class="card"><div class="section-h"><div><h3>auraCP Updates</h3><p>Checks GitHub Releases hourly · in-place upgrade via dpkg</p></div>
-      {#if update.available}
-        <span class="pill-cat warn">Update available</span>
-      {:else if update.error}
-        <span class="pill-cat danger">Check failed</span>
-      {:else}
-        <span class="pill-cat ok">Up to date</span>
-      {/if}</div>
-      <div class="section-b">
-        <div class="kv"><span class="k">Installed</span><span class="v">{update.current || '—'}</span></div>
-        <div class="kv"><span class="k">Latest release</span><span class="v">{update.latestPlain || '—'}</span></div>
-        <div class="kv"><span class="k">Last checked</span><span class="v">{update.checkedAt ? new Date(update.checkedAt).toLocaleString() : 'never'}</span></div>
-        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-          <button class="btn btn-ghost" onclick={checkUpdate} disabled={updateBusy}>Check now</button>
+    <!-- v0.2.31: compact Updates card. Versions inline (Installed → Latest),
+         tiny "Last checked" caption, action buttons on one row. Was a 3-kv
+         block + buttons spanning ~6 vertical lines; now ~3. -->
+    <div class="card"><div class="section-h"><div><h3>auraCP Updates</h3>
+        <p>GitHub Releases · in-place upgrade via dpkg</p></div>
+      {#if update.available}<span class="pill-cat warn">Update available</span>
+      {:else if update.error}<span class="pill-cat danger">Check failed</span>
+      {:else}<span class="pill-cat ok">Up to date</span>{/if}</div>
+      <div class="section-b" style="padding-top:6px">
+        <div class="upd-row">
+          <span class="upd-ver"><span class="mono">{update.current || '—'}</span></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="upd-arr"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+          <span class="upd-ver-next"><span class="mono">{update.latestPlain || '—'}</span></span>
+          <span class="upd-ts" title={update.checkedAt}>checked {update.checkedAt ? new Date(update.checkedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : 'never'}</span>
+        </div>
+        <div class="upd-actions">
           {#if update.available}
-            <button class="btn btn-primary" onclick={applyUpdate} disabled={updateBusy}>Upgrade to {update.latestPlain}</button>
+            <button class="btn btn-primary" style="padding:7px 14px;font-size:12.5px" onclick={applyUpdate} disabled={updateBusy}>Upgrade to {update.latestPlain}</button>
           {/if}
+          <button class="btn btn-ghost" style="padding:7px 14px;font-size:12.5px" onclick={checkUpdate} disabled={updateBusy}>Check now</button>
           {#if update.releaseUrl}
-            <a class="btn btn-ghost" href={update.releaseUrl} target="_blank" rel="noopener">Release notes</a>
+            <a class="btn btn-ghost" style="padding:7px 14px;font-size:12.5px" href={update.releaseUrl} target="_blank" rel="noopener">Release notes</a>
           {/if}
         </div>
-        {#if updateMsg}<div class="note" style="margin-top:12px"><div>{updateMsg}</div></div>{/if}
+        {#if updateMsg}<div class="note" style="margin-top:10px"><div>{updateMsg}</div></div>{/if}
       </div>
     </div>
 

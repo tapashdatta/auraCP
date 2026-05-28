@@ -188,8 +188,13 @@ input,select{font-family:inherit}
 .btn:active{transform:translateY(0) scale(.985)}
 .btn-primary{background:linear-gradient(180deg, color-mix(in srgb, var(--aura) 88%, white), var(--aura));color:var(--aura-ink);box-shadow:0 1px 2px rgba(0,0,0,.12), 0 10px 22px -10px var(--aura)}
 .btn-primary:hover{filter:brightness(1.04);transform:translateY(-1px);box-shadow:0 2px 4px rgba(0,0,0,.14), 0 14px 28px -10px var(--aura)}
-.btn-ghost{background:var(--surface-0);border-color:var(--line);color:var(--txt);box-shadow:var(--shadow)}
-.btn-ghost:hover{background:var(--surface-1);border-color:var(--line-2);transform:translateY(-1px)}
+/* v0.2.31: ghost buttons used to share the card surface, making them
+   nearly invisible on cards. Bumped to surface-1 + heavier border so
+   they're distinct against any background, plus a small inset highlight
+   for tactility. */
+.btn-ghost{background:var(--surface-1);border-color:var(--line-2);color:var(--txt);box-shadow:0 1px 0 rgba(255,255,255,.04) inset, 0 1px 2px rgba(0,0,0,.06)}
+.btn-ghost:hover{background:var(--surface-2);border-color:color-mix(in srgb, var(--line-2) 70%, var(--txt-2));transform:translateY(-1px)}
+.btn-ghost:active{transform:translateY(0)}
 .btn-dark{background:var(--solid-bg);color:var(--solid-fg)}
 .btn-dark:hover{background:var(--solid-bg-hover);transform:translateY(-1px)}
 .btn-square{border-radius:var(--radius-sm)}
@@ -481,6 +486,25 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .file-check{accent-color:var(--aura-strong);width:15px;height:15px;flex:none;margin:0;cursor:pointer}
 .file-row-grid.sel{background:var(--aura-glow)}
 .file-row-grid.sel:hover{background:color-mix(in srgb, var(--aura-glow) 80%, var(--surface-1))}
+/* v0.2.31: site row pointer-cursor + hover signal that the whole row opens
+   the site detail. Manage button on the right stays as a focusable action;
+   the row's role="link" tells screen readers it's navigable. */
+tr.site-row{cursor:pointer;transition:background-color .1s}
+tr.site-row:hover{background:var(--surface-1)}
+tr.site-row:focus-visible{outline:2px solid var(--aura);outline-offset:-2px}
+tr.site-row td:last-child .manage{opacity:.6;transition:opacity .1s}
+tr.site-row:hover td:last-child .manage{opacity:1}
+
+/* v0.2.31: compact Update card layout — versions inline with an arrow,
+   timestamp at the right edge, actions on a tight row underneath. */
+.upd-row{display:flex;align-items:center;gap:10px;padding:8px 0 12px;font-size:13px;flex-wrap:wrap}
+.upd-ver{color:var(--txt-2);font-weight:500}
+.upd-ver-next{color:var(--txt);font-weight:600}
+.upd-ver .mono, .upd-ver-next .mono{font-size:13px}
+.upd-arr{width:14px;height:14px;color:var(--txt-3);flex:none}
+.upd-ts{margin-left:auto;font-size:11.5px;color:var(--txt-3)}
+.upd-actions{display:flex;gap:8px;flex-wrap:wrap}
+
 .bulk-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:8px;padding:10px 18px;background:var(--surface-1);border-bottom:1px solid var(--line);flex-wrap:wrap}
 .bulk-count{font-weight:600;color:var(--txt);font-size:13px}
 .bulk-spacer{flex:1}

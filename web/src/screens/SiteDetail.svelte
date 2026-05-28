@@ -3,6 +3,7 @@
   import { detailTabs } from '../lib/data.js'
   import { apiFetch } from '../lib/api.js'
   import { brandIcons, tabIcons } from '../lib/icons.js'
+  import { confirmDialog, promptDialog, alertDialog } from '../lib/dialog.svelte.js'
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
   let active = $state('settings')
@@ -156,7 +157,11 @@
 
   // v0.2.23: drop a database + its user from the engine and the store.
   async function deleteDb(engine, name) {
-    if (!confirm(`Drop the ${engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'} database "${name}" and its user? This cannot be undone.`)) return
+    if (!(await confirmDialog({
+      title: `Drop database "${name}"?`,
+      message: `Engine: ${engine === 'postgres' ? 'PostgreSQL' : 'MariaDB'}\n\nThis drops the database AND its dedicated user. The change is immediate and cannot be undone.`,
+      confirmText: 'Drop database', danger: true,
+    }))) return
     const r = await apiFetch(`${base}/databases/${encodeURIComponent(engine)}/${encodeURIComponent(name)}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) { notice = d.error || 'Could not drop database'; return }
@@ -165,9 +170,15 @@
   }
   // v0.2.23: site delete from Settings tab. Confirms by typing the domain.
   async function deleteSite() {
-    const typed = prompt(`Type the domain to confirm deletion:\n${site.domain}\n\nThis will:\n- Remove the nginx vhost\n- Remove the site's PHP-FPM pool / Node systemd unit\n- Delete the site user (and their docroot + SFTP access)\n- Delete the SSL certificate record\nDatabases are kept (drop them on the Databases tab first if needed).`)
+    const typed = await promptDialog({
+      title: `Delete site ${site.domain}?`,
+      message: `Type the domain below to confirm.\n\nThis will:\n• Remove the nginx vhost\n• Remove the PHP-FPM pool / Node systemd unit\n• Delete the site user (and their docroot + SFTP access)\n• Delete the SSL certificate record\n\nDatabases are kept — drop them on the Databases tab first if you want a complete teardown.`,
+      placeholder: site.domain,
+      confirmText: 'Delete site', danger: true,
+    })
+    if (typed === null) return
     if (typed !== site.domain) {
-      if (typed !== null) alert('Domain did not match. Site not deleted.')
+      await alertDialog({ title: 'Domain did not match', message: 'Site not deleted.', danger: true })
       return
     }
     const r = await apiFetch(`/api/sites/${encodeURIComponent(site.domain)}`, { method: 'DELETE' })
@@ -185,7 +196,11 @@
     load('sshftp')
   }
   async function delSSH(username) {
-    if (!confirm(`Delete SSH/FTP user "${username}"? This revokes their access immediately.`)) return
+    if (!(await confirmDialog({
+      title: `Delete SSH/FTP user "${username}"?`,
+      message: 'Their access is revoked immediately.',
+      confirmText: 'Delete', danger: true,
+    }))) return
     await apiFetch(`${base}/ssh-users/${encodeURIComponent(username)}`, { method: 'DELETE' })
     load('sshftp')
   }
@@ -445,7 +460,11 @@
   function onDragOver(e) { e.preventDefault(); dragOver = true }
   function onDragLeave() { dragOver = false }
   async function deleteFile(name) {
-    if (!confirm(`Delete ${name}? This cannot be undone.`)) return
+    if (!(await confirmDialog({
+      title: `Delete ${name}?`,
+      message: 'This cannot be undone.',
+      confirmText: 'Delete', danger: true,
+    }))) return
     const sub = filePath ? `${filePath}/${name}` : name
     const r = await apiFetch(`${base}/files?path=${encodeURIComponent(sub)}`, { method: 'DELETE' })
     const d = await r.json().catch(() => ({}))
@@ -476,7 +495,7 @@
   }
 
   async function mkdir() {
-    const name = prompt('New folder name:')
+    const name = await promptDialog({ title: 'New folder', message: 'Name:', confirmText: 'Create', placeholder: 'images' })
     if (!name) return
     const r = await apiFetch(`${base}/files/mkdir`, {
       method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
@@ -489,7 +508,7 @@
   }
 
   async function touchFile() {
-    const name = prompt('New file name (e.g. index.html, .env, robots.txt):')
+    const name = await promptDialog({ title: 'New file', message: 'Name (e.g. index.html, .env, robots.txt):', confirmText: 'Create', placeholder: 'index.html' })
     if (!name) return
     const r = await apiFetch(`${base}/files/touch`, {
       method: 'POST', body: JSON.stringify({ path: filePath, name: name.trim() })
@@ -501,7 +520,7 @@
   }
 
   async function renameItem(oldName) {
-    const next = prompt(`Rename ${oldName} to:`, oldName)
+    const next = await promptDialog({ title: `Rename ${oldName}`, message: 'New name:', defaultValue: oldName, confirmText: 'Rename' })
     if (!next || next.trim() === oldName) return
     const sub = filePath ? `${filePath}/${oldName}` : oldName
     const r = await apiFetch(`${base}/files/rename`, {
@@ -542,8 +561,10 @@
     editor.original = editor.content
     editor.busy = false
   }
-  function closeEditor() {
-    if (editor.content !== editor.original && !confirm('Discard unsaved changes?')) return
+  async function closeEditor() {
+    if (editor.content !== editor.original) {
+      if (!(await confirmDialog({ title: 'Discard unsaved changes?', confirmText: 'Discard', danger: true }))) return
+    }
     editor = { open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' }
   }
   async function saveEditor() {
@@ -581,7 +602,11 @@
 
   async function bulkDelete() {
     if (selectedCount === 0) return
-    if (!confirm(`Delete ${selectedCount} selected item${selectedCount > 1 ? 's' : ''}? This cannot be undone.`)) return
+    if (!(await confirmDialog({
+      title: `Delete ${selectedCount} selected item${selectedCount > 1 ? 's' : ''}?`,
+      message: 'This cannot be undone.',
+      confirmText: 'Delete', danger: true,
+    }))) return
     const paths = selectedNames.map(n => filePath ? `${filePath}/${n}` : n)
     const r = await apiFetch(`${base}/files/delete-many`, {
       method: 'POST', body: JSON.stringify({ paths })
@@ -600,7 +625,7 @@
   async function bulkZip() {
     if (selectedCount === 0) return
     const def = selectedCount === 1 ? selectedNames[0] + '.zip' : `archive-${Date.now().toString(36)}.zip`
-    const name = prompt('Archive name:', def)
+    const name = await promptDialog({ title: 'Create archive', message: 'Archive name:', defaultValue: def, confirmText: 'Create' })
     if (!name) return
     const paths = selectedNames.map(n => filePath ? `${filePath}/${n}` : n)
     const r = await apiFetch(`${base}/files/zip`, {
@@ -614,7 +639,11 @@
   }
 
   async function unzipItem(name) {
-    if (!confirm(`Extract ${name} here? Existing files with matching names will be overwritten.`)) return
+    if (!(await confirmDialog({
+      title: `Extract ${name}?`,
+      message: 'Files extract into the current folder. Existing files with matching names are overwritten.',
+      confirmText: 'Extract',
+    }))) return
     const sub = filePath ? `${filePath}/${name}` : name
     const r = await apiFetch(`${base}/files/unzip`, {
       method: 'POST', body: JSON.stringify({ path: sub })

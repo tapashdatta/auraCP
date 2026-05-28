@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.2.30"
+AURACP_VERSION="0.2.31"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -800,14 +800,16 @@ install_adminer() {
     install -m 0644 "$tmp" /opt/auracp/adminer/adminer.php
     rm -f "$tmp"
   fi
-  # Wrapper + plugin file are shipped in the .deb at /opt/auracp/packaging/.
-  # During install_adminer we copy them next to adminer.php where the wrapper
-  # expects them via __DIR__.
+  # Wrapper PHP is shipped in the .deb at /opt/auracp/packaging/. During
+  # install_adminer we copy it next to adminer.php where the wrapper expects
+  # it via __DIR__. v0.2.31: stale adminer-plugins.php from earlier installs
+  # is removed (the new wrapper uses Adminer's own auth flow and no longer
+  # depends on a plugin subclass).
   if [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
     run "install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php"
-    run "install -m 0644 /opt/auracp/packaging/adminer-plugins.php /opt/auracp/adminer/adminer-plugins.php"
+    run "rm -f /opt/auracp/adminer/adminer-plugins.php"
   else
-    warn "Adminer wrapper not bundled in the .deb (re-build with v0.2.25+ packaging); Manage buttons will 500 until fixed."
+    warn "Adminer wrapper not bundled in the .deb (re-build with v0.2.31+ packaging); Manage buttons will 500 until fixed."
   fi
   # Tmpfile for the SSO token directory — /run is tmpfs so this re-creates
   # on every boot; mode 0700 root:www-data so only PHP-FPM can read tokens.

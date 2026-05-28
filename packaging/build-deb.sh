@@ -36,9 +36,10 @@ install -m 0755 "$ROOT/packaging/auracpd-watchdog.sh"      "$PKG/opt/auracp/bin/
 install -m 0644 "$ROOT/packaging/auracpd-watchdog.service" "$PKG/etc/systemd/system/auracpd-watchdog.service"
 install -m 0644 "$ROOT/packaging/auracpd-watchdog.timer"   "$PKG/etc/systemd/system/auracpd-watchdog.timer"
 # v0.2.25: ship the Adminer SSO wrapper alongside the installer; install_adminer
-# copies them into /opt/auracp/adminer/ once PHP-FPM is in place.
+# copies it into /opt/auracp/adminer/index.php once PHP-FPM is in place.
+# v0.2.31: dropped adminer-plugins.php — the new wrapper uses Adminer's own
+# auth POST flow and doesn't need a plugin subclass.
 install -m 0644 "$ROOT/packaging/adminer-wrapper.php" "$PKG/opt/auracp/packaging/adminer-wrapper.php"
-install -m 0644 "$ROOT/packaging/adminer-plugins.php" "$PKG/opt/auracp/packaging/adminer-plugins.php"
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"

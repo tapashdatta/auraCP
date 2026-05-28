@@ -4,6 +4,7 @@
   import { toggleTheme, getTheme } from '../theme.js'
   import { session, logout } from '../auth.svelte.js'
   import { apiFetch } from '../api.js'
+  import { confirmDialog } from '../dialog.svelte.js'
 
   let theme = $state(getTheme())
   let menu = $state(false)
@@ -23,7 +24,11 @@
   // but reachable from any screen — no detour through Settings.
   async function applyUpdate() {
     if (!updateAvailable || upgrading) return
-    if (!confirm(`Upgrade auracpd from ${updateCurrent || 'current'} to ${updateLatest}?\nThe panel will restart automatically.`)) return
+    if (!(await confirmDialog({
+      title: `Upgrade to auraCP ${updateLatest}?`,
+      message: `Current: ${updateCurrent || 'unknown'}\nTarget:  ${updateLatest}\n\nThe panel will restart automatically. The page will reload when the new daemon is responding.`,
+      confirmText: 'Upgrade now',
+    }))) return
     upgrading = true
     upgradeMsg = `Upgrading to ${updateLatest}…`
     await apiFetch('/api/instance/update', { method: 'POST' })

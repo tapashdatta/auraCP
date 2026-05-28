@@ -1,51 +1,30 @@
 <?php
 /*
- * auraCP — Adminer SSO wrapper
+ * auraCP — Adminer SSO wrapper (v0.2.31 redesign)
  *
- * Reads a one-time SSO token written by auracpd at
- * /run/auracp/adminer-sso/<token>. The token file holds the database
- * credentials in JSON. We unlink the file on first read (single-use),
- * store the creds in the PHP session, then hand off to Adminer with
- * an `adminer_object()` that returns those creds from `credentials()`.
+ * Previous design tried to set $_SESSION['creds'] then include adminer.php and
+ * have a subclass read them. Adminer calls session_name("Adminer") and starts
+ * its own session, which clobbers ours — credentials() in our subclass saw
+ * an empty session, so the wrapper always landed on "No active panel session".
  *
- * Adminer ships as a single file (adminer.php) next to this wrapper.
- * Operators never see a login form — they were already authenticated
- * by the panel before getting here.
+ * New flow uses Adminer's OWN authentication. On ?sso=<token>:
+ *   1. Read + delete the SSO token (single-use).
+ *   2. Render a tiny auto-submitting HTML form that POSTs to /_adminer/ with
+ *      auth[driver/server/username/password/db] populated from the token.
+ *   3. Adminer's own index.php receives the POST, validates the creds against
+ *      the engine, sets its session, redirects to the database browse view.
  *
- * Security notes:
- * - Token files are written 0640 root:www-data so PHP-FPM (www-data) can
- *   read them; nothing else on the box can.
- * - PHP session cookie is HttpOnly + SameSite=Lax. Session lifetime is
- *   short (4h) — re-clicking Manage refreshes it.
- * - This file should be the ONLY entry point in /opt/auracp/adminer/.
- *   adminer.php is loaded via include(); a stray request to it directly
- *   bypasses our auth wrapper, so the installer keeps it 0600 and only
- *   readable by the FPM user via include().
+ * Net effect: operator clicks Manage in the panel, opens a tab, sees Adminer
+ * already logged into the right database. No login form, no manual typing.
+ * Password is in the form body for one POST over HTTPS; never in the URL.
+ *
+ * If a request hits /_adminer/ without an SSO token AND without an active
+ * Adminer session, we render a friendly "click Manage" page rather than
+ * Adminer's bare login form (which would invite operators to type a server
+ * password). Adminer's auth is bypassed only via the SSO POST flow.
  */
 
-// v0.2.28: pin session.save_path before session_start(). The pool config
-// already sets this via php_admin_value, but defending here too means a
-// fresh install with a stale pool config (or an in-flight upgrade) still
-// works. /run/auracp/adminer-sessions is created by tmpfiles.d at boot;
-// fall back to /tmp if it doesn't exist (open_basedir allows both).
-if (is_dir('/run/auracp/adminer-sessions') && is_writable('/run/auracp/adminer-sessions')) {
-    ini_set('session.save_path', '/run/auracp/adminer-sessions');
-} else {
-    ini_set('session.save_path', '/tmp');
-}
-
-session_set_cookie_params([
-    'lifetime' => 0,
-    'path'     => '/_adminer/',
-    'secure'   => !empty($_SERVER['HTTPS']),
-    'httponly' => true,
-    'samesite' => 'Lax',
-]);
-session_name('auracp_adminer');
-session_start();
-
 if (!empty($_GET['sso'])) {
-    // Strict token shape: hex/alphanumeric only, length-bounded.
     $tok = preg_replace('/[^A-Za-z0-9_-]/', '', $_GET['sso']);
     if (strlen($tok) < 16 || strlen($tok) > 96) {
         http_response_code(400);
@@ -65,34 +44,79 @@ if (!empty($_GET['sso'])) {
         http_response_code(403);
         exit("SSO token expired. Click Manage again from the panel.");
     }
-    $_SESSION['creds'] = [
-        'driver' => ($data['engine'] === 'postgres') ? 'pgsql' : 'server',
-        'server' => 'localhost',
-        'user'   => $data['user'],
-        'pass'   => $data['password'],
-        'db'     => $data['name'],
-    ];
-    // Drop the sso query param so refresh doesn't re-read a deleted file.
-    header('Location: /_adminer/');
+    $driver = ($data['engine'] === 'postgres') ? 'pgsql' : 'server';
+    // Auto-submit the credentials to Adminer's own auth handler. Adminer
+    // accepts auth[driver|server|username|password|db|permanent] on its
+    // root path; on success it sets its own session + redirects.
+    $h = function ($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); };
+    ?><!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>auraCP — opening Adminer…</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0f1014;color:#9aa4b6;
+         margin:0;display:flex;align-items:center;justify-content:center;height:100vh}
+    .box{text-align:center;font-size:14px}
+    .spin{width:22px;height:22px;border:2px solid #2d343f;border-top-color:#38e3a3;
+          border-radius:50%;animation:s 600ms linear infinite;margin:0 auto 12px}
+    @keyframes s{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <div class="box">
+    <div class="spin"></div>
+    Opening Adminer…
+  </div>
+  <form id="auracp-auth" method="POST" action="/_adminer/" autocomplete="off">
+    <input type="hidden" name="auth[driver]"    value="<?= $h($driver) ?>">
+    <input type="hidden" name="auth[server]"    value="localhost">
+    <input type="hidden" name="auth[username]"  value="<?= $h($data['user']) ?>">
+    <input type="hidden" name="auth[password]"  value="<?= $h($data['password']) ?>">
+    <input type="hidden" name="auth[db]"        value="<?= $h($data['name']) ?>">
+    <input type="hidden" name="auth[permanent]" value="0">
+    <noscript>
+      <p>JavaScript disabled. Click below to continue:</p>
+      <button type="submit">Open Adminer</button>
+    </noscript>
+  </form>
+  <script>document.getElementById('auracp-auth').submit();</script>
+</body>
+</html><?php
     exit;
 }
 
-if (empty($_SESSION['creds'])) {
+// Refuse direct access to /_adminer/login or anywhere without an active
+// Adminer session AND without an SSO token — the only legitimate entry
+// point is the panel's Manage button. (Adminer would otherwise render its
+// login form, which we don't want operators to ever see.)
+//
+// Detection: a POST to /_adminer/ with auth[*] fields is Adminer's own
+// auth handler (we just dispatched it above) — let it through. A GET with
+// no session cookie and no token is what we want to block.
+$isAuthPost = ($_SERVER['REQUEST_METHOD'] === 'POST') && isset($_POST['auth']);
+$hasSession = isset($_COOKIE['adminer_sid']) || isset($_COOKIE['adminer_key']);
+if (!$isAuthPost && !$hasSession) {
     http_response_code(403);
-    echo "<!doctype html><html><head><meta charset=utf-8><title>auraCP — Adminer</title>";
-    echo "<style>body{font-family:system-ui,sans-serif;color:#333;max-width:520px;margin:80px auto;padding:0 20px}h1{font-size:18px;margin:0 0 12px}p{line-height:1.55;color:#555}</style></head><body>";
-    echo "<h1>No active session</h1>";
-    echo "<p>Return to the auraCP panel and click <b>Manage</b> next to the database you want to open.</p>";
-    echo "</body></html>";
+    ?><!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>auraCP — Adminer</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;color:#333;
+         max-width:520px;margin:80px auto;padding:0 20px;line-height:1.55}
+    h1{font-size:18px;margin:0 0 12px}
+    p{color:#555}
+  </style>
+</head>
+<body>
+  <h1>No active session</h1>
+  <p>Return to the auraCP panel and click <b>Manage</b> next to the database you want to open.</p>
+</body>
+</html><?php
     exit;
 }
 
-// Hand off to Adminer with our credentials pre-loaded. adminer_object() is
-// Adminer's plugin hook — it must return an Adminer (or subclass) instance.
-// adminer-plugins.php ends with `return new AuracpAdminer;` so require returns
-// that instance directly.
-function adminer_object() {
-    return require __DIR__ . '/adminer-plugins.php';
-}
-
+// Active Adminer session — hand off to Adminer normally.
 include __DIR__ . '/adminer.php';
