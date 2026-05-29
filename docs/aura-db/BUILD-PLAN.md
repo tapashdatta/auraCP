@@ -624,7 +624,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 7.5 | History redaction/retention follow-up  | deferred |              |
 | 8   | HTTP handler                           | ✓ done   | 417aa04      |
 | 8.5 | HTTP handler hardening follow-up       | deferred |              |
-| 9   | Standalone implementations + cmd       | pending  |              |
+| 9   | Standalone implementations + cmd       | ✓ done   | 5de6bfb      |
+| 9.5 | Standalone hardening follow-up         | deferred |              |
 | 10  | Panel-integrated glue                  | pending  |              |
 | 11  | Frontend shell + trees                 | pending  |              |
 | 12  | Row grid                               | pending  |              |
