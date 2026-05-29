@@ -214,19 +214,72 @@ func (s *Server) mfaDisable(w http.ResponseWriter, r *http.Request) {
 
 // currentUser resolves a fully-authenticated (non-pending) session.
 func (s *Server) currentUser(r *http.Request) (store.User, bool) {
+	return resolveCurrentUser(s.store, r)
+}
+
+// resolveCurrentUser is the package-private form of currentUser. It is
+// intentionally NOT exported: store.User carries PasswordHash and
+// TOTPSecret, and we don't want any external caller to be able to grab
+// those by reaching across the package boundary. External integrations
+// must go through ResolveIdentity instead (FIX-7 / INT-11).
+func resolveCurrentUser(st *store.Store, r *http.Request) (store.User, bool) {
 	c, err := r.Cookie(sessionCookie)
 	if err != nil {
 		return store.User{}, false
 	}
-	userID, pending, ok := s.store.Session(c.Value)
+	userID, pending, ok := st.Session(c.Value)
 	if !ok || pending {
 		return store.User{}, false
 	}
-	u, err := s.store.UserByID(userID)
+	u, err := st.UserByID(userID)
 	if err != nil {
 		return store.User{}, false
 	}
 	return u, true
+}
+
+// IdentitySummary is the minimal projection of an authenticated panel
+// user exposed to integrations outside the api package. It deliberately
+// omits PasswordHash, TOTPSecret, Permissions JSON, CreatedAt, and any
+// other column on store.User that could amplify the blast radius of an
+// API-package leak (FIX-7 / INT-11).
+//
+// Add fields here only after auditing that they are safe to share with
+// an integration that doesn't fully trust the surrounding code (e.g.
+// internal/api/dbadmin runs adjacent to but does not own the panel
+// session). Never add PasswordHash or TOTPSecret to this struct.
+type IdentitySummary struct {
+	UserID     int64
+	Email      string
+	Role       string
+	MFAEnabled bool
+	// Permissions is the raw permissions JSON. It carries no secrets
+	// (it's a capability map), and dbadmin's HasPermission needs it
+	// to authorize ActionConnCreate against the panel databases:create
+	// capability.
+	Permissions string
+}
+
+// ResolveIdentity is the integration-facing replacement for the
+// previously-exported ResolveCurrentUser. It resolves the panel session
+// cookie to an IdentitySummary — the smallest set of fields the
+// internal/api/dbadmin adapter actually needs — and never echoes
+// PasswordHash or TOTPSecret across the package boundary (FIX-7 /
+// INT-11). Returns ok=false on missing cookie, expired session,
+// mfa_pending, or unknown user, mirroring the contract of the legacy
+// resolver.
+func ResolveIdentity(st *store.Store, r *http.Request) (IdentitySummary, bool) {
+	u, ok := resolveCurrentUser(st, r)
+	if !ok {
+		return IdentitySummary{}, false
+	}
+	return IdentitySummary{
+		UserID:      u.ID,
+		Email:       u.Email,
+		Role:        u.Role,
+		MFAEnabled:  u.MFAEnabled(),
+		Permissions: u.Permissions,
+	}, true
 }
 
 // protect wraps a handler so only authenticated requests reach it.

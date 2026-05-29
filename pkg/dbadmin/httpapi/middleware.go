@@ -149,7 +149,9 @@ func authn(s *server) middleware {
 }
 
 // csrf enforces double-submit token on every non-safe method. Token is
-// the X-Aura-Csrf header byte-compared to the __Host-aura_csrf cookie.
+// the configured CSRF header (s.csrfHeaderName, default X-Aura-Csrf)
+// byte-compared to the configured cookie (s.csrfCookieName, default
+// __Host-aura_csrf).
 //
 // The WS upgrade route is excluded; it validates the token via the
 // subprotocol header instead.
@@ -165,8 +167,18 @@ func csrf(s *server) middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
-			header := r.Header.Get("X-Aura-Csrf")
-			cookie, err := r.Cookie("__Host-aura_csrf")
+			cookieName := DefaultCSRFCookieName
+			headerName := DefaultCSRFHeaderName
+			if s != nil {
+				if s.csrfCookieName != "" {
+					cookieName = s.csrfCookieName
+				}
+				if s.csrfHeaderName != "" {
+					headerName = s.csrfHeaderName
+				}
+			}
+			header := r.Header.Get(headerName)
+			cookie, err := r.Cookie(cookieName)
 			if err != nil || cookie == nil || header == "" {
 				emitDenialAudit(s, r, dbadmin.Action("csrf.denied"), "missing-token")
 				writeError(w, r, http.StatusForbidden, CodeCSRFRejected, "missing CSRF token")

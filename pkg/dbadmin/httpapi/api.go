@@ -26,7 +26,21 @@ type server struct {
 	// from a non-loopback peer is always rejected.
 	allowLoopbackEmptyOrigin bool
 	csrfDisabled             bool // for tests / dev mode
+	// csrfCookieName + csrfHeaderName let an embedder rebind the CSRF
+	// double-submit identity. The standalone surface defaults to
+	// __Host-aura_csrf / X-Aura-Csrf; the panel mount overrides both
+	// to its existing auracp_csrf / X-CSRF-Token so the panel SPA's
+	// existing CSRF mint is honored (FIX-2 / PD-SEC-02_INT-1).
+	csrfCookieName string
+	csrfHeaderName string
 }
+
+// Default CSRF cookie / header names. Exported so embedders that override
+// one side can keep the other on the default.
+const (
+	DefaultCSRFCookieName = "__Host-aura_csrf"
+	DefaultCSRFHeaderName = "X-Aura-Csrf"
+)
 
 // Options carries optional knobs for New. Embedders that need to override
 // defaults (e.g., supply a WS Origin allowlist, opt into accepting empty
@@ -48,6 +62,18 @@ type Options struct {
 	// CSRFDisabled turns off the CSRF middleware. Tests and tightly-
 	// scoped dev mode only — production hosts must leave this false.
 	CSRFDisabled bool
+
+	// CSRFCookieName overrides the cookie consulted by the CSRF gate
+	// and the WS handshake. Empty string falls back to
+	// DefaultCSRFCookieName. Embedders that mount this engine behind
+	// a host that already mints a different CSRF cookie name (e.g.
+	// the auraCP control panel mints `auracp_csrf`) override this so
+	// no double-cookie state can develop. FIX-2 / PD-SEC-02_INT-1.
+	CSRFCookieName string
+
+	// CSRFHeaderName overrides the request header consulted by the
+	// CSRF gate. Empty falls back to DefaultCSRFHeaderName.
+	CSRFHeaderName string
 }
 
 // New constructs the HTTP wire surface for an engine. The returned
@@ -65,6 +91,14 @@ func New(e *dbadmin.Engine) http.Handler {
 
 // NewWithOptions is like New but accepts a configuration struct.
 func NewWithOptions(e *dbadmin.Engine, opts Options) http.Handler {
+	cookieName := opts.CSRFCookieName
+	if cookieName == "" {
+		cookieName = DefaultCSRFCookieName
+	}
+	headerName := opts.CSRFHeaderName
+	if headerName == "" {
+		headerName = DefaultCSRFHeaderName
+	}
 	s := &server{
 		engine:                   e,
 		limiter:                  newLimiter(),
@@ -72,6 +106,8 @@ func NewWithOptions(e *dbadmin.Engine, opts Options) http.Handler {
 		allowedOrigins:           opts.AllowedOrigins,
 		allowLoopbackEmptyOrigin: opts.AllowLoopbackEmptyOrigin,
 		csrfDisabled:             opts.CSRFDisabled,
+		csrfCookieName:           cookieName,
+		csrfHeaderName:           headerName,
 	}
 	// The Upgrader's CheckOrigin defers to the package-level helper so
 	// the policy is identical whether the upgrade is gated by the

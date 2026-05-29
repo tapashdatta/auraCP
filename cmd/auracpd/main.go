@@ -14,6 +14,7 @@ import (
 
 	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/api"
+	dbadminintegration "github.com/auracp/auracp/internal/api/dbadmin"
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
@@ -219,6 +220,27 @@ func main() {
 		Runner:       runner,
 		PanelBackend: panelBackend,
 	}) // /api/*
+
+	// PR #10: Aura DB — modern DB admin UI mounted alongside legacy
+	// Adminer. Adminer continues to be served by nginx at /_adminer/
+	// (untouched). The dbadmin engine takes its identity from the panel
+	// session cookie via ResolveIdentity (FIX-7 / INT-11: surfaces only
+	// UserID/Email/Role/MFA — no PasswordHash, no TOTPSecret) and uses
+	// the panel's secret.Box for credential encryption at rest.
+	dbaCfg := dbadminintegration.LoadFromStore(st)
+	dbaEngine, dbaCloser, err := dbadminintegration.Mount(mux, st, sec,
+		func(r *http.Request) (api.IdentitySummary, bool) { return api.ResolveIdentity(st, r) },
+		dbaCfg)
+	if err != nil {
+		log.Fatalf("dbadmin mount: %v", err)
+	}
+	defer func() { _ = dbaCloser.Close() }()
+	// Engine shutdown joins the daemon's graceful shutdown context.
+	go func() {
+		<-rootCtx.Done()
+		_ = dbaEngine.Shutdown(context.Background())
+	}()
+
 	mux.Handle("/", webui.Handler()) // embedded SPA (catch-all)
 
 	srv := &http.Server{

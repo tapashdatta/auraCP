@@ -1,6 +1,31 @@
 package store
 
-import "strings"
+import (
+	"database/sql"
+	"strings"
+	"sync"
+)
+
+// extraMigrators is a registry of sub-package migrators run after the
+// core panel schema is applied. Sub-packages register via
+// RegisterExtraMigrator at init time to avoid importing the store
+// package back into themselves.
+var (
+	extraMigratorsMu sync.RWMutex
+	extraMigrators   []func(*sql.DB) error
+)
+
+// RegisterExtraMigrator appends a migrator to the chain. Idempotency is
+// the caller's responsibility (use CREATE TABLE IF NOT EXISTS, etc.).
+// Safe to call from package init.
+func RegisterExtraMigrator(fn func(*sql.DB) error) {
+	if fn == nil {
+		return
+	}
+	extraMigratorsMu.Lock()
+	defer extraMigratorsMu.Unlock()
+	extraMigrators = append(extraMigrators, fn)
+}
 
 // Schema migrations. Kept as ordered statements; a real migration table comes
 // later. Mirrors the data model in docs/ARCHITECTURE.md (trimmed for P0).
@@ -149,6 +174,18 @@ func (s *Store) migrate() error {
 			if isAlterAddColumn(stmt) && isDuplicateColumn(err) {
 				continue
 			}
+			return err
+		}
+	}
+	// Extra migrations registered by sub-packages. Used by internal/api/dbadmin
+	// to append its aura_db_* tables without creating an import cycle
+	// (store cannot import internal/api/dbadmin, but the integration
+	// package can install its migrator via RegisterExtraMigrator at
+	// package init time).
+	extraMigratorsMu.RLock()
+	defer extraMigratorsMu.RUnlock()
+	for _, fn := range extraMigrators {
+		if err := fn(s.DB); err != nil {
 			return err
 		}
 	}

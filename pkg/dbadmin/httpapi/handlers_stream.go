@@ -48,7 +48,7 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		// token is also presented as an X-Aura-Csrf header for
 		// non-browser clients (CLI / SDK). At least one must match
 		// the __Host-aura_csrf cookie via constant-time compare.
-		if !s.csrfDisabled && !wsCSRFValid(r) {
+		if !s.csrfDisabled && !wsCSRFValid(s, r) {
 			wsAuditDenial(s, r.Context(), user, dbadmin.ConnectionID(r.PathValue("id")), "csrf-rejected", "")
 			writeError(w, r, http.StatusForbidden, CodeCSRFRejected, "CSRF check failed")
 			return
@@ -391,19 +391,31 @@ func isLoopback(r *http.Request) bool {
 // wsCSRFValid validates the CSRF token on the WS upgrade. Browsers
 // cannot set custom headers on the WebSocket constructor, so we accept
 // either:
-//   - X-Aura-Csrf header (CLI / SDK clients), or
+//   - the configured CSRF header (CLI / SDK clients), or
 //   - a "aura.csrf.<token>" entry in Sec-WebSocket-Protocol
 //
-// The presented token must equal the __Host-aura_csrf cookie value
-// via constant-time compare. Returns false if no cookie is set.
-func wsCSRFValid(r *http.Request) bool {
-	cookie, err := r.Cookie("__Host-aura_csrf")
+// The presented token must equal the configured CSRF cookie value via
+// constant-time compare. Returns false if no cookie is set. When s is
+// nil (defensive — shouldn't happen on the production path), defaults
+// apply.
+func wsCSRFValid(s *server, r *http.Request) bool {
+	cookieName := DefaultCSRFCookieName
+	headerName := DefaultCSRFHeaderName
+	if s != nil {
+		if s.csrfCookieName != "" {
+			cookieName = s.csrfCookieName
+		}
+		if s.csrfHeaderName != "" {
+			headerName = s.csrfHeaderName
+		}
+	}
+	cookie, err := r.Cookie(cookieName)
 	if err != nil || cookie.Value == "" {
 		return false
 	}
 	want := []byte(cookie.Value)
 
-	if h := r.Header.Get("X-Aura-Csrf"); h != "" {
+	if h := r.Header.Get(headerName); h != "" {
 		if subtle.ConstantTimeCompare([]byte(h), want) == 1 {
 			return true
 		}

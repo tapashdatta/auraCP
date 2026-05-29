@@ -817,6 +817,128 @@ below.
 
 ---
 
+## Source: PR #10 adversarial review (workflow run wf_0425c646-dd8)
+
+The 4-lens review of the panel-integration glue (`internal/api/dbadmin/`
++ 4 edited panel files) produced 35 raw findings (2 critical, 4 high,
+12 medium, 14 low, 3 nit). After dedupe + triage: 7 must-fix items
+were promoted and landed in PR #10 itself — audit signing key moved
+out of the settings table (PD-SEC-01); CSRF cookie/header names made
+configurable so the panel's existing `auracp_csrf` / `X-CSRF-Token`
+contract aligns with dbadmin (PD-SEC-02/INT-1); nginx panel-domain
+template emits `Upgrade` + `Connection: upgrade` headers so
+`/api/dbadmin/sql/stream` works end-to-end (INT-2); FileAuditSink
+size-based rotation with chain preservation across files (INT-3);
+mountCloser bounded by `Config.ShutdownTimeout` (C1/INT-8); panel
+audit mirror moved to a bounded async queue (INT-10/SDK-2);
+`ResolveCurrentUser` replaced with `ResolveIdentity` returning a
+minimal `IdentitySummary` (no PasswordHash / TOTPSecret) (INT-11).
+The remaining 25 findings are deferred below.
+
+### Deferred medium findings — PR #10.5
+
+- **PD-SEC-03** — Encrypted-at-rest secrets share KEK without AAD /
+  context binding. **Reason:** a panel-state ciphertext could be
+  swapped into `aura_db_connections.creds_enc` and decrypt; cross-
+  domain leak is bounded by who has raw-SQL access. **Target:** PR #10.5
+  (add AEAD with `dbadmin:creds:` AAD prefix; mirror panel-state
+  encryption tags).
+- **PD-SEC-04** — Step-up flag survives panel logout (stale entries
+  in `stepUpStore`). **Reason:** not directly exploitable today
+  (Authenticate gates first), but confused-deputy risk if a future
+  WS reconnect path trusts a cached User. **Target:** PR #10.5
+  (logout hook from panel into adapter).
+- **INT-4** — `Config.Max` ceilings (`TimeoutMax`, `ResultRowsMax`,
+  `ResultBytesMax`) not surfaced to panel config YAML. **Reason:**
+  operators can't tune; defaults match SECURITY.md §14. **Target:**
+  PR #10.5.
+- **INT-5** — `TestAdapter_AdminerCoexists` validates only mux pass-
+  through, not the nginx config. **Reason:** Adminer is served by
+  nginx, not auracpd's mux, so the test asserts the wrong layer.
+  **Target:** PR #10.5 (add nginx template render test).
+- **INT-6** — `aura_db_grants` has no FK to `panel_users`; orphan
+  grants survive user delete. **Reason:** orphan rows accumulate
+  but cause no security exposure. **Target:** PR #10.5.
+- **INT-7** — Backup without `/etc/auracp/secret.key` silently
+  fails to decrypt `aura_db_connections.creds_enc`. **Reason:**
+  operator-visible only after restore; documented in
+  `KEY-ROTATION.md`. **Target:** PR #10.5 (loud failure + backup
+  manifest).
+- **INT-9** — Logger split: `slog.Default` (dbadmin) vs `log.Printf`
+  (panel), no shared request-ID. **Reason:** correlation across
+  log streams is manual. **Target:** PR #10.5 (shared slog handler
+  with request-ID injection middleware).
+- **SDK-1** — `VerifyStepUp` returns `ErrUnauthenticated` for
+  missing-TOTP enrollment instead of a distinct sentinel. **Reason:**
+  client can't tell "not enrolled" from "session expired" — both
+  return 401. **Target:** PR #10.5 (`ErrStepUpUnavailable` sentinel
+  in `pkg/dbadmin`).
+
+### Deferred low / nit findings — PR #10.5
+
+- **PD-SEC-05** — `ResolveCurrentUser` once returned full `store.User`;
+  the deprecated function still exists internally for panel use.
+  **Reason:** in-package users don't leak; consider removing in a
+  later cleanup. **Target:** PR #10.5.
+- **PD-SEC-06** — Adapter `HasPermission` does not consult
+  `act.RequiresStepUp()` for ROLE_ADMIN paths. **Reason:** admin
+  trust assumption is documented in SECURITY.md §4. **Target:**
+  PR #10.5 (admin step-up parity with non-admin).
+- **PD-SEC-07** — `panelConns.Get/Credentials` have no inline
+  authorization filter; rely on `Auth.HasPermission` upstream.
+  **Reason:** defense-in-depth gap, no current bypass. **Target:**
+  PR #10.5.
+- **C2** — `panelAudit.Record` uses `fmt.%q` producing JSON-invalid
+  detail for exotic bytes. **Reason:** rare with redacted SQL; only
+  affects panel audit_log mirror. **Target:** PR #10.5 (json.Marshal
+  detail).
+- **C3** — `panelConns.RolesFor` returns `RoleNone` rows (no role
+  >= filter). **Reason:** caller filters; minor over-fetch. **Target:**
+  PR #10.5.
+- **C4** — `loadOrCreateSigningKey` silently regenerates on
+  corruption. **Reason:** key-file should be operator-managed; silent
+  regen masks tamper. **Target:** PR #10.5 (refuse start; surface
+  via boot log).
+- **C5** — Panel-mirror `AddAudit` ignores ctx. **Reason:** no
+  cancellation honored; benign since the call is fast. **Target:**
+  PR #10.5 (`AddAuditContext`).
+- **C6** — CSRF bypass prefix uses raw `r.URL.Path` (`../` traversal
+  benign via ServeMux 307). **Reason:** Go's ServeMux normalizes
+  before matching, but the bypass check should also normalize.
+  **Target:** PR #10.5 (path.Clean + HasPrefix).
+- **C7** — `panelConns.Save` returns raw UNIQUE-constraint error on
+  duplicate name. **Reason:** wire error envelope is acceptable but
+  not great. **Target:** PR #10.5 (map to ErrConflict).
+- **INT-12** — Step-up key is `{session, action}` not `{session,
+  action, connectionID}`. **Reason:** step-up scope is broader than
+  intended; documented in SDK-3. **Target:** PR #10.5 (per-conn
+  scoping).
+- **INT-13** — `ConnectionStore` has no Grant route; `panelConns.Grant`
+  is unreachable from the engine. **Reason:** grants today are
+  managed via direct SQL or future panel UI. **Target:** PR #10.5
+  or PR #11 (panel UI).
+- **INT-14** — `panelAuth.Authenticate` runs full `RolesFor` scan
+  for ROLE_ADMIN per request. **Reason:** ROLE_ADMIN gets implicit
+  RoleOwner on every conn so the scan is wasted work. **Target:**
+  PR #10.5 (skip RolesFor for ROLE_ADMIN; rely on direct allow).
+- **SDK-3** — Step-up store keys on raw Action, not Action class.
+  **Reason:** dbadmin.Action has no public Class() method; adapter
+  works around it. **Target:** PR #10.5 (add Class() to pkg/dbadmin).
+- **SDK-4** — `panelConns.Delete` relies on implicit transaction
+  for FK cascade. **Reason:** SQLite's default behavior is fine but
+  fragile. **Target:** PR #10.5 (explicit BEGIN/COMMIT).
+- **SDK-5** — Engine maps `ErrForbidden` → 403 not 404 on global
+  actions — existence leak on wire. **Reason:** documented behavior
+  (404 only for connection-scoped). Confirm intentional. **Target:**
+  PR #10.5 (re-read SECURITY.md §10.3 and either fix or document
+  the carve-out).
+- **SDK-6** — ROLE_ADMIN `allIDs` scan in `RolesFor` is wasted work.
+  **Reason:** duplicate of INT-14. **Target:** PR #10.5.
+- **SDK-7** — `panelConns.Grant` exposed but not routed by engine.
+  **Reason:** duplicate of INT-13; nit. **Target:** PR #10.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

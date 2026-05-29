@@ -211,6 +211,21 @@ func (s *Server) deleteAdminUser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// secretSettingKeys is the exact-match deny-list for the settings API.
+// Reads return the sentinel {"set": true} when a row exists; writes are
+// rejected with 403. Defense-in-depth complement to FIX-1 (PD-SEC-01):
+// even if a future feature persists a secret here, /api/settings cannot
+// echo it back to a ROLE_USER.
+var secretSettingKeys = map[string]struct{}{
+	"aura_db_audit_signing_key": {}, // legacy row; FIX-1 migrates it off-table at boot.
+}
+
+// isSecretSettingKey reports whether the key is on the redact / deny-list.
+func isSecretSettingKey(k string) bool {
+	_, ok := secretSettingKeys[k]
+	return ok
+}
+
 // GET /api/settings
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 	all, err := s.store.AllSettings()
@@ -218,7 +233,17 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, all)
+	// Redact secret-bearing keys. Replace the value with a sentinel so
+	// the UI can still render "set / unset" without exposing the value.
+	out := make(map[string]any, len(all))
+	for k, v := range all {
+		if isSecretSettingKey(k) {
+			out[k] = map[string]bool{"set": v != ""}
+			continue
+		}
+		out[k] = v
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // PUT /api/settings  {key: value, ...}
@@ -227,6 +252,15 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
+	}
+	// Reject writes targeting any secret-bearing key — the panel UI
+	// has no legitimate reason to mutate these values, and a confused-
+	// deputy attack could otherwise overwrite the audit signing key.
+	for k := range in {
+		if isSecretSettingKey(k) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "setting " + k + " is read-only"})
+			return
+		}
 	}
 	for k, v := range in {
 		if err := s.store.SetSetting(k, v); err != nil {

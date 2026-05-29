@@ -52,6 +52,12 @@ func (s *Store) SetSetting(key, value string) error {
 	return err
 }
 
+// DeleteSetting removes a settings row. No-op when the key is absent.
+func (s *Store) DeleteSetting(key string) error {
+	_, err := s.DB.Exec(`DELETE FROM settings WHERE key = ?`, key)
+	return err
+}
+
 func (s *Store) AllSettings() (map[string]string, error) {
 	rows, err := s.DB.Query(`SELECT key, value FROM settings`)
 	if err != nil {

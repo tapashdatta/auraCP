@@ -24,12 +24,30 @@ import (
 // of the very first event in a fresh audit log. See doc.go decision #4.
 const GenesisPrevHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
+// Rotation defaults (FIX-4 / INT-3). 100 MiB / 10 files matches the
+// installer's logrotate.d defaults for the panel's own audit table.
+const (
+	defaultMaxFileSize = int64(100 * 1024 * 1024)
+	defaultMaxBackups  = 10
+	// rotateSuffixLayout is the timestamp suffix appended to rotated
+	// files: audit.ndjson.20260529T143205Z (UTC, sortable).
+	rotateSuffixLayout = "20060102T150405Z"
+)
+
 // FileAuditSink implements dbadmin.AuditSink against a local NDJSON file
 // with SHA-256 hash chain and optional HMAC-SHA256 signed chain heads.
 //
 // Concurrency: Record is non-blocking (sends to a buffered queue); a
 // single drain goroutine performs the file write under a mutex. Close
 // flushes and stops the drain.
+//
+// Rotation (FIX-4 / INT-3): when the current file exceeds MaxFileSize
+// bytes after a write, the sink closes it, renames to
+// audit.ndjson.YYYYMMDDHHMMSS, opens a fresh file, and writes
+// subsequent events into the new file. The in-memory PrevEventHash is
+// preserved across rotation so the SHA-256 chain spans every rotated
+// file end-to-end. MaxBackups bounds disk usage by deleting the oldest
+// rotated files.
 type FileAuditSink struct {
 	Path         string
 	SigningKey   []byte
@@ -38,11 +56,20 @@ type FileAuditSink struct {
 	Forwarder    Forwarder
 	Clock        Clock
 	Logger       *slog.Logger
-	QueueSize    int // default 4096
+	QueueSize    int    // default 4096
 	Durability   string // "loose" (default) or "strict" (fsync per event)
+	// MaxFileSize is the size in bytes that triggers a rotation. Zero
+	// falls back to defaultMaxFileSize (100 MiB). Negative disables
+	// rotation (legacy behavior).
+	MaxFileSize int64
+	// MaxBackups bounds the number of rotated files kept on disk.
+	// Zero falls back to defaultMaxBackups (10). Older files are
+	// pruned newest-first.
+	MaxBackups int
 
 	mu       sync.Mutex
 	f        *os.File
+	curSize  int64
 	prevHash string
 	counter  int
 	lastSign time.Time
@@ -136,6 +163,15 @@ func (s *FileAuditSink) Start() error {
 	}
 
 	s.f = f
+	if fi, ferr := f.Stat(); ferr == nil {
+		s.curSize = fi.Size()
+	}
+	if s.MaxFileSize == 0 {
+		s.MaxFileSize = defaultMaxFileSize
+	}
+	if s.MaxBackups == 0 {
+		s.MaxBackups = defaultMaxBackups
+	}
 	s.prevHash, err = recoverPrevHash(s.Path)
 	if err != nil {
 		_ = f.Close()
@@ -191,6 +227,11 @@ func (s *FileAuditSink) Reopen() error {
 		return err
 	}
 	s.f = f
+	if fi, ferr := f.Stat(); ferr == nil {
+		s.curSize = fi.Size()
+	} else {
+		s.curSize = 0
+	}
 	// We deliberately do NOT reset prevHash — the in-memory chain
 	// continues across rotation. A fresh file with no prior events
 	// will simply pick up the latest hash we already hold.
@@ -285,13 +326,15 @@ func (s *FileAuditSink) write(e dbadmin.Event) {
 		s.Logger.Error("standalone: audit marshal failed", "err", err)
 		return
 	}
-	if _, err := s.f.Write(append(line, '\n')); err != nil {
+	out := append(line, '\n')
+	if _, err := s.f.Write(out); err != nil {
 		s.Logger.Error("standalone: audit write failed", "err", err)
 		return
 	}
 	if s.Durability == "strict" {
 		_ = s.f.Sync()
 	}
+	s.curSize += int64(len(out))
 	sum := sha256.Sum256(line)
 	s.prevHash = hex.EncodeToString(sum[:])
 	s.counter++
@@ -306,6 +349,94 @@ func (s *FileAuditSink) write(e dbadmin.Event) {
 	}
 	if s.SigningKey != nil && s.counter >= s.SigningEvery {
 		s.signAndShipHeadLocked()
+	}
+	// Rotation. We rotate AFTER writing — the size threshold is a
+	// soft ceiling, not a hard one. s.MaxFileSize < 0 disables.
+	if s.MaxFileSize > 0 && s.curSize >= s.MaxFileSize {
+		s.rotateLocked()
+	}
+}
+
+// rotateLocked closes the current file, renames it with a UTC timestamp
+// suffix, opens a fresh file at s.Path, and prunes the oldest backups
+// down to s.MaxBackups. The in-memory prevHash is preserved so the
+// SHA-256 chain spans rotation.
+//
+// Caller must hold s.mu.
+func (s *FileAuditSink) rotateLocked() {
+	if s.f == nil {
+		return
+	}
+	_ = s.f.Sync()
+	_ = s.f.Close()
+	s.f = nil
+
+	ts := s.Clock().UTC().Format(rotateSuffixLayout)
+	rotatedPath := s.Path + "." + ts
+	// Handle a same-second collision (multiple rotations within one
+	// second) by appending a small counter.
+	if _, err := os.Stat(rotatedPath); err == nil {
+		for i := 1; i < 1000; i++ {
+			candidate := fmt.Sprintf("%s.%d", rotatedPath, i)
+			if _, err := os.Stat(candidate); errors.Is(err, os.ErrNotExist) {
+				rotatedPath = candidate
+				break
+			}
+		}
+	}
+	if err := os.Rename(s.Path, rotatedPath); err != nil {
+		s.Logger.Error("standalone: audit rotate rename failed", "err", err, "src", s.Path, "dst", rotatedPath)
+		// Best-effort: try to reopen the original file so we don't
+		// permanently lose appending.
+	}
+
+	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		s.Logger.Error("standalone: audit rotate reopen failed", "err", err)
+		return
+	}
+	_ = os.Chmod(s.Path, 0o640)
+	s.f = f
+	s.curSize = 0
+	// PrevEventHash is intentionally preserved so the chain spans
+	// across files. The next written event will reference the last
+	// hash from the rotated file.
+
+	s.pruneBackupsLocked()
+}
+
+// pruneBackupsLocked deletes the oldest rotated files until at most
+// s.MaxBackups remain. The rotation suffix is UTC-sortable so a
+// lexicographic sort matches chronological order.
+func (s *FileAuditSink) pruneBackupsLocked() {
+	if s.MaxBackups <= 0 {
+		return
+	}
+	dir := filepath.Dir(s.Path)
+	base := filepath.Base(s.Path) + "."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var backups []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) > len(base) && name[:len(base)] == base {
+			backups = append(backups, filepath.Join(dir, name))
+		}
+	}
+	if len(backups) <= s.MaxBackups {
+		return
+	}
+	sort.Strings(backups) // chronological (UTC suffix)
+	excess := len(backups) - s.MaxBackups
+	for i := 0; i < excess; i++ {
+		if err := os.Remove(backups[i]); err != nil && !errors.Is(err, os.ErrNotExist) {
+			s.Logger.Warn("standalone: audit backup prune failed", "err", err, "path", backups[i])
+		}
 	}
 }
 

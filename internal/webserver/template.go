@@ -59,6 +59,24 @@ server {
     {{- if .CertPath }}
     location / { return 301 https://$host$request_uri; }
     {{- else }}
+    # FIX-3 (INT-2): WebSocket upgrade for /api/dbadmin/sql/stream.
+    # The default proxy_pass strips hop-by-hop Upgrade/Connection
+    # headers; without these directives the gorilla/websocket upgrader
+    # in auracpd rejects the handshake with 400. Declared BEFORE the
+    # catch-all "location /" so nginx picks this regex first via the
+    # longest-prefix-after-regex rule (regex locations win over the
+    # prefix-match "location /").
+    location ~ ^/api/dbadmin/.*/sql/stream$ {
+        proxy_pass {{.Backend}};
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
     location / {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;
@@ -120,6 +138,25 @@ server {
         }
     }
 
+    # FIX-3 (INT-2): WebSocket upgrade for /api/dbadmin/sql/stream.
+    # The default proxy_pass strips hop-by-hop Upgrade/Connection
+    # headers; without these directives the gorilla/websocket upgrader
+    # in auracpd rejects the handshake with 400. Declared BEFORE the
+    # catch-all "location /" so nginx picks this regex first via the
+    # longest-prefix-after-regex rule.
+    location ~ ^/api/dbadmin/.*/sql/stream$ {
+        proxy_pass {{.Backend}};
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
     location / {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;

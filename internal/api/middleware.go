@@ -29,7 +29,11 @@ func Secure(next http.Handler) http.Handler {
 			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many attempts, slow down"})
 			return
 		}
-		if isUnsafe(r) && strings.HasPrefix(r.URL.Path, "/api/") && !csrfOK(r) {
+		// /api/dbadmin/* runs its own CSRF gate (__Host-aura_csrf) inside
+		// the dbadmin engine's middleware chain. Skip the panel's
+		// double-submit check there so the two policies don't both fire.
+		if isUnsafe(r) && strings.HasPrefix(r.URL.Path, "/api/") &&
+			!strings.HasPrefix(r.URL.Path, "/api/dbadmin/") && !csrfOK(r) {
 			// Explicit reason in the log so an operator can tell a CSRF reject
 			// (our side) apart from a CDN reject (no log line at all).
 			log.Printf("[api] CSRF reject %s %s ip=%s", r.Method, r.URL.Path, clientIP(r))
