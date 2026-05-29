@@ -40,17 +40,40 @@
 
   function randPw() { return Math.random().toString(36).slice(2, 10) + '-' + Math.random().toString(36).slice(2, 6) }
 
-  // Derive a sensible Linux site-user from the domain — first label only,
-  // lowercased, alphanumeric+dash, with a 4-char random suffix so subdomains
-  // (blog.example.com + shop.example.com) don't collide on the box. Falls
-  // back to a fully random handle when the domain isn't yet a valid one to
-  // strip from. Matches validate.Username: ^[a-z][a-z0-9_-]{0,31}$.
+  // Derive a sensible Linux site-user from the domain. Goal: a HUMAN-READABLE
+  // handle — operator-flagged the previous output ("a-g91z" for a.garuda.sh)
+  // as opaque. New shape:
+  //
+  //   a.garuda.sh        → "a-garuda"         (subdomain + registrable label)
+  //   blog.example.com   → "blog-example"
+  //   shop.example.co.uk → "shop-example"     (TLD always dropped)
+  //   garuda.sh          → "garuda"           (single-label site → just the SLD)
+  //   localhost          → "localhost"
+  //
+  // Collisions are possible (two different domains that share the same first
+  // two labels — e.g. a.garuda.sh + a.garuda.com). When the operator hits
+  // Create the API rejects the dup with a clear message, the field stays
+  // populated, the operator edits it to disambiguate. That's a much rarer
+  // case than the previous "every username is unreadable random gibberish"
+  // problem, so the trade-off is worth it.
+  //
+  // Constraints from validate.Username: ^[a-z][a-z0-9_-]{0,31}$. We cap at
+  // 30 chars to leave headroom, and prepend "s" if the cleaned label starts
+  // with a digit (rare — purely numeric subdomains like "1.example.com").
   function deriveSiteUser(domain) {
-    const first = (domain || '').split('.')[0] || ''
-    const cleaned = first.toLowerCase().replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, '').slice(0, 26)
-    const suffix = Math.random().toString(36).slice(2, 6)
-    if (!cleaned || !/^[a-z]/.test(cleaned)) return 'site-' + suffix
-    return cleaned + '-' + suffix
+    const labels = (domain || '').toLowerCase().split('.').filter(Boolean)
+    if (labels.length === 0) return 'site'
+    // Drop the TLD only when there's more than one label — keeps single-
+    // label "localhost" working without becoming empty.
+    const keep = labels.length > 1 ? labels.slice(0, -1) : labels
+    const cleaned = keep
+      .map(l => l.replace(/[^a-z0-9-]/g, '').replace(/^-+|-+$/g, ''))
+      .filter(Boolean)
+      .join('-')
+      .slice(0, 30)
+    if (!cleaned) return 'site'
+    if (!/^[a-z]/.test(cleaned)) return ('s-' + cleaned).slice(0, 30)
+    return cleaned
   }
 
   // Auto-sync the site user from the domain until the operator manually edits.

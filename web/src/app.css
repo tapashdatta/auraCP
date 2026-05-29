@@ -396,6 +396,14 @@ td .mono{color:var(--txt-2);font-size:12.5px}
   .settings-bottom-row{grid-template-columns:1fr}
 }
 
+/* v0.2.57: utility — hide on phone-sized viewports. Sites list table
+   uses this to collapse to Domain + Status only on mobile (the
+   operator clicks a row to drill in anyway; Site User / App / Manage
+   are redundant on a narrow screen). */
+@media (max-width:760px){
+  .hide-on-mobile{display:none !important}
+}
+
 .tabs{display:flex;flex-wrap:nowrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global

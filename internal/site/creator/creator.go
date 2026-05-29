@@ -181,6 +181,24 @@ func (c *Creator) CreateNginxVhost(ctx context.Context) error {
 		c.logStep("CreateNginxVhost", t, err)
 		return err
 	}
+	// v0.2.57: defensive — ensure /home/<user>/logs/ exists before
+	// nginx -t. Pre-this, an operator-reported Node site create failed
+	// with `nginx: [emerg] open() "/home/<user>/logs/access.log"
+	// failed (2: No such file or directory)`. The vhost has
+	// `access_log /home/<user>/logs/access.log;` and nginx -t tries to
+	// open the parent dir. osuser.Create does create the dir at user-
+	// creation time, but if anything (orphan user from a previous
+	// failed create, manual filesystem tinkering) leaves it missing,
+	// CreateNginxVhost now self-heals before validation runs.
+	if err := os.MkdirAll(paths.LogDir(c.Spec.User), 0o750); err != nil {
+		c.logStep("CreateNginxVhost", t, err)
+		return err
+	}
+	// chown to the site user so PHP-FPM / Node systemd unit (running
+	// as that user) can write to the dir. nginx itself opens these
+	// files as the master process (root) for write, so this chown is
+	// for the BACKEND log lines, not nginx access/error.
+	_, _ = c.R.Run(ctx, "chown", c.Spec.User+":"+c.Spec.User, paths.LogDir(c.Spec.User))
 	dst := paths.NginxSiteFile(c.Spec.Domain)
 	link := paths.NginxSiteLink(c.Spec.Domain)
 	tmp := dst + ".new"

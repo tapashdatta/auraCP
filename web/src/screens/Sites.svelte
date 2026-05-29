@@ -170,7 +170,7 @@
       <span class="mono" style="color:var(--txt-3);font-size:12.5px">{filtered.length} shown</span>
     </div>
     <table>
-      <thead><tr><th>Domain</th><th>Site User</th><th>App</th><th>Status</th><th style="text-align:right">Manage</th></tr></thead>
+      <thead><tr><th>Domain</th><th class="hide-on-mobile">Site User</th><th class="hide-on-mobile">App</th><th>Status</th><th class="hide-on-mobile" style="text-align:right">Manage</th></tr></thead>
       <tbody>
         {#if filtered.length === 0}
           <tr><td colspan="5"><div class="empty">No sites match the current filter.</div></td></tr>
@@ -184,13 +184,13 @@
               onclick={() => openSite(s)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openSite(s) } }}>
             <td><div class="domain"><div class="fav brand">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic}{/if}</div><div class="nm">{s.domain}<small>{s.root}</small></div></div></td>
-            <td><span class="mono">{s.user}</span></td>
-            <td>
+            <td class="hide-on-mobile"><span class="mono">{s.user}</span></td>
+            <td class="hide-on-mobile">
               <span class="badge {s.badge}"><span class="ic brand-sm">{#if brandIcons[s.type]}{@html brandIcons[s.type]}{:else}{s.ic}{/if}</span>{s.app}</span>
               {#if s.node}<span class="node-tag">node {s.node}</span>{/if}
             </td>
             <td><span class="status"><span class="sdot s-{s.status}"></span>{s.statusText}</span></td>
-            <td style="text-align:right">
+            <td class="hide-on-mobile" style="text-align:right">
               <div class="row-actions">
                 <!-- v0.2.47: visit the live site in a new tab. Stops the row
                      click from also triggering openSite(). -->

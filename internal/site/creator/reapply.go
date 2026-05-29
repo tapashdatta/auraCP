@@ -84,6 +84,7 @@ func RunReapply(ctx context.Context, domain string, deps *Deps) error {
 		BlockBots:     cfg["block_bots"] == "true",
 		BasicAuthUser: cfg["basic_auth_user"],
 		BasicAuthHash: cfg["basic_auth_hash"], // not used by the renderer; here for future audit
+		ForceHttps:    cfg["force_https"] == "true",
 	}
 	// Per-type extras: Node/Python need the backend port; reverseproxy
 	// needs the upstream URL.

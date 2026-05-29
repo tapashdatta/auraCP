@@ -13,6 +13,7 @@ func Nodejs() *Template {
 			processor.ServerName,
 			processor.Root,
 			processor.SslListen,
+			processor.ForceHttps, // v0.2.57: conditional :80 → :443 301 redirect
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,

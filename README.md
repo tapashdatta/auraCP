@@ -69,7 +69,7 @@ clone needed — the `.deb` bundles the installer and exposes it as the `auracp-
 # 1) download the package for your arch (plain curl — repo is public)
 ARCH=$(dpkg --print-architecture)        # → amd64 or arm64
 curl -fL -o auracp.deb \
-  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.56/auracp_0.2.56_${ARCH}.deb"
+  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.57/auracp_0.2.57_${ARCH}.deb"
 
 # 2) install the panel
 sudo dpkg -i ./auracp.deb
@@ -82,7 +82,7 @@ sudo auracp-install
 
 ```bash
 ARCH=$(dpkg --print-architecture) && \
-curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.56/auracp_0.2.56_${ARCH}.deb" && \
+curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.57/auracp_0.2.57_${ARCH}.deb" && \
 sudo dpkg -i /tmp/auracp.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```

@@ -32,6 +32,11 @@ server {
         try_files $uri =404;
     }
 
+    # v0.2.57: optional :80 → :443 redirect, gated on a cert being
+    # installed (toggle lives in Settings → General). The block above
+    # short-circuits this for /.well-known/acme-challenge/ paths.
+    {{force_https}}
+
     {{nginx_access_log}}
     {{nginx_error_log}}
 

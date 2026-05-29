@@ -20,7 +20,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version":
-		fmt.Println("auracp 0.2.56")
+		fmt.Println("auracp 0.2.57")
 	case "sites":
 		if err := listSites(); err != nil {
 			fmt.Fprintln(os.Stderr, "error:", err)

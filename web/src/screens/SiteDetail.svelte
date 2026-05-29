@@ -56,6 +56,51 @@
   // v0.2.47: per-site PHP version switcher (PHP/WordPress sites only).
   let phpRuntimesSite = $state([])
   let phpPick = $state(site.phpVersion || '')
+
+  // v0.2.57: per-site PHP runtime values (memory_limit, max_execution_time,
+  // date.timezone, …). Stored in the php_settings table; written into the
+  // pool config by phpruntime.WritePool on save. Empty string = use the
+  // package default. The 8 fields match the operator-requested set in the
+  // Settings → PHP runtime values panel below.
+  let phpValues = $state({
+    memory_limit: '',
+    upload_max_filesize: '',
+    post_max_size: '',
+    max_execution_time: '',
+    max_input_time: '',
+    max_input_vars: '',
+    'date.timezone': '',
+    display_errors: '',
+  })
+  let phpValuesBusy = $state(false)
+  let phpValuesFlash = $state(false)
+  // Defaults match phpruntime/phpruntime.go DefaultXxx constants. Shown as
+  // ghost text in the inputs so the operator sees what they'd get if they
+  // leave a field blank — no guessing what "the default" actually is.
+  const phpValueDefaults = {
+    memory_limit: '256M',
+    upload_max_filesize: '64M',
+    post_max_size: '64M',
+    max_execution_time: '120',
+    max_input_time: '60',
+    max_input_vars: '5000',
+    'date.timezone': 'UTC',
+    display_errors: 'Off',
+  }
+  async function savePHPValues() {
+    phpValuesBusy = true
+    // Send EVERY key — server-side an empty string deletes the override
+    // (so the operator can wipe a custom value back to default by clearing
+    // the field). PUT semantics, full payload.
+    const payload = { ...phpValues }
+    const r = await apiFetch(`${base}/php-settings`, { method: 'PUT', body: JSON.stringify(payload) })
+    const d = await r.json().catch(() => ({}))
+    phpValuesBusy = false
+    if (!r.ok) { toastError(d.error || 'Could not save PHP values'); return }
+    phpValuesFlash = true
+    setTimeout(() => { phpValuesFlash = false }, 1600)
+    toastSuccess('PHP values saved; FPM pool reloaded.')
+  }
   let newSSH = $state({ username: '', type: 'sftp', password: randPw() })
   let basicAuth = $state({ user: '', password: '' })
   let vhost = $state({ content: '', path: '', loaded: false, dirty: false })
@@ -73,12 +118,22 @@
     else if (tab === 'files') files = (await getJSON(`${base}/files?path=${encodeURIComponent(filePath)}`, { entries: [] })).entries
     else if (tab === 'settings') {
       backups = await getJSON(`${base}/backups`, [])
+      // v0.2.57: Settings tab now exposes Force-HTTPS, PHP runtime values,
+      // etc. — all of which live in the same store_config bag the cache/ssl/
+      // security tabs already use. Load it here too so the toggle/inputs
+      // have authoritative state from the very first paint.
+      config = await getJSON(`${base}/config`, {})
       if (site.type === 'nodejs') nodeRuntimes = await getJSON('/api/instance/node-versions', [])
       if (site.type === 'php' || site.type === 'wordpress') {
         const all = await getJSON('/api/instance/php-versions', [])
         // Only show versions actually installed on this host.
         phpRuntimesSite = (all || []).filter(v => v.installed)
         if (!phpPick && phpRuntimesSite.length) phpPick = phpRuntimesSite[0].version
+        // v0.2.57: per-site PHP value overrides. Returns only keys that
+        // have been explicitly set; merge into the local state object so
+        // unset keys stay as empty strings (= "show default as ghost").
+        const overrides = await getJSON(`${base}/php-settings`, {})
+        phpValues = { ...phpValues, ...overrides }
       }
     }
     else if (tab === 'vhost') {
@@ -863,11 +918,18 @@
 
   {#if active === 'settings'}
     <div class="fade">
-      <div class="section"><div class="section-h"><div><h3>General</h3><p>Domain, runtime, and HTTPS</p></div></div><div class="section-b" style="padding-top:4px">
-        <div class="kv"><span class="k">Domain</span><span class="v">{site.domain}</span></div>
+      <div class="section"><div class="section-h"><div><h3>General</h3><p>Runtime, HTTPS, and docroot for this site</p></div></div><div class="section-b" style="padding-top:4px">
+        <!-- v0.2.57: Domain row removed — already shown in the h1 + site
+             header at the top of the page. Duplication was operator-flagged. -->
         <div class="kv"><span class="k">Application</span><span class="v">{site.app}</span></div>
-        <div class="kv"><span class="k">Force HTTPS redirect</span><span class="v">enabled (auto)</span></div>
-        <div class="kv"><span class="k">HTTP/2</span><span class="v">enabled (auto)</span></div>
+        <div class="kv">
+          <span class="k">Force HTTPS redirect</span>
+          <button type="button" role="switch" aria-checked={isOn('force_https')}
+                  aria-label="Toggle force HTTPS"
+                  class="toggle" class:on={isOn('force_https')}
+                  onclick={() => toggleConfig('force_https')}></button>
+        </div>
+        <div class="kv"><span class="k">HTTP/2</span><span class="v">enabled when cert is issued</span></div>
         <div class="field" style="margin-top:14px"><label>
           <span class="label-text">Document root <span class="hint">Point at a subdirectory (e.g. <span class="mono">/home/{site.user}/htdocs/{site.domain}/public</span>) for Laravel / Statamic / Symfony</span></span>
           <div class="input-row">
@@ -890,7 +952,7 @@
                 </select>
               </label></div>
             </div>
-            <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply &amp; restart backend</button>
+            <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply & restart backend</button>
             <div class="kv" style="margin-top:14px">
               <span class="k">Run via PM2 (pm2-runtime)</span>
               <button type="button" role="switch" aria-checked={!!site.pm2} aria-label="Toggle PM2" class="toggle" class:on={!!site.pm2} onclick={() => togglePM2(!site.pm2)}></button>
@@ -921,10 +983,70 @@
                 </label></div>
               </div>
               <button class="btn btn-primary" onclick={savePHPVersion} disabled={busy || !phpPick || phpPick === site.phpVersion}>
-                {busy ? 'Switching…' : 'Apply &amp; reload PHP-FPM'}
+                {busy ? 'Switching…' : 'Apply & reload PHP-FPM'}
               </button>
               <p class="hint" style="margin:6px 0 0">Briefly drops the old version's socket while the new pool binds — typically &lt; 100 ms. PHP-side settings (memory_limit, etc.) carry over from the panel-managed pool config.</p>
             {/if}
+          </div>
+        </div>
+
+        <!-- v0.2.57: per-site PHP runtime values. Operator-requested 8-field
+             form; defaults shown as placeholder ghosts so blanks are
+             self-explanatory. Save → php_settings table → phpruntime.WritePool
+             reloads php<ver>-fpm. Two-column grid on wide screens, stacks on
+             narrow. -->
+        <div class="section"><div class="section-h"><div><h3>PHP runtime values</h3>
+          <p>Per-site overrides for <span class="mono">memory_limit</span>, execution + input timeouts, upload caps, timezone, and error display. Leave any field blank to fall back to the package default.</p></div>
+          {#if phpValuesFlash}<span class="saved-flash">✓ Saved</span>{/if}
+        </div>
+          <div class="section-b">
+            <div class="two">
+              <div class="field"><label>
+                <span class="label-text">memory_limit <span class="hint">e.g. 256M, 512M, 1G</span></span>
+                <input class="input mono" bind:value={phpValues.memory_limit} placeholder={phpValueDefaults.memory_limit}>
+              </label></div>
+              <div class="field"><label>
+                <span class="label-text">max_execution_time <span class="hint">seconds</span></span>
+                <input class="input mono" bind:value={phpValues.max_execution_time} placeholder={phpValueDefaults.max_execution_time}>
+              </label></div>
+            </div>
+            <div class="two">
+              <div class="field"><label>
+                <span class="label-text">max_input_time <span class="hint">seconds; -1 = use max_execution_time</span></span>
+                <input class="input mono" bind:value={phpValues.max_input_time} placeholder={phpValueDefaults.max_input_time}>
+              </label></div>
+              <div class="field"><label>
+                <span class="label-text">max_input_vars <span class="hint">count</span></span>
+                <input class="input mono" bind:value={phpValues.max_input_vars} placeholder={phpValueDefaults.max_input_vars}>
+              </label></div>
+            </div>
+            <div class="two">
+              <div class="field"><label>
+                <span class="label-text">post_max_size <span class="hint">total POST body</span></span>
+                <input class="input mono" bind:value={phpValues.post_max_size} placeholder={phpValueDefaults.post_max_size}>
+              </label></div>
+              <div class="field"><label>
+                <span class="label-text">upload_max_filesize <span class="hint">per file</span></span>
+                <input class="input mono" bind:value={phpValues.upload_max_filesize} placeholder={phpValueDefaults.upload_max_filesize}>
+              </label></div>
+            </div>
+            <div class="two">
+              <div class="field"><label>
+                <span class="label-text">date.timezone <span class="hint">IANA zone, e.g. Europe/London</span></span>
+                <input class="input mono" bind:value={phpValues['date.timezone']} placeholder={phpValueDefaults['date.timezone']}>
+              </label></div>
+              <div class="field"><label>
+                <span class="label-text">display_errors <span class="hint">On / Off — production: Off</span></span>
+                <select class="select ui" bind:value={phpValues.display_errors}>
+                  <option value="">default (Off)</option>
+                  <option value="Off">Off</option>
+                  <option value="On">On</option>
+                </select>
+              </label></div>
+            </div>
+            <button class="btn btn-primary" onclick={savePHPValues} disabled={phpValuesBusy}>
+              {phpValuesBusy ? 'Reloading FPM…' : 'Apply & reload PHP-FPM'}
+            </button>
           </div>
         </div>
       {/if}
@@ -1001,7 +1123,7 @@
           <textarea class="input vhost-editor" rows="22" spellcheck="false"
                     bind:value={vhost.content} oninput={() => vhost.dirty = true}></textarea>
           <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-            <button class="btn btn-primary" onclick={saveVhost} disabled={!vhost.dirty || busy || !vhost.content.trim()}>Save &amp; reload</button>
+            <button class="btn btn-primary" onclick={saveVhost} disabled={!vhost.dirty || busy || !vhost.content.trim()}>Save & reload</button>
             <button class="btn btn-ghost" onclick={revertVhost} disabled={busy}>Revert to auto-generated</button>
           </div>
         {/if}

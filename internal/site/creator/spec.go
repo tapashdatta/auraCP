@@ -79,6 +79,12 @@ type Spec struct {
 	BlockBots     bool   // emit a User-Agent deny-list at the top of the vhost
 	BasicAuthUser string // shown verbatim in the rendered htpasswd file
 	BasicAuthHash string // bcrypt-hashed password; written to htpasswd by RunReapply
+	// v0.2.57: when ForceHttps is true AND a cert is installed, the
+	// {{force_https}} processor emits a 301 :80 → :443 redirect at the
+	// top of the server block (just after the ACME location). Gated on
+	// CertPath in the processor itself so flipping the toggle pre-
+	// issuance is harmless.
+	ForceHttps bool
 }
 
 // RenderContext builds the processor.SiteContext that the renderer needs.
@@ -102,6 +108,7 @@ func (s *Spec) RenderContext(certPath, keyPath string) *processor.SiteContext {
 		BlockBots:     s.BlockBots,
 		BasicAuthUser: s.BasicAuthUser,
 		BasicAuthFile: paths.HTPasswdFile(s.Domain),
+		ForceHttps:    s.ForceHttps,
 	}
 	switch s.Type {
 	case "php", "wordpress":

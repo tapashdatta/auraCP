@@ -36,8 +36,11 @@ type SiteContext struct {
 	// ─── TLS state ───
 	// Empty until lego issues — vhost stays HTTP-only with an ACME
 	// challenge location so the first issuance can complete in band.
-	CertPath string // /etc/auracp/ssl/<domain>.crt
-	KeyPath  string // /etc/auracp/ssl/<domain>.key
+	CertPath   string // /etc/auracp/ssl/<domain>.crt
+	KeyPath    string // /etc/auracp/ssl/<domain>.key
+	ForceHttps bool   // v0.2.57: when true AND CertPath != "", emit a
+	// :80 → :443 301 redirect at {{force_https}}. Gated on CertPath so
+	// pre-issuance sites don't trap visitors in a TLS-handshake loop.
 
 	// ─── PHP / WordPress only ───
 	PHPVersion  string            // "8.3"

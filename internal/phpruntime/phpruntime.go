@@ -31,8 +31,15 @@ const (
 	DefaultUploadMaxFilesize = "64M"
 	DefaultPostMaxSize       = "64M"
 	DefaultMaxExecutionTime  = "120"
+	DefaultMaxInputTime      = "60"
 	DefaultMaxInputVars      = "5000"
 	DefaultMaxChildren       = "10"
+	// v0.2.57: operator-requested. Three extra knobs surfaced in the
+	// Settings → PHP runtime values panel. UTC + display_errors=Off are
+	// safe production defaults; the panel lets the operator override
+	// per-site (date.timezone is the one most likely to change).
+	DefaultDateTimezone  = "UTC"
+	DefaultDisplayErrors = "Off"
 )
 
 type Manager struct {
@@ -169,7 +176,9 @@ func (m *Manager) SetDefault(version string) error {
 type poolData struct {
 	Domain, User, Socket                    string
 	MemoryLimit, UploadMax, PostMax         string
-	MaxExec, MaxInputVars, MaxChildren      string
+	MaxExec, MaxInputTime                   string
+	MaxInputVars, MaxChildren               string
+	DateTimezone, DisplayErrors             string
 }
 
 const poolTemplate = `; auraCP-managed pool — do not edit by hand. Rewritten on every panel change.
@@ -194,7 +203,10 @@ php_admin_value[memory_limit] = {{.MemoryLimit}}
 php_admin_value[upload_max_filesize] = {{.UploadMax}}
 php_admin_value[post_max_size] = {{.PostMax}}
 php_admin_value[max_execution_time] = {{.MaxExec}}
+php_admin_value[max_input_time] = {{.MaxInputTime}}
 php_admin_value[max_input_vars] = {{.MaxInputVars}}
+php_admin_value[date.timezone] = {{.DateTimezone}}
+php_admin_flag[display_errors] = {{.DisplayErrors}}
 php_admin_value[opcache.enable] = 1
 php_admin_value[expose_php] = Off
 `
@@ -243,12 +255,15 @@ func (m *Manager) WritePool(ctx context.Context, version, domain, user string) e
 		Domain:       domain,
 		User:         user,
 		Socket:       paths.PHPSocket(domain),
-		MemoryLimit:  get("memory_limit", DefaultMemoryLimit),
-		UploadMax:    get("upload_max_filesize", DefaultUploadMaxFilesize),
-		PostMax:      get("post_max_size", DefaultPostMaxSize),
-		MaxExec:      get("max_execution_time", DefaultMaxExecutionTime),
-		MaxInputVars: get("max_input_vars", DefaultMaxInputVars),
-		MaxChildren:  get("pm.max_children", DefaultMaxChildren),
+		MemoryLimit:   get("memory_limit", DefaultMemoryLimit),
+		UploadMax:     get("upload_max_filesize", DefaultUploadMaxFilesize),
+		PostMax:       get("post_max_size", DefaultPostMaxSize),
+		MaxExec:       get("max_execution_time", DefaultMaxExecutionTime),
+		MaxInputTime:  get("max_input_time", DefaultMaxInputTime),
+		MaxInputVars:  get("max_input_vars", DefaultMaxInputVars),
+		MaxChildren:   get("pm.max_children", DefaultMaxChildren),
+		DateTimezone:  get("date.timezone", DefaultDateTimezone),
+		DisplayErrors: get("display_errors", DefaultDisplayErrors),
 	}
 	t, err := template.New("pool").Parse(poolTemplate)
 	if err != nil {

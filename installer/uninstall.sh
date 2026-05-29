@@ -161,6 +161,34 @@ fi
 run "rm -f /etc/ssh/sshd_config.d/auracp-sftp.conf"
 run "systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null"
 
+# v0.2.57: orphan-user safety net. The group-based sweep above misses
+# users that were created by auraCP but whose `auracp-sftp` group
+# membership got broken (manual edits to /etc/group, a partial uninstall
+# that purged the group but left users, or pre-v0.2.x layouts). We
+# fingerprint auraCP-created homes by the unique two-subdir pattern
+# `/home/<user>/htdocs/` + `/home/<user>/logs/` — no stock Linux user
+# has that exact shape, so false positives are vanishingly unlikely.
+msg "Sweeping orphan auraCP site homes (htdocs+logs pattern)…"
+if [ -d /home ]; then
+  for h in /home/*; do
+    [ -d "$h/htdocs" ] || continue
+    [ -d "$h/logs" ]   || continue
+    u=$(basename "$h")
+    # Skip system users (UID < 1000) defensively — auraCP only ever
+    # creates regular users via `useradd`, which UID-allocates ≥1000.
+    uid=$(id -u "$u" 2>/dev/null || echo 0)
+    [ "$uid" -ge 1000 ] 2>/dev/null || continue
+    if id "$u" >/dev/null 2>&1; then
+      run "pkill -9 -u $u 2>/dev/null"
+      run "userdel -rf $u 2>/dev/null"
+    fi
+    # userdel -r removes the home; if user-not-found we still want
+    # the directory gone (operator may have already `userdel`'d the
+    # account by hand, leaving stale /home/<u>).
+    run "rm -rf $h"
+  done
+fi
+
 msg "Removing auracpd panel…"
 # v0.2.15: stop + remove the watchdog timer BEFORE the daemon so it can't
 # observe the brief stop and (correctly) try to restart it.
