@@ -11,14 +11,31 @@ import (
 	"github.com/auracp/auracp/pkg/dbadmin/driver"
 )
 
+// Options configures a Reader built via ForWithOptions. Zero values fall
+// back to package defaults (30s timeout, 50K rows, 50MB), preserving the
+// behavior of the plain For(...) factory.
+//
+// PR #4.5: Options.Limits plumbs the engine's Config.Query.* into schema
+// reads so operators can shrink (or, with the relevant overrides, grow)
+// the read budget without editing this package. Per-connection cache
+// isolation lives on CacheConfig.Bucket — Cache wraps Reader, so the
+// bucket belongs there, not on the underlying Reader.
+type Options struct {
+	// Limits, when non-zero, overrides the package's defaultLimits()
+	// for every backend query the Reader issues. Fields that are zero
+	// fall back to defaults (i.e. partial overrides are allowed).
+	Limits driver.Limits
+}
+
 // Reader is the engine-agnostic schema-metadata interface. Implementations
 // query information_schema (MySQL/MariaDB) or pg_catalog (PostgreSQL) via
 // the supplied driver.Conn and produce normalized results.
 //
 // Every method takes a context; the driver layer enforces its own
-// resource limits. Schema reads use this package's own 30s / 50K-rows /
-// 50MB limits via defaultLimits(); Config.Query.Timeout does NOT apply
-// yet (PR #4.5 plumbs it through).
+// resource limits. Schema reads default to this package's 30s /
+// 50K-rows / 50MB caps via defaultLimits(); operators can override
+// per-Reader via ForWithOptions(..., Options{Limits: ...}) — PR #4.5
+// plumbs engine Config.Query.* through that path.
 //
 // Identifier inputs (database, schema, table names) are validated by
 // every method that takes one. On failure the method returns
@@ -67,15 +84,51 @@ type Reader interface {
 // For returns the bundled Reader implementation for the given conn's
 // engine. The conn is borrowed for the lifetime of the Reader; callers
 // retain ownership and remain responsible for closing it.
+//
+// Equivalent to ForWithOptions(c, engine, Options{}); schema reads use
+// this package's defaultLimits().
 func For(c driver.Conn, engine dbadmin.EngineKind) (Reader, error) {
+	return ForWithOptions(c, engine, Options{})
+}
+
+// ForWithOptions returns the bundled Reader implementation for the
+// given conn's engine, using opt.Limits for every backend query. Pass
+// Options{} for legacy defaults; pass opt.Limits derived from the
+// engine's Config.Query to honor operator policy.
+//
+// PR #4.5: replaces the hard-wired defaultLimits() path with one where
+// the engine's Config.Query.Timeout / ResultRows / ResultBytes apply.
+func ForWithOptions(c driver.Conn, engine dbadmin.EngineKind, opt Options) (Reader, error) {
+	lim := resolveLimits(opt.Limits)
 	switch engine {
 	case dbadmin.EngineMariaDB:
-		return &mysqlReader{conn: c}, nil
+		return &mysqlReader{conn: c, limits: lim}, nil
 	case dbadmin.EnginePostgres:
-		return &postgresReader{conn: c}, nil
+		return &postgresReader{conn: c, limits: lim}, nil
 	default:
 		return nil, fmt.Errorf("schema: unsupported engine %v", engine)
 	}
+}
+
+// resolveLimits merges caller-supplied Limits with defaultLimits(), so
+// zero fields fall back to defaults. Callers can supply just a Timeout
+// (the common case from Config.Query.TimeoutDefault) and keep the other
+// caps at package defaults.
+func resolveLimits(l driver.Limits) driver.Limits {
+	d := defaultLimits()
+	if l.Timeout > 0 {
+		d.Timeout = l.Timeout
+	}
+	if l.MaxRows > 0 {
+		d.MaxRows = l.MaxRows
+	}
+	if l.MaxBytes > 0 {
+		d.MaxBytes = l.MaxBytes
+	}
+	if l.MaxBytesPerCell > 0 {
+		d.MaxBytesPerCell = l.MaxBytesPerCell
+	}
+	return d
 }
 
 // ─── Normalized model types ──────────────────────────────────────────
@@ -234,6 +287,57 @@ var ErrInvalidIdentifier = errors.New("schema: invalid identifier")
 // query error so callers can map to HTTP 404 cleanly.
 var ErrTableNotFound = errors.New("schema: table not found")
 
+// CappedError wraps driver.ErrCapped with the partial result the
+// schema reader had managed to collect before the row / byte cap
+// tripped. Returned by reader methods when an underlying
+// information_schema / pg_catalog query exceeds the configured Limits
+// mid-stream. The caller can:
+//
+//   - Treat it as a hard error (errors.Is(err, driver.ErrCapped) is
+//     true) and surface "result capped" to the operator with a hint to
+//     increase the limits.
+//   - Recover the partial slice via errors.As(err, &capped) /
+//     CappedError.Partial() — useful when the caller wants to render
+//     "first N items shown" alongside a banner.
+//
+// PR #4 silently returned the partial slice and dropped the cap signal;
+// PR #4.5 routes it through this typed error so the operator UI can
+// distinguish complete from partial reads.
+type CappedError struct {
+	// Got is the partial result accumulated before the cap tripped.
+	// Its concrete type matches the method that returned it (e.g.
+	// []TableSummary for ListTables, *Table for GetTable, etc.).
+	Got any
+
+	// Method is the symbolic name of the reader method that capped
+	// (e.g. "ListTables", "GetTable.fillColumns"). Useful for logs.
+	Method string
+
+	// Inner is the underlying driver error (always wraps driver.ErrCapped).
+	Inner error
+}
+
+// Error implements error.
+func (e *CappedError) Error() string {
+	if e.Method != "" {
+		return fmt.Sprintf("schema: %s capped: %v", e.Method, e.Inner)
+	}
+	return fmt.Sprintf("schema: capped: %v", e.Inner)
+}
+
+// Unwrap exposes the underlying driver error so errors.Is/As walk
+// through to driver.ErrCapped.
+func (e *CappedError) Unwrap() error { return e.Inner }
+
+// Partial returns the accumulated partial result; callers can type-
+// assert it to the expected return type of the call that capped.
+func (e *CappedError) Partial() any { return e.Got }
+
+// newCappedError constructs a CappedError. Internal helper.
+func newCappedError(method string, got any, inner error) error {
+	return &CappedError{Method: method, Got: got, Inner: inner}
+}
+
 // ─── Identifier validation ───────────────────────────────────────────
 
 // identifierRE matches the safe identifier shape: starts with a letter
@@ -242,7 +346,8 @@ var ErrTableNotFound = errors.New("schema: table not found")
 // and is also accepted by MySQL (whose ceiling is 64). This is the
 // intersection of MySQL's and Postgres's quoted-identifier rules
 // without requiring quoting. Anything more exotic must use the full
-// quoted-identifier path (not yet exposed; PR #4.5).
+// quoted-identifier path (not yet exposed; tracked for a future PR
+// that adds delimited-identifier escape support).
 var identifierRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]{0,62}$`)
 
 // ValidateIdentifier returns ErrInvalidIdentifier if name fails the
@@ -327,6 +432,16 @@ type CacheConfig struct {
 	// MaxEntries caps the total cached entries (across keys + types).
 	// Default 1000. Excess entries evicted LRU.
 	MaxEntries int
+
+	// Bucket is an opaque per-connection (or per-role) discriminator the
+	// cache prepends to every key. PR #4.5: prevents cross-user cache
+	// poisoning where two operators with different RBAC visibility into
+	// the same schema would share a GetTable cache entry.
+	//
+	// Empty bucket = legacy unbucketed key space (PR #4 behavior). A
+	// non-empty bucket is treated as opaque; the connection ID is a
+	// reasonable choice.
+	Bucket string
 }
 
 // limits used as the default driver.Limits for schema-level queries.

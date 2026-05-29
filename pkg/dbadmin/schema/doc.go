@@ -22,9 +22,19 @@
 //   - Normalized types: TableSummary, Table, Column, Index, ForeignKey,
 //     ViewSummary, FunctionSummary, ProcedureSummary, TriggerSummary,
 //     TableKind. Databases and schemas are returned as []string.
-//   - For(driver.Conn) → Reader: picks the right engine implementation.
+//   - For(driver.Conn) → Reader: picks the right engine implementation,
+//     using this package's defaultLimits().
+//   - ForWithOptions(driver.Conn, engine, Options): same, but threads
+//     operator-supplied driver.Limits (typically derived from the
+//     engine's Config.Query) through to every backend query. PR #4.5.
 //   - Cache: TTL-based wrapping reader with an invalidation hook the
-//     engine calls after DDL.
+//     engine calls after DDL. Concurrent uncached reads of the same
+//     key coalesce via singleflight; the cache supports an opaque
+//     per-connection Bucket so two operators with different RBAC
+//     visibility don't share a poisoned entry.
+//   - CappedError: typed error returned by reader methods when an
+//     underlying query trips a row / byte cap mid-stream; carries the
+//     partial result so callers can render "partial result".
 //
 // Security:
 //

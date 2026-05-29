@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/auracp/auracp/pkg/dbadmin"
 )
 
@@ -21,6 +23,13 @@ import (
 // Identifier validation: every method that takes an identifier runs
 // ValidateIdentifier first and returns ErrInvalidIdentifier on failure
 // without invoking the inner reader (and without polluting the cache).
+//
+// Load coalescing: concurrent uncached requests for the same key share
+// a single backend load via golang.org/x/sync/singleflight. The
+// shared load still respects Invalidate's generation counter — when an
+// Invalidate races a slow load, the load completes and its result is
+// returned to the in-flight callers, but it is NOT inserted into the
+// cache. PR #4.5 (H6).
 type Cache struct {
 	inner Reader
 	cfg   CacheConfig
@@ -34,6 +43,9 @@ type Cache struct {
 	// before an Invalidate completed sees a stale generation and drops
 	// its result rather than re-poisoning the cache.
 	generation uint64
+
+	// sf coalesces concurrent loads of the same key.
+	sf singleflight.Group
 }
 
 type cacheEntry struct {
@@ -80,6 +92,9 @@ func (c *Cache) Engine() dbadmin.EngineKind { return c.inner.Engine() }
 // In addition, a schema-level invalidation always drops the global
 // "@dbs" entry and any "@schemas:*" entries that may be stale.
 // Pass empty prefix to invalidate everything.
+//
+// When the Cache was built with a Bucket, this method matches keys
+// after stripping the bucket prefix so callers don't need to know it.
 func (c *Cache) Invalidate(prefix string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -89,15 +104,25 @@ func (c *Cache) Invalidate(prefix string) {
 		c.lruOrder = nil
 		return
 	}
+	bucketPrefix := ""
+	if c.cfg.Bucket != "" {
+		bucketPrefix = c.cfg.Bucket + "\x00"
+	}
+	prefixK := bucketPrefix + prefix
 	for k := range c.entries {
-		if k == prefix || strings.HasPrefix(k, prefix+"/") {
+		// Strip bucket discriminator for the user-visible prefix match.
+		logical := k
+		if bucketPrefix != "" && strings.HasPrefix(k, bucketPrefix) {
+			logical = k[len(bucketPrefix):]
+		}
+		if k == prefixK || strings.HasPrefix(k, prefixK+"/") {
 			delete(c.entries, k)
 			continue
 		}
 		// DDL at the schema level may also affect the global database
 		// list (e.g. CREATE SCHEMA) and schema lists (e.g. DROP
 		// SCHEMA). Drop those entries too.
-		if k == "@dbs" || strings.HasPrefix(k, "@schemas:") {
+		if logical == "@dbs" || strings.HasPrefix(logical, "@schemas:") {
 			delete(c.entries, k)
 		}
 	}
@@ -111,21 +136,37 @@ func (c *Cache) Invalidate(prefix string) {
 	c.lruOrder = survivors
 }
 
+// bkey applies the configured Bucket discriminator to a cache key so
+// two cache instances sharing the same underlying map (or two cache
+// users in the same bucket-aware key space) can't collide on
+// schema/table only. Empty bucket = legacy unbucketed key space.
+func (c *Cache) bkey(key string) string {
+	if c.cfg.Bucket == "" {
+		return key
+	}
+	return c.cfg.Bucket + "\x00" + key
+}
+
 // cacheFetch is the cache's read-through helper. It looks up `key`,
 // returns the cached value if fresh, or calls `load` and caches the
 // result.
 //
-// Race protection: the cache's generation counter (bumped under
-// Invalidate's write lock) is captured before `load` starts; after
-// `load` finishes we recheck under the write lock and DROP the result
-// if Invalidate ran during the load. This prevents a stale value from
-// landing after Invalidate.
+// Concurrency:
+//   - singleflight.Group coalesces N concurrent loads of the same key
+//     into one backend call (PR #4.5 H6: thundering-herd avoidance).
+//   - The singleflight slot captures the cache generation at slot
+//     ACQUISITION time so the result-drop logic in the insert path
+//     still works: if Invalidate ran while the load was in flight, we
+//     still hand the value to all callers (load completed), but we do
+//     NOT insert into the map (PR #4 H7: stale-result race protection).
+//   - A failed load is NOT cached; the next call retries.
 func cacheFetch[T any](c *Cache, key string, load func() (T, error)) (T, error) {
 	var zero T
+	bk := c.bkey(key)
 
 	// Fast path: read lock.
 	c.mu.RLock()
-	e, ok := c.entries[key]
+	e, ok := c.entries[bk]
 	gen := c.generation
 	c.mu.RUnlock()
 	if ok && time.Since(e.cachedAt) < c.cfg.TTL {
@@ -137,37 +178,43 @@ func cacheFetch[T any](c *Cache, key string, load func() (T, error)) (T, error) 
 		// key naming, but if it does, fall through to refresh.
 	}
 
-	// Miss / stale: load.
-	v, err := load()
+	// Miss / stale: coalesce loads. singleflight returns the same
+	// (value, error) to every concurrent caller that joined this slot.
+	// We capture the generation BEFORE entering Do so leader and
+	// followers observe the same race window against Invalidate.
+	vAny, err, _ := c.sf.Do(bk, func() (any, error) {
+		v, err := load()
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.generation != gen {
+			// Concurrent Invalidate ran since we started; return value
+			// to in-flight callers but do NOT insert.
+			return v, nil
+		}
+		existing, hadEntry := c.entries[bk]
+		c.entries[bk] = &cacheEntry{
+			value:    v,
+			cachedAt: time.Now(),
+		}
+		c.entries[bk].lastAccess.Store(time.Now())
+		if !hadEntry || existing == nil {
+			c.lruOrder = append(c.lruOrder, bk)
+		}
+		if len(c.entries) > c.cfg.MaxEntries {
+			c.evictLRULocked()
+		}
+		return v, nil
+	})
 	if err != nil {
 		return zero, err
 	}
-
-	// Insert under write lock; bail out if the cache was invalidated
-	// while `load` was running.
-	c.mu.Lock()
-	if c.generation != gen {
-		// A concurrent Invalidate ran since we started loading. The
-		// value we just produced may already be stale; don't insert.
-		c.mu.Unlock()
-		return v, nil
+	v, ok := vAny.(T)
+	if !ok {
+		return zero, nil
 	}
-	existing, hadEntry := c.entries[key]
-	c.entries[key] = &cacheEntry{
-		value:    v,
-		cachedAt: time.Now(),
-	}
-	c.entries[key].lastAccess.Store(time.Now())
-	// Only append to lruOrder if the key wasn't already present.
-	// Otherwise we'd grow lruOrder without bound on TTL-refresh.
-	if !hadEntry || existing == nil {
-		c.lruOrder = append(c.lruOrder, key)
-	}
-	if len(c.entries) > c.cfg.MaxEntries {
-		c.evictLRULocked()
-	}
-	c.mu.Unlock()
-
 	return v, nil
 }
 

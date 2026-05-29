@@ -62,6 +62,10 @@ type stubResult struct {
 	rows [][]any
 	cols []driver.ColumnInfo
 	err  error
+	// tailErr, when non-nil, is returned by Rows.Next after the last
+	// row of rows has been yielded — instead of the default ErrEOF.
+	// Used by CappedError tests to inject driver.ErrCapped mid-stream.
+	tailErr error
 }
 
 func newStubConn() *stubConn {
@@ -86,7 +90,7 @@ func (c *stubConn) Query(ctx context.Context, _ driver.Limits, sqlText string, a
 	if r.err != nil {
 		return nil, r.err
 	}
-	return &stubRows{rows: r.rows, cols: r.cols}, nil
+	return &stubRows{rows: r.rows, cols: r.cols, tailErr: r.tailErr}, nil
 }
 
 func (c *stubConn) Exec(ctx context.Context, _ driver.Limits, sqlText string, args ...any) (driver.Result, error) {
@@ -107,14 +111,20 @@ func summarize(s string) string {
 }
 
 type stubRows struct {
-	rows [][]any
-	cols []driver.ColumnInfo
-	idx  int
+	rows    [][]any
+	cols    []driver.ColumnInfo
+	idx     int
+	tailErr error // returned after the last row, in place of ErrEOF
 }
 
 func (r *stubRows) Columns() []driver.ColumnInfo { return r.cols }
 func (r *stubRows) Next(ctx context.Context) ([]any, error) {
 	if r.idx >= len(r.rows) {
+		if r.tailErr != nil {
+			err := r.tailErr
+			r.tailErr = nil // surface once; subsequent calls return ErrEOF
+			return nil, err
+		}
 		return nil, driver.ErrEOF
 	}
 	row := r.rows[r.idx]
@@ -130,7 +140,7 @@ func TestMySQL_ListDatabases(t *testing.T) {
 	const expectedSQL = `
 		SELECT schema_name
 		FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		ORDER BY schema_name`
 	c.on(expectedSQL, stubResult{
 		rows: [][]any{{"app_db"}, {"reporting"}},
@@ -174,7 +184,7 @@ func TestCache_HitsAvoidUnderlyingCall(t *testing.T) {
 	c := newStubConn().on(`
 		SELECT schema_name
 		FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		ORDER BY schema_name`, stubResult{
 		rows: [][]any{{"app_db"}},
 	})
@@ -204,7 +214,7 @@ func TestCache_TTLExpires(t *testing.T) {
 	c := newStubConn().on(`
 		SELECT schema_name
 		FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		ORDER BY schema_name`, stubResult{
 		rows: [][]any{{"app_db"}},
 	})
@@ -270,7 +280,7 @@ func TestCache_InvalidateAll(t *testing.T) {
 	c := newStubConn().on(`
 		SELECT schema_name
 		FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		ORDER BY schema_name`, stubResult{rows: [][]any{{"app_db"}}})
 	r, _ := schema.For(c, dbadmin.EngineMariaDB)
 	cache := schema.NewCache(r, schema.CacheConfig{})
@@ -564,3 +574,261 @@ func (s *slowReader) ListProcedures(ctx context.Context, _ string) ([]schema.Pro
 func (s *slowReader) ListTriggers(ctx context.Context, _ string) ([]schema.TriggerSummary, error) {
 	return nil, nil
 }
+
+// ─── PR #4.5 follow-up tests ─────────────────────────────────────────
+
+// TestForWithOptions_AppliesLimits asserts that ForWithOptions threads
+// the supplied Limits into every driver.Conn.Query call (H9). The
+// limits-capturing stubConn records the limits it sees per query.
+func TestForWithOptions_AppliesLimits(t *testing.T) {
+	c := &limitsRecordingConn{stubConn: newStubConn()}
+	const expectedSQL = `
+		SELECT schema_name
+		FROM information_schema.schemata
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		ORDER BY schema_name`
+	c.on(expectedSQL, stubResult{rows: [][]any{{"db1"}}})
+
+	r, err := schema.ForWithOptions(c, dbadmin.EngineMariaDB, schema.Options{
+		Limits: driver.Limits{Timeout: 7 * time.Second, MaxRows: 12, MaxBytes: 1024},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ListDatabases(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.observedLimits) == 0 {
+		t.Fatal("no query observed")
+	}
+	got := c.observedLimits[0]
+	if got.Timeout != 7*time.Second || got.MaxRows != 12 || got.MaxBytes != 1024 {
+		t.Errorf("limits not threaded: got %+v", got)
+	}
+}
+
+// limitsRecordingConn extends stubConn with per-query Limits observation.
+type limitsRecordingConn struct {
+	*stubConn
+	observedLimits []driver.Limits
+}
+
+func (c *limitsRecordingConn) Query(ctx context.Context, l driver.Limits, sqlText string, args ...any) (driver.Rows, error) {
+	c.mu.Lock()
+	c.observedLimits = append(c.observedLimits, l)
+	c.mu.Unlock()
+	return c.stubConn.Query(ctx, l, sqlText, args...)
+}
+
+// TestCappedError_PartialResult exercises the CappedError surface: when
+// a stub Rows returns ErrCapped mid-stream, the reader returns the
+// partial slice via CappedError.Partial() and errors.Is wraps
+// driver.ErrCapped. Regression test for H12.
+func TestCappedError_PartialResult(t *testing.T) {
+	c := newStubConn()
+	const tablesSQL = `
+		SELECT table_name, table_type, ifnull(table_comment, ''),
+		       ifnull(table_rows, 0), ifnull(engine, '')
+		FROM information_schema.tables
+		WHERE table_schema = ?
+		ORDER BY table_name`
+	// Return one row then an ErrCapped on the next Next() call.
+	c.on(tablesSQL, stubResult{
+		rows:     [][]any{{"users", "BASE TABLE", "", int64(100), "InnoDB"}},
+		tailErr:  driver.ErrCapped,
+	})
+	r, _ := schema.For(c, dbadmin.EngineMariaDB)
+	_, err := r.ListTables(context.Background(), "appdb")
+	if err == nil {
+		t.Fatal("ListTables: want CappedError, got nil")
+	}
+	if !errors.Is(err, driver.ErrCapped) {
+		t.Errorf("err does not wrap driver.ErrCapped: %v", err)
+	}
+	var cappedErr *schema.CappedError
+	if !errors.As(err, &cappedErr) {
+		t.Fatalf("err is not *CappedError: %T %v", err, err)
+	}
+	partial, ok := cappedErr.Partial().([]schema.TableSummary)
+	if !ok {
+		t.Fatalf("Partial() = %T, want []schema.TableSummary", cappedErr.Partial())
+	}
+	if len(partial) != 1 || partial[0].Name != "users" {
+		t.Errorf("partial = %v; want [{users}]", partial)
+	}
+}
+
+// TestCache_SingleflightCoalescesLoads forces concurrent uncached reads
+// of the same key against a slowReader that counts entries. With
+// singleflight, all callers share the one in-flight load (H6).
+func TestCache_SingleflightCoalescesLoads(t *testing.T) {
+	loadCh := make(chan struct{})
+	resume := make(chan struct{})
+	sr := &countingSlowReader{
+		started: loadCh,
+		release: resume,
+		table:   &schema.Table{Schema: "alpha", Name: "users"},
+	}
+	cache := schema.NewCache(sr, schema.CacheConfig{TTL: time.Hour, MaxEntries: 100})
+
+	// Fire N concurrent GetTable calls. They should coalesce into one
+	// underlying GetTable.
+	const N = 8
+	results := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func() {
+			_, err := cache.GetTable(context.Background(), "alpha", "users")
+			results <- err
+		}()
+	}
+	// Wait for the first load to be in flight, then release.
+	<-loadCh
+	// Give the followers a chance to pile up behind the singleflight slot.
+	time.Sleep(20 * time.Millisecond)
+	close(resume)
+	for i := 0; i < N; i++ {
+		if err := <-results; err != nil {
+			t.Fatalf("call %d: %v", i, err)
+		}
+	}
+	if got := sr.calls.Load(); got != 1 {
+		t.Errorf("singleflight failed: underlying GetTable called %d times; want 1", got)
+	}
+}
+
+// TestCache_BucketIsolation asserts that two Cache instances with
+// different Bucket values do not share entries even when wrapping
+// the same underlying reader through identical key shapes. Regression
+// for the cross-user cache poisoning concern.
+func TestCache_BucketIsolation(t *testing.T) {
+	a := &countingReader{table: &schema.Table{Schema: "alpha", Name: "users", Columns: []schema.Column{{Name: "a"}}}}
+	cacheA := schema.NewCache(a, schema.CacheConfig{TTL: time.Hour, MaxEntries: 100, Bucket: "userA"})
+	cacheB := schema.NewCache(a, schema.CacheConfig{TTL: time.Hour, MaxEntries: 100, Bucket: "userB"})
+
+	if _, err := cacheA.GetTable(context.Background(), "alpha", "users"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cacheA.GetTable(context.Background(), "alpha", "users"); err != nil {
+		t.Fatal(err)
+	}
+	// cacheA primed → underlying called once. cacheB should miss.
+	if got := a.calls.Load(); got != 1 {
+		t.Fatalf("after 2 cacheA reads: got %d underlying calls; want 1", got)
+	}
+	if _, err := cacheB.GetTable(context.Background(), "alpha", "users"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.calls.Load(); got != 2 {
+		t.Errorf("after cacheB miss: got %d underlying calls; want 2", got)
+	}
+}
+
+// TestCache_InvalidateRespectsBucket asserts Invalidate works in a
+// bucket-aware cache: the operator passes the bare schema name (not
+// the bucket-prefixed key), and the cache drops the matching entry.
+func TestCache_InvalidateRespectsBucket(t *testing.T) {
+	a := &countingReader{table: &schema.Table{Schema: "alpha", Name: "users"}}
+	cache := schema.NewCache(a, schema.CacheConfig{TTL: time.Hour, MaxEntries: 100, Bucket: "userA"})
+
+	if _, err := cache.GetTable(context.Background(), "alpha", "users"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.calls.Load(); got != 1 {
+		t.Fatalf("first GetTable: got %d calls", got)
+	}
+	cache.Invalidate("alpha")
+	if _, err := cache.GetTable(context.Background(), "alpha", "users"); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.calls.Load(); got != 2 {
+		t.Errorf("after invalidate: got %d calls; want 2", got)
+	}
+}
+
+// countingSlowReader is a slow Reader whose GetTable blocks until
+// release; counts how many times it ran.
+type countingSlowReader struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomicInt64
+	table   *schema.Table
+}
+
+func (s *countingSlowReader) Engine() dbadmin.EngineKind { return dbadmin.EngineMariaDB }
+func (s *countingSlowReader) ListDatabases(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) ListSchemas(ctx context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) ListTables(ctx context.Context, _ string) ([]schema.TableSummary, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) GetTable(ctx context.Context, _, _ string) (*schema.Table, error) {
+	s.calls.Add(1)
+	select {
+	case s.started <- struct{}{}:
+	default:
+	}
+	<-s.release
+	return s.table, nil
+}
+func (s *countingSlowReader) ListViews(ctx context.Context, _ string) ([]schema.ViewSummary, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) ListFunctions(ctx context.Context, _ string) ([]schema.FunctionSummary, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) ListProcedures(ctx context.Context, _ string) ([]schema.ProcedureSummary, error) {
+	return nil, nil
+}
+func (s *countingSlowReader) ListTriggers(ctx context.Context, _ string) ([]schema.TriggerSummary, error) {
+	return nil, nil
+}
+
+// countingReader counts every GetTable call; non-blocking, useful for
+// cache hit/miss assertions.
+type countingReader struct {
+	calls atomicInt64
+	table *schema.Table
+}
+
+func (r *countingReader) Engine() dbadmin.EngineKind { return dbadmin.EngineMariaDB }
+func (r *countingReader) ListDatabases(ctx context.Context) ([]string, error) {
+	return nil, nil
+}
+func (r *countingReader) ListSchemas(ctx context.Context, _ string) ([]string, error) {
+	return nil, nil
+}
+func (r *countingReader) ListTables(ctx context.Context, _ string) ([]schema.TableSummary, error) {
+	return nil, nil
+}
+func (r *countingReader) GetTable(ctx context.Context, _, _ string) (*schema.Table, error) {
+	r.calls.Add(1)
+	return r.table, nil
+}
+func (r *countingReader) ListViews(ctx context.Context, _ string) ([]schema.ViewSummary, error) {
+	return nil, nil
+}
+func (r *countingReader) ListFunctions(ctx context.Context, _ string) ([]schema.FunctionSummary, error) {
+	return nil, nil
+}
+func (r *countingReader) ListProcedures(ctx context.Context, _ string) ([]schema.ProcedureSummary, error) {
+	return nil, nil
+}
+func (r *countingReader) ListTriggers(ctx context.Context, _ string) ([]schema.TriggerSummary, error) {
+	return nil, nil
+}
+
+// atomicInt64 is a tiny wrapper to avoid importing sync/atomic in the
+// test file (already imports sync). It's mutex-protected for clarity;
+// the test loads are not perf-sensitive.
+type atomicInt64 struct {
+	mu sync.Mutex
+	v  int64
+}
+
+func (a *atomicInt64) Add(n int64) { a.mu.Lock(); a.v += n; a.mu.Unlock() }
+func (a *atomicInt64) Load() int64 { a.mu.Lock(); defer a.mu.Unlock(); return a.v }

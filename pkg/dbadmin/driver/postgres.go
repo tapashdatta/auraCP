@@ -6,12 +6,15 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/auracp/auracp/pkg/dbadmin"
@@ -402,9 +405,21 @@ func pgTypeName(oid uint32) string {
 // contract (int64, float64, string, []byte, time.Time UTC).
 //
 // pgx's default Values() returns wrapper types for some columns (UUIDs
-// as [16]byte, JSON as map[string]any, etc.). For PR #3 we normalize
-// the ones that hit downstream JSON marshaling badly; richer type
-// preservation lands with PR #4's schema reader.
+// as [16]byte, JSON as map[string]any, pgtype.Numeric for NUMERIC, etc.).
+// PR #4.5 expands the set of normalizations so downstream JSON output is
+// human-readable across the common pgtype wrappers — NULL-valued
+// wrappers render as untyped nil.
+//
+// Mappings:
+//   - time.Time              → time.Time UTC
+//   - [16]byte               → "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+//   - pgtype.UUID            → canonical text or nil when !Valid
+//   - pgtype.Numeric         → decimal text via MarshalJSON, with quote stripped
+//   - pgtype.Interval        → ISO-8601 duration text ("P1Y2M3DT4H5M6.789S")
+//   - pgtype.Range[T]        → "[lower,upper)" text form (open/closed bounds)
+//   - pgtype.Bool/Text/Int*/Float*/Date/Timestamp{,tz} → underlying primitive or nil
+//
+// Anything not matched falls through unchanged.
 func normalizePostgresValue(v any) any {
 	switch x := v.(type) {
 	case nil:
@@ -413,11 +428,259 @@ func normalizePostgresValue(v any) any {
 		return x.UTC()
 	case [16]byte:
 		// UUID — render as canonical text form (8-4-4-4-12).
-		return fmt.Sprintf("%x-%x-%x-%x-%x",
-			x[0:4], x[4:6], x[6:8], x[8:10], x[10:16])
+		return formatUUIDBytes(x)
+	case pgtype.UUID:
+		if !x.Valid {
+			return nil
+		}
+		return formatUUIDBytes(x.Bytes)
+	case pgtype.Numeric:
+		if !x.Valid {
+			return nil
+		}
+		return formatNumeric(x)
+	case pgtype.Interval:
+		if !x.Valid {
+			return nil
+		}
+		return formatInterval(x)
+	case pgtype.Bool:
+		if !x.Valid {
+			return nil
+		}
+		return x.Bool
+	case pgtype.Text:
+		if !x.Valid {
+			return nil
+		}
+		return x.String
+	case pgtype.Int2:
+		if !x.Valid {
+			return nil
+		}
+		return int64(x.Int16)
+	case pgtype.Int4:
+		if !x.Valid {
+			return nil
+		}
+		return int64(x.Int32)
+	case pgtype.Int8:
+		if !x.Valid {
+			return nil
+		}
+		return x.Int64
+	case pgtype.Float4:
+		if !x.Valid {
+			return nil
+		}
+		return float64(x.Float32)
+	case pgtype.Float8:
+		if !x.Valid {
+			return nil
+		}
+		return x.Float64
+	case pgtype.Date:
+		if !x.Valid {
+			return nil
+		}
+		return x.Time.UTC()
+	case pgtype.Timestamp:
+		if !x.Valid {
+			return nil
+		}
+		return x.Time.UTC()
+	case pgtype.Timestamptz:
+		if !x.Valid {
+			return nil
+		}
+		return x.Time.UTC()
+	case pgtype.Range[pgtype.Numeric]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatNumeric(x.Lower), formatNumeric(x.Upper))
+	case pgtype.Range[pgtype.Int4]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatInt4(x.Lower), formatInt4(x.Upper))
+	case pgtype.Range[pgtype.Int8]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatInt8(x.Lower), formatInt8(x.Upper))
+	case pgtype.Range[pgtype.Timestamp]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatTime(x.Lower.Time, x.Lower.Valid), formatTime(x.Upper.Time, x.Upper.Valid))
+	case pgtype.Range[pgtype.Timestamptz]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatTime(x.Lower.Time, x.Lower.Valid), formatTime(x.Upper.Time, x.Upper.Valid))
+	case pgtype.Range[pgtype.Date]:
+		if !x.Valid {
+			return nil
+		}
+		return formatRange(x.LowerType, x.UpperType, formatTime(x.Lower.Time, x.Lower.Valid), formatTime(x.Upper.Time, x.Upper.Valid))
 	default:
 		return v
 	}
+}
+
+// formatUUIDBytes renders a 16-byte UUID as the canonical
+// "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" text form.
+func formatUUIDBytes(b [16]byte) string {
+	return fmt.Sprintf("%x-%x-%x-%x-%x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+// formatNumeric renders a pgtype.Numeric as a plain decimal string.
+// NaN and infinity render as their backend tokens. Empty / !Valid
+// returns "".
+func formatNumeric(n pgtype.Numeric) string {
+	if !n.Valid {
+		return ""
+	}
+	if n.NaN {
+		return "NaN"
+	}
+	switch n.InfinityModifier {
+	case pgtype.Infinity:
+		return "Infinity"
+	case pgtype.NegativeInfinity:
+		return "-Infinity"
+	}
+	if n.Int == nil {
+		// Defensive — should always be non-nil for Valid && !NaN.
+		return "0"
+	}
+	if n.Exp == 0 {
+		return n.Int.String()
+	}
+	if n.Exp > 0 {
+		// Append exp zeros to the integer.
+		mul := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(n.Exp)), nil)
+		out := new(big.Int).Mul(n.Int, mul)
+		return out.String()
+	}
+	// Negative exponent: insert decimal point. The integer's absolute
+	// value's digits get split at -exp from the right.
+	neg := n.Int.Sign() < 0
+	digits := new(big.Int).Abs(n.Int).String()
+	scale := int(-n.Exp)
+	if len(digits) <= scale {
+		digits = strings.Repeat("0", scale-len(digits)+1) + digits
+	}
+	whole := digits[:len(digits)-scale]
+	frac := strings.TrimRight(digits[len(digits)-scale:], "0")
+	out := whole
+	if frac != "" {
+		out += "." + frac
+	}
+	if neg {
+		out = "-" + out
+	}
+	return out
+}
+
+// formatInterval renders a pgtype.Interval as a compact ISO-8601-ish
+// string. PostgreSQL itself accepts the form, and downstream JSON output
+// stays human-readable.
+func formatInterval(iv pgtype.Interval) string {
+	if !iv.Valid {
+		return ""
+	}
+	if iv.Microseconds == 0 && iv.Days == 0 && iv.Months == 0 {
+		return "PT0S"
+	}
+	var b strings.Builder
+	b.WriteByte('P')
+	years := iv.Months / 12
+	months := iv.Months % 12
+	if years != 0 {
+		fmt.Fprintf(&b, "%dY", years)
+	}
+	if months != 0 {
+		fmt.Fprintf(&b, "%dM", months)
+	}
+	if iv.Days != 0 {
+		fmt.Fprintf(&b, "%dD", iv.Days)
+	}
+	if iv.Microseconds != 0 {
+		b.WriteByte('T')
+		us := iv.Microseconds
+		neg := us < 0
+		if neg {
+			us = -us
+		}
+		hours := us / 3_600_000_000
+		us -= hours * 3_600_000_000
+		minutes := us / 60_000_000
+		us -= minutes * 60_000_000
+		seconds := us / 1_000_000
+		fracUs := us % 1_000_000
+		sign := ""
+		if neg {
+			sign = "-"
+		}
+		if hours != 0 {
+			fmt.Fprintf(&b, "%s%dH", sign, hours)
+		}
+		if minutes != 0 {
+			fmt.Fprintf(&b, "%s%dM", sign, minutes)
+		}
+		if seconds != 0 || fracUs != 0 {
+			if fracUs == 0 {
+				fmt.Fprintf(&b, "%s%dS", sign, seconds)
+			} else {
+				fmt.Fprintf(&b, "%s%d.%06dS", sign, seconds, fracUs)
+			}
+		}
+	}
+	return b.String()
+}
+
+// formatRange renders a Postgres range as the standard literal text
+// form, e.g. "[1,5)" or "(2025-01-01,2025-02-01]". Empty bounds render
+// as the empty string between the brackets.
+func formatRange(lt, ut pgtype.BoundType, lower, upper string) string {
+	var lb, ub byte
+	switch lt {
+	case pgtype.Inclusive:
+		lb = '['
+	default:
+		lb = '('
+	}
+	switch ut {
+	case pgtype.Inclusive:
+		ub = ']'
+	default:
+		ub = ')'
+	}
+	return string([]byte{lb}) + lower + "," + upper + string([]byte{ub})
+}
+
+func formatInt4(i pgtype.Int4) string {
+	if !i.Valid {
+		return ""
+	}
+	return strconv.FormatInt(int64(i.Int32), 10)
+}
+
+func formatInt8(i pgtype.Int8) string {
+	if !i.Valid {
+		return ""
+	}
+	return strconv.FormatInt(i.Int64, 10)
+}
+
+func formatTime(t time.Time, valid bool) string {
+	if !valid {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // classifyPostgresErr maps a pgx error to one of the typed sentinels.

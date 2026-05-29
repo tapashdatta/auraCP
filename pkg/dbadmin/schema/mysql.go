@@ -14,20 +14,34 @@ import (
 // driver.Conn. All filter values pass as bind parameters; we NEVER
 // concatenate operator-supplied identifiers into SQL.
 type mysqlReader struct {
-	conn driver.Conn
+	conn   driver.Conn
+	limits driver.Limits // populated by ForWithOptions; defaults filled in by resolveLimits
 }
 
 func (r *mysqlReader) Engine() dbadmin.EngineKind { return dbadmin.EngineMariaDB }
+
+// rlimits returns the configured driver.Limits, falling back to package
+// defaults when the reader was constructed via the legacy For(...) path
+// that didn't set them.
+func (r *mysqlReader) rlimits() driver.Limits {
+	if r.limits.Timeout == 0 && r.limits.MaxRows == 0 && r.limits.MaxBytes == 0 {
+		return defaultLimits()
+	}
+	return r.limits
+}
 
 func (r *mysqlReader) ListDatabases(ctx context.Context) ([]string, error) {
 	// Filter out the system schemas the operator can't (and shouldn't)
 	// administer through Aura DB. Operators with elevated privs can
 	// still address them by typing the name explicitly; this filter is
 	// just the default list view.
+	//
+	// PR #4.5: lower-case both sides so case-insensitive MySQL collations
+	// don't let MYSQL/PERFORMANCE_SCHEMA/etc. slip past the filter.
 	const q = `
 		SELECT schema_name
 		FROM information_schema.schemata
-		WHERE schema_name NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+		WHERE LOWER(schema_name) NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
 		ORDER BY schema_name`
 	return r.fetchStrings(ctx, q)
 }
@@ -53,7 +67,7 @@ func (r *mysqlReader) ListTables(ctx context.Context, schema string) ([]TableSum
 		WHERE table_schema = ?
 		ORDER BY table_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -64,6 +78,11 @@ func (r *mysqlReader) ListTables(ctx context.Context, schema string) ([]TableSum
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			// H12: surface partial slice + cap signal so the operator
+			// UI can render "partial result, increase limits".
+			return out, newCappedError("ListTables", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -118,12 +137,17 @@ func (r *mysqlReader) GetTable(ctx context.Context, schema, table string) (*Tabl
 		return nil, err
 	}
 
-	// Step 5: triggers (best-effort; some MySQL configs hide triggers
-	// without SUPER privilege).
+	// Step 5: triggers. Some MySQL configs hide triggers without
+	// TRIGGER privilege; for that narrow case we swallow the error and
+	// return the rest of the table metadata. Any other error (transport
+	// outage, syntax problem, ErrCapped) propagates so callers don't
+	// silently see incomplete data. PR #4.5 narrowing.
 	if err := r.fillTriggers(ctx, tbl); err != nil {
-		// Don't fail the whole call for trigger-list permission
-		// issues; surface what we have.
-		tbl.Triggers = nil
+		if errors.Is(err, driver.ErrPermission) {
+			tbl.Triggers = nil
+		} else {
+			return nil, err
+		}
 	}
 
 	return tbl, nil
@@ -136,7 +160,7 @@ func (r *mysqlReader) getTableMeta(ctx context.Context, schema, table string) (*
 		FROM information_schema.tables
 		WHERE table_schema = ? AND table_name = ?`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema, table)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -180,7 +204,7 @@ func (r *mysqlReader) fillColumns(ctx context.Context, tbl *Table) error {
 		WHERE table_schema = ? AND table_name = ?
 		ORDER BY ordinal_position`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -190,6 +214,9 @@ func (r *mysqlReader) fillColumns(ctx context.Context, tbl *Table) error {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return newCappedError("GetTable.fillColumns", tbl, err)
 		}
 		if err != nil {
 			return err
@@ -229,7 +256,7 @@ func (r *mysqlReader) fillIndexes(ctx context.Context, tbl *Table) error {
 		WHERE table_schema = ? AND table_name = ?
 		ORDER BY index_name, seq_in_index`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -239,9 +266,14 @@ func (r *mysqlReader) fillIndexes(ctx context.Context, tbl *Table) error {
 	// one per column.
 	idxByName := map[string]*Index{}
 	var order []string
+	capped := false
 	for {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
+			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			capped = true
 			break
 		}
 		if err != nil {
@@ -275,6 +307,9 @@ func (r *mysqlReader) fillIndexes(ctx context.Context, tbl *Table) error {
 	if pk, ok := idxByName["PRIMARY"]; ok && pk != nil {
 		tbl.PrimaryKey = append([]string(nil), pk.Columns...)
 	}
+	if capped {
+		return newCappedError("GetTable.fillIndexes", tbl, driver.ErrCapped)
+	}
 	return nil
 }
 
@@ -293,7 +328,7 @@ func (r *mysqlReader) fillForeignKeys(ctx context.Context, tbl *Table) error {
 		  AND k.referenced_table_name IS NOT NULL
 		ORDER BY k.constraint_name, k.ordinal_position`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -301,9 +336,14 @@ func (r *mysqlReader) fillForeignKeys(ctx context.Context, tbl *Table) error {
 
 	fkByName := map[string]*ForeignKey{}
 	var order []string
+	capped := false
 	for {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
+			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			capped = true
 			break
 		}
 		if err != nil {
@@ -331,6 +371,9 @@ func (r *mysqlReader) fillForeignKeys(ctx context.Context, tbl *Table) error {
 	for _, name := range order {
 		tbl.ForeignKeys = append(tbl.ForeignKeys, *fkByName[name])
 	}
+	if capped {
+		return newCappedError("GetTable.fillForeignKeys", tbl, driver.ErrCapped)
+	}
 	return nil
 }
 
@@ -347,7 +390,7 @@ func (r *mysqlReader) fillTriggers(ctx context.Context, tbl *Table) error {
 		WHERE event_object_schema = ? AND event_object_table = ?
 		ORDER BY trigger_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -357,6 +400,9 @@ func (r *mysqlReader) fillTriggers(ctx context.Context, tbl *Table) error {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return newCappedError("GetTable.fillTriggers", tbl, err)
 		}
 		if err != nil {
 			return err
@@ -387,7 +433,7 @@ func (r *mysqlReader) ListViews(ctx context.Context, schema string) ([]ViewSumma
 		WHERE table_schema = ?
 		ORDER BY table_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +444,9 @@ func (r *mysqlReader) ListViews(ctx context.Context, schema string) ([]ViewSumma
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListViews", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -427,7 +476,7 @@ func (r *mysqlReader) ListFunctions(ctx context.Context, schema string) ([]Funct
 		WHERE routine_schema = ? AND routine_type = 'FUNCTION'
 		ORDER BY routine_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -438,6 +487,9 @@ func (r *mysqlReader) ListFunctions(ctx context.Context, schema string) ([]Funct
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListFunctions", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -467,7 +519,7 @@ func (r *mysqlReader) ListProcedures(ctx context.Context, schema string) ([]Proc
 		WHERE routine_schema = ? AND routine_type = 'PROCEDURE'
 		ORDER BY routine_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -478,6 +530,9 @@ func (r *mysqlReader) ListProcedures(ctx context.Context, schema string) ([]Proc
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListProcedures", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -511,7 +566,7 @@ func (r *mysqlReader) ListTriggers(ctx context.Context, schema string) ([]Trigge
 		WHERE trigger_schema = ?
 		ORDER BY event_object_table, trigger_name`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +577,9 @@ func (r *mysqlReader) ListTriggers(ctx context.Context, schema string) ([]Trigge
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListTriggers", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -546,7 +604,7 @@ func (r *mysqlReader) ListTriggers(ctx context.Context, schema string) ([]Trigge
 // fetchStrings is a convenience for queries that return a single-column
 // list of strings (ListDatabases, ListSchemas-ish helpers).
 func (r *mysqlReader) fetchStrings(ctx context.Context, sqlText string, args ...any) ([]string, error) {
-	rows, err := r.conn.Query(ctx, defaultLimits(), sqlText, args...)
+	rows, err := r.conn.Query(ctx, r.rlimits(), sqlText, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -557,6 +615,9 @@ func (r *mysqlReader) fetchStrings(ctx context.Context, sqlText string, args ...
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("fetchStrings", out, err)
 		}
 		if err != nil {
 			return nil, err

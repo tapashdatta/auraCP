@@ -14,10 +14,21 @@ import (
 // via driver.Conn. Identifiers are bound as $1, $2, ... — never
 // concatenated into SQL.
 type postgresReader struct {
-	conn driver.Conn
+	conn   driver.Conn
+	limits driver.Limits // populated by ForWithOptions; defaults filled in by resolveLimits
 }
 
 func (r *postgresReader) Engine() dbadmin.EngineKind { return dbadmin.EnginePostgres }
+
+// rlimits returns the configured driver.Limits, falling back to package
+// defaults when the reader was constructed via the legacy For(...) path
+// that didn't set them.
+func (r *postgresReader) rlimits() driver.Limits {
+	if r.limits.Timeout == 0 && r.limits.MaxRows == 0 && r.limits.MaxBytes == 0 {
+		return defaultLimits()
+	}
+	return r.limits
+}
 
 func (r *postgresReader) ListDatabases(ctx context.Context) ([]string, error) {
 	// Excludes the templates + filters to databases the connecting
@@ -66,7 +77,7 @@ func (r *postgresReader) ListTables(ctx context.Context, schema string) ([]Table
 		  AND c.relkind IN ('r', 'p', 'v', 'm')
 		ORDER BY c.relname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +88,9 @@ func (r *postgresReader) ListTables(ctx context.Context, schema string) ([]Table
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListTables", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -125,9 +139,15 @@ func (r *postgresReader) GetTable(ctx context.Context, schema, table string) (*T
 		return nil, err
 	}
 
-	// Step 5: triggers.
+	// Step 5: triggers. Postgres permission rules differ from MySQL but
+	// the same narrowing applies: swallow only ErrPermission, surface
+	// transport / cap / syntax errors. PR #4.5.
 	if err := r.fillTriggers(ctx, tbl); err != nil {
-		tbl.Triggers = nil
+		if errors.Is(err, driver.ErrPermission) {
+			tbl.Triggers = nil
+		} else {
+			return nil, err
+		}
 	}
 
 	return tbl, nil
@@ -145,7 +165,7 @@ func (r *postgresReader) getTableMeta(ctx context.Context, schema, table string)
 		LEFT JOIN pg_am am ON am.oid = c.relam
 		WHERE n.nspname = $1 AND c.relname = $2`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema, table)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +212,7 @@ func (r *postgresReader) fillColumns(ctx context.Context, tbl *Table) error {
 		  AND a.attnum > 0 AND NOT a.attisdropped
 		ORDER BY a.attnum`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -202,6 +222,9 @@ func (r *postgresReader) fillColumns(ctx context.Context, tbl *Table) error {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return newCappedError("GetTable.fillColumns", tbl, err)
 		}
 		if err != nil {
 			return err
@@ -250,7 +273,7 @@ func (r *postgresReader) fetchPrimaryKey(ctx context.Context, schema, table stri
 		WHERE n.nspname = $1 AND c.relname = $2 AND i.indisprimary
 		ORDER BY array_position(i.indkey, a.attnum)`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema, table)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema, table)
 	if err != nil {
 		return nil, err
 	}
@@ -260,6 +283,9 @@ func (r *postgresReader) fetchPrimaryKey(ctx context.Context, schema, table stri
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("GetTable.fetchPrimaryKey", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -273,32 +299,50 @@ func (r *postgresReader) fetchPrimaryKey(ctx context.Context, schema, table stri
 }
 
 func (r *postgresReader) fillIndexes(ctx context.Context, tbl *Table) error {
+	// PR #4.5: surface expression-index entries as "(expr)" placeholders.
+	// Old query joined pg_attribute on attnum = ANY(indkey), which
+	// silently drops entries with attnum 0 (Postgres's marker for an
+	// expression column). We now unnest indkey WITH ORDINALITY and
+	// either resolve the attname or fall back to pg_get_indexdef's
+	// expression text for that key position.
 	const q = `
 		SELECT i.relname AS index_name,
 		       idx.indisunique,
 		       idx.indisprimary,
 		       coalesce(am.amname, ''),
 		       coalesce(pg_get_expr(idx.indpred, idx.indrelid), ''),
-		       array_to_string(array_agg(a.attname ORDER BY array_position(idx.indkey, a.attnum)), ',')
+		       array_to_string(
+		           array_agg(
+		               coalesce(a.attname,
+		                        '(' || pg_get_indexdef(idx.indexrelid, u.ord::int, true) || ')')
+		               ORDER BY u.ord
+		           ), ','
+		       )
 		FROM pg_index idx
 		JOIN pg_class c ON c.oid = idx.indrelid
 		JOIN pg_class i ON i.oid = idx.indexrelid
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		LEFT JOIN pg_am am ON am.oid = i.relam
-		LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = ANY(idx.indkey)
+		JOIN unnest(idx.indkey) WITH ORDINALITY AS u(attnum, ord) ON true
+		LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum = u.attnum AND u.attnum <> 0
 		WHERE n.nspname = $1 AND c.relname = $2
 		GROUP BY i.relname, idx.indisunique, idx.indisprimary, am.amname, idx.indpred, idx.indrelid
 		ORDER BY i.relname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 
+	capped := false
 	for {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
+			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			capped = true
 			break
 		}
 		if err != nil {
@@ -308,8 +352,6 @@ func (r *postgresReader) fillIndexes(ctx context.Context, tbl *Table) error {
 			continue
 		}
 		cols := strings.Split(toString(vals[5]), ",")
-		// Trim and drop empty (which can happen when ANY() expands an
-		// indkey containing 0 for expression-indexes).
 		cleaned := cols[:0]
 		for _, c := range cols {
 			c = strings.TrimSpace(c)
@@ -325,6 +367,9 @@ func (r *postgresReader) fillIndexes(ctx context.Context, tbl *Table) error {
 			Predicate: toString(vals[4]),
 			Columns:   cleaned,
 		})
+	}
+	if capped {
+		return newCappedError("GetTable.fillIndexes", tbl, driver.ErrCapped)
 	}
 	return nil
 }
@@ -349,7 +394,7 @@ func (r *postgresReader) fillForeignKeys(ctx context.Context, tbl *Table) error 
 		GROUP BY con.conname, fn.nspname, fc.relname, con.confdeltype, con.confupdtype
 		ORDER BY con.conname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -359,6 +404,9 @@ func (r *postgresReader) fillForeignKeys(ctx context.Context, tbl *Table) error 
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return newCappedError("GetTable.fillForeignKeys", tbl, err)
 		}
 		if err != nil {
 			return err
@@ -401,7 +449,7 @@ func (r *postgresReader) fillTriggers(ctx context.Context, tbl *Table) error {
 		WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal
 		ORDER BY t.tgname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, tbl.Schema, tbl.Name)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, tbl.Schema, tbl.Name)
 	if err != nil {
 		return err
 	}
@@ -411,6 +459,9 @@ func (r *postgresReader) fillTriggers(ctx context.Context, tbl *Table) error {
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return newCappedError("GetTable.fillTriggers", tbl, err)
 		}
 		if err != nil {
 			return err
@@ -434,16 +485,25 @@ func (r *postgresReader) ListViews(ctx context.Context, schema string) ([]ViewSu
 	if err := ValidateIdentifier(schema); err != nil {
 		return nil, err
 	}
+	// PR #4.5 (H14): Postgres exposes is_updatable via
+	// information_schema.views. Join from pg_class (which has the comment)
+	// to information_schema.views on (table_schema, table_name) so we can
+	// pull is_updatable for views; materialized views are not in
+	// information_schema.views so we LEFT JOIN and fall back to NULL ->
+	// false.
 	const q = `
 		SELECT c.relname,
 		       coalesce(pg_get_viewdef(c.oid, true), ''),
-		       coalesce(obj_description(c.oid, 'pg_class'), '')
+		       coalesce(obj_description(c.oid, 'pg_class'), ''),
+		       coalesce(v.is_updatable, 'NO') = 'YES'
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
+		LEFT JOIN information_schema.views v
+		  ON v.table_schema = n.nspname AND v.table_name = c.relname
 		WHERE n.nspname = $1 AND c.relkind IN ('v', 'm')
 		ORDER BY c.relname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -455,10 +515,13 @@ func (r *postgresReader) ListViews(ctx context.Context, schema string) ([]ViewSu
 		if errors.Is(err, driver.ErrEOF) {
 			break
 		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListViews", out, err)
+		}
 		if err != nil {
 			return nil, err
 		}
-		if len(vals) < 3 {
+		if len(vals) < 4 {
 			continue
 		}
 		out = append(out, ViewSummary{
@@ -466,9 +529,7 @@ func (r *postgresReader) ListViews(ctx context.Context, schema string) ([]ViewSu
 			Name:       toString(vals[0]),
 			Definition: toString(vals[1]),
 			Comment:    toString(vals[2]),
-			// Postgres views are updatable depending on the
-			// definition; we don't currently extract is_updatable.
-			Updatable: false,
+			Updatable:  toBool(vals[3]),
 		})
 	}
 	return out, nil
@@ -491,7 +552,7 @@ func (r *postgresReader) ListFunctions(ctx context.Context, schema string) ([]Fu
 		WHERE n.nspname = $1 AND p.prokind IN ('f', 'a', 'w')
 		ORDER BY p.proname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -502,6 +563,9 @@ func (r *postgresReader) ListFunctions(ctx context.Context, schema string) ([]Fu
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListFunctions", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -537,7 +601,7 @@ func (r *postgresReader) ListProcedures(ctx context.Context, schema string) ([]P
 		WHERE n.nspname = $1 AND p.prokind = 'p'
 		ORDER BY p.proname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -548,6 +612,9 @@ func (r *postgresReader) ListProcedures(ctx context.Context, schema string) ([]P
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListProcedures", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -589,7 +656,7 @@ func (r *postgresReader) ListTriggers(ctx context.Context, schema string) ([]Tri
 		WHERE n.nspname = $1 AND NOT t.tgisinternal
 		ORDER BY c.relname, t.tgname`
 
-	rows, err := r.conn.Query(ctx, defaultLimits(), q, schema)
+	rows, err := r.conn.Query(ctx, r.rlimits(), q, schema)
 	if err != nil {
 		return nil, err
 	}
@@ -600,6 +667,9 @@ func (r *postgresReader) ListTriggers(ctx context.Context, schema string) ([]Tri
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("ListTriggers", out, err)
 		}
 		if err != nil {
 			return nil, err
@@ -622,7 +692,7 @@ func (r *postgresReader) ListTriggers(ctx context.Context, schema string) ([]Tri
 // ─── Helpers ────────────────────────────────────────────────────────
 
 func (r *postgresReader) fetchStrings(ctx context.Context, sqlText string, args ...any) ([]string, error) {
-	rows, err := r.conn.Query(ctx, defaultLimits(), sqlText, args...)
+	rows, err := r.conn.Query(ctx, r.rlimits(), sqlText, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -633,6 +703,9 @@ func (r *postgresReader) fetchStrings(ctx context.Context, sqlText string, args 
 		vals, err := rows.Next(ctx)
 		if errors.Is(err, driver.ErrEOF) {
 			break
+		}
+		if errors.Is(err, driver.ErrCapped) {
+			return out, newCappedError("fetchStrings", out, err)
 		}
 		if err != nil {
 			return nil, err
