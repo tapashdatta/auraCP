@@ -2,11 +2,24 @@ import { describe, it, expect } from 'vitest'
 import { classifyKind, renderCell, formatDateUTC, formatNumber, parseEditValue, binaryByteLen } from '../../src/lib/rowgrid/cellRenderers.js'
 
 describe('classifyKind', () => {
-  it('detects numeric types', () => {
-    expect(classifyKind('INT')).toBe('number')
-    expect(classifyKind('BIGINT')).toBe('number')
+  // edit-15 (PR #12.5): INT-family columns are now their own 'integer'
+  // kind; only DECIMAL / NUMERIC / FLOAT / DOUBLE / REAL / MONEY stay
+  // under 'number'. The split lets parseEditValue reject decimal input
+  // on an INT column before it hits the wire.
+  it('detects integer types as "integer"', () => {
+    expect(classifyKind('INT')).toBe('integer')
+    expect(classifyKind('BIGINT')).toBe('integer')
+    expect(classifyKind('SMALLINT')).toBe('integer')
+    expect(classifyKind('MEDIUMINT')).toBe('integer')
+    expect(classifyKind('SERIAL')).toBe('integer')
+    expect(classifyKind('BIGSERIAL')).toBe('integer')
+  })
+  it('detects decimal/float types as "number"', () => {
     expect(classifyKind('NUMERIC(10,2)')).toBe('number')
+    expect(classifyKind('DECIMAL(8,2)')).toBe('number')
     expect(classifyKind('DOUBLE PRECISION')).toBe('number')
+    expect(classifyKind('FLOAT')).toBe('number')
+    expect(classifyKind('MONEY')).toBe('number')
   })
   it('detects boolean types', () => {
     expect(classifyKind('BOOL')).toBe('boolean')
@@ -78,6 +91,17 @@ describe('parseEditValue', () => {
   it('parses number / rejects garbage', () => {
     expect(parseEditValue('42', 'number').value).toBe(42)
     expect(parseEditValue('abc', 'number').ok).toBe(false)
+  })
+  // edit-15 (PR #12.5): integer kind rejects decimals + scientific
+  // notation before they hit the driver (MySQL silently floors, Postgres
+  // rejects with 22P02 — a parse-time error is more consistent).
+  it('integer kind rejects decimals', () => {
+    expect(parseEditValue('42', 'integer').value).toBe(42)
+    expect(parseEditValue('-7', 'integer').value).toBe(-7)
+    expect(parseEditValue('42.7', 'integer').ok).toBe(false)
+    expect(parseEditValue('1e5', 'integer').ok).toBe(false)
+    expect(parseEditValue('1,000', 'integer').ok).toBe(false)
+    expect(parseEditValue('abc', 'integer').ok).toBe(false)
   })
   it('parses booleans flexibly', () => {
     expect(parseEditValue('true', 'boolean').value).toBe(true)

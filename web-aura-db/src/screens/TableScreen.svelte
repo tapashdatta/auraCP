@@ -14,6 +14,7 @@
   import { createRowGrid } from '../lib/rowgrid/useRowGrid.svelte.js'
   import { virtualWindow, ariaRowIndex } from '../lib/rowgrid/virtualWindow.js'
   import { classifyKind, renderCell } from '../lib/rowgrid/cellRenderers.js'
+  import { buildPKKey } from '../lib/rowgrid/pkKey.js'
   import { keyToAction } from '../lib/rowgrid/keyboard.js'
   import { toastBus, dismissToast } from '../lib/rowgrid/toasts.svelte.js'
   import ExportModal from '../lib/components/ExportModal.svelte'
@@ -26,6 +27,28 @@
     return {}
   }
 
+  // edit-11 (PR #12.5): the edit input's onblur previously committed the
+  // value unconditionally. When the user pressed Escape, the keydown
+  // handler called cancelEdit() (which un-renders the input) — but the
+  // blur event then fired AFTER the input was removed and re-mounted, so
+  // the cancel logically won by accident. That ordering wasn't guaranteed
+  // (Safari's order differs from Chrome's on detach + focus moves) and
+  // any future change to cancelEdit() that didn't immediately tear down
+  // the input would silently start committing cancelled edits. Fix:
+  // explicitly suppress the next blur-commit when an Escape was just
+  // pressed inside the edit input.
+  let escSuppressBlur = false
+  function onEditKeydown(e) {
+    if (e.key === 'Escape') escSuppressBlur = true
+  }
+  function onEditBlur() {
+    if (escSuppressBlur) {
+      escSuppressBlur = false
+      return
+    }
+    void grid?.commitEdit()
+  }
+
   const id = $derived(routeState.params.id)
   const schema = $derived(routeState.params.schema)
   const table = $derived(routeState.params.table)
@@ -34,11 +57,20 @@
 
   // Re-create the grid composable whenever the (conn, schema, table) tuple
   // changes; this gives each tab its own state.
+  // perf-9 (PR #12.5): the previous effect created a new grid on every
+  // dependency change without disposing of the previous one — leaving its
+  // AbortController + pending Map + any in-flight layout-save timer
+  // dangling. We now return a cleanup that calls grid.dispose() so the
+  // old grid's resources are released before the next one mounts.
   $effect(() => {
     if (!id || !schema || !table) return
     const g = createRowGrid({ connId: id, schema, table })
     grid = g
     g.reload()
+    return () => {
+      try { g.dispose() } catch { /* defensive — never let cleanup throw */ }
+      if (grid === g) grid = null
+    }
   })
 
   // Make sure a tab exists for this table.
@@ -56,9 +88,22 @@
   let scrollTop = $state(0)
   let viewportH = $state(400)
 
+  // perf-2 (PR #12.5): the previous onScroll handler called
+  // requestAnimationFrame on every scroll event. On a touch-pad flick
+  // the browser fires 60+ scroll events per second AND each one queued
+  // a fresh rAF callback — the scheduler then ran every one of them
+  // before the next frame, redundantly assigning scrollTop and
+  // triggering the visibleSlice $derived recompute N times per frame
+  // instead of once. Adding a `rafPending` latch coalesces all
+  // intra-frame scroll events into a single rAF callback (true
+  // requestAnimationFrame throttling).
+  let rafPending = false
   function onScroll(e) {
     const el = /** @type {HTMLDivElement} */(e.currentTarget)
+    if (rafPending) return
+    rafPending = true
     requestAnimationFrame(() => {
+      rafPending = false
       scrollTop = el.scrollTop
     })
   }
@@ -72,8 +117,10 @@
   })
 
   const rowH = $derived(grid?.densityPx ?? 24)
+  // perf-3 (PR #12.5): buffer raised to virtualWindow's new default of 8.
+  // Explicit default override removed so the constant lives in one place.
   const window_ = $derived(grid ? virtualWindow({
-    scrollTop, viewportH, rowH, total: grid.rows.data.length, buffer: 4,
+    scrollTop, viewportH, rowH, total: grid.rows.data.length,
   }) : { startIdx: 0, endIdx: 0, visCount: 0, yOffset: 0 })
 
   const visibleSlice = $derived(grid ? grid.rows.data.slice(window_.startIdx, window_.endIdx) : [])
@@ -299,17 +346,29 @@
      aria-multiselectable so AT users know the grid is multi-select,
      aria-readonly so the canonical READ-ONLY semantic is announced
      (separate from the visible pill), and aria-busy during loads. -->
+<!-- a11y-20 (PR #12.5): aria-rowcount can lie when the server total is
+     unknown (loading, or backend didn't return it). The ARIA spec defines
+     aria-rowcount=-1 as "total is unknown" — AT announces "row X of
+     many" instead of the misleading "row X of <current-page-count>+2".
+     a11y-5: only ONE tab stop in the grid — the focused cell carries
+     tabindex=0; the grid root drops to tabindex=-1 so keyboard users
+     don't land on a non-interactive container before reaching a cell.
+     onkeydown stays on the root because key events bubble from the
+     focused cell. -->
 <div
   class="rowgrid"
   role="grid"
-  aria-rowcount={(grid?.rows.total ?? grid?.rows.data.length ?? 0) + 2}
+  aria-rowcount={grid?.rows.total != null
+    ? grid.rows.total + 2
+    : (grid?.rows.data.length ? grid.rows.data.length + 2 : -1)}
   aria-colcount={(columnsForRender.length || 0) + 1}
   aria-multiselectable="true"
   aria-readonly={grid?.meta.readOnly ? 'true' : 'false'}
   aria-busy={grid?.rows.loading ? 'true' : undefined}
   data-readonly={grid?.meta.readOnly ? 'true' : 'false'}
   data-density={grid?.density.mode}
-  tabindex="0"
+  tabindex="-1"
+  style="--rg-grid-cols: {gridTemplateColumns}"
   onkeydown={onKeyDown}
 >
   {#if grid}
@@ -394,8 +453,15 @@
       bind:this={bodyEl}
       onscroll={onScroll}
     >
-      <!-- Header -->
-      <div class="rowgrid__head" role="row" aria-rowindex={1} style="grid-template-columns: {gridTemplateColumns}">
+      <!-- Header. perf-6 (PR #12.5): the grid-template-columns string was
+           previously inlined on every header / filter / data row, costing
+           a fresh per-row style attr write whenever any column width
+           changed (mid-drag). The columns string is now lifted to a CSS
+           custom property `--rg-grid-cols` on the .rowgrid root; every
+           row reads `grid-template-columns: var(--rg-grid-cols)` from a
+           single stylesheet rule. The browser only invalidates one style
+           recompute per drag tick instead of N. -->
+      <div class="rowgrid__head" role="row" aria-rowindex={1}>
         <div class="rg-th rg-th--gutter" role="columnheader" aria-colindex={1}></div>
         {#each columnsForRender as col, ci (col.name)}
           {@const badge = sortBadge(col.name)}
@@ -448,7 +514,6 @@
         class="rowgrid__filterbar"
         role="presentation"
         aria-label="Filter row"
-        style="grid-template-columns: {gridTemplateColumns}"
       >
         <div class="rg-filter rg-filter--gutter" role="presentation"></div>
         {#each columnsForRender as col, ci (col.name)}
@@ -477,7 +542,7 @@
             class="rg-row rg-row--new"
             role="row"
             aria-rowindex={3}
-            style="grid-template-columns: {gridTemplateColumns}; top: 0; height: {rowH}px"
+            style="top: 0; height: {rowH}px"
           >
             <div class="rg-cell rg-cell--gutter" role="rowheader">+</div>
             {#each columnsForRender as col, ci (col.name)}
@@ -503,12 +568,13 @@
           {@const top = rowIdx * rowH}
           {@const isFocused = rowIdx === grid.selection.focusRow}
           {@const isSelected = grid.selection.selectedRows.has(rowIdx)}
+          {@const rowPK = buildPKKey(row, grid.meta.pk, grid.view.columnOrder)}
           <div
             class="rg-row {isFocused ? 'rg-row--focus' : ''} {isSelected ? 'rg-row--selected' : ''}"
             role="row"
             aria-rowindex={ariaRowIndex({ idx: rowIdx, offset: grid.page.offset, hasNewRow: !!grid.selection.newRow })}
             aria-selected={isSelected}
-            style="grid-template-columns: {gridTemplateColumns}; top: {top}px; height: {rowH}px"
+            style="top: {top}px; height: {rowH}px"
           >
             <div
               class="rg-cell rg-cell--gutter"
@@ -534,8 +600,10 @@
               {@const isEditing = grid.selection.editing && grid.selection.editing.row === rowIdx && grid.selection.editing.col === ci}
               {@const cell = renderCell(row[ci], { kind: columnKinds[ci], name: col.name, typeName: col.type })}
               {@const cellFocus = isFocused && grid.selection.focusCol === ci}
+              {@const cellSaving = rowPK ? grid.isCellSaving(rowPK, col.name) : false}
               <div
-                class="{cell.className} {col.primaryKey ? 'rg-cell--pk' : ''} {cellFocus ? 'rg-cell--focus' : ''}"
+                class="{cell.className} {col.primaryKey ? 'rg-cell--pk' : ''} {cellFocus ? 'rg-cell--focus' : ''} {cellSaving ? 'rg-cell--saving' : ''}"
+                aria-busy={cellSaving ? 'true' : undefined}
                 role="gridcell"
                 aria-colindex={ci + 2}
                 tabindex={cellFocus ? 0 : -1}
@@ -550,7 +618,9 @@
                     type="text"
                     value={grid.selection.editing.value}
                     oninput={(e) => grid.setEditValue(e.currentTarget.value)}
-                    onblur={() => void grid.commitEdit()}
+                    onkeydown={onEditKeydown}
+                    onblur={onEditBlur}
+                    aria-label={`Edit ${col.name}`}
                     use:focusInput
                   />
                 {:else}

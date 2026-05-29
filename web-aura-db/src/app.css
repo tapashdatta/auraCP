@@ -988,6 +988,15 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   position: relative;
   overflow: auto;
   background: var(--surface);
+  /* perf-5 (PR #12.5): hoist the body scroller onto its own composite
+     layer so Safari doesn't repaint the entire sticky header + filter
+     bar on every scroll tick. The Safari sticky+overflow:auto repaint
+     hazard is well-documented (webkit bug 213500); promoting both the
+     scroll container and the sticky children to their own layers stops
+     the cascade. `contain: paint` clips paint to the body box; the
+     translateZ on sticky children below ensures they each get their
+     own GPU-backed layer. */
+  contain: paint;
 }
 
 .rowgrid__head {
@@ -995,6 +1004,10 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   top: 0;
   z-index: 3;
   display: grid;
+  /* perf-6 (PR #12.5): column-template lives on the parent .rowgrid via
+     --rg-grid-cols; reading it from a CSS var instead of inline style
+     means a column resize re-evaluates one style rule, not 100+. */
+  grid-template-columns: var(--rg-grid-cols);
   align-items: stretch;
   background: var(--surface-sunk);
   border-bottom: 1px solid var(--border-strong);
@@ -1004,16 +1017,26 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   text-transform: uppercase;
   letter-spacing: 0.04em;
   height: var(--rowgrid-header-h);
+  /* perf-5: promote to its own composite layer — Safari otherwise
+     repaints the entire sticky bar (including the filter row below)
+     on every scroll frame inside an overflow:auto ancestor. */
+  transform: translateZ(0);
+  will-change: transform;
 }
 .rowgrid__filterbar {
   position: sticky;
   top: var(--rowgrid-header-h);
   z-index: 3;
   display: grid;
+  grid-template-columns: var(--rg-grid-cols);
   align-items: stretch;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   height: var(--rowgrid-filter-h);
+  /* perf-5: separate composite layer for the filter bar — see the
+     header rule above. */
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 .rg-th {
@@ -1103,6 +1126,9 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   left: 0;
   right: 0;
   display: grid;
+  /* perf-6 (PR #12.5): read column template from the shared CSS var
+     on the .rowgrid root. See the header rule above for the rationale. */
+  grid-template-columns: var(--rg-grid-cols);
   align-items: stretch;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
@@ -1159,6 +1185,20 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 .rg-cell--array { font-family: var(--font-mono); color: var(--text-dim); }
 .rg-cell--unknown { font-family: var(--font-mono); color: var(--text-mute); }
 .rg-cell--editing { padding: 0; }
+/* edit-14 (PR #12.5): per-cell saving indicator — a 2 px right-edge
+   accent stripe on cells with an in-flight optimistic write. The
+   toolbar already shows a "{N} pending" pill but the user has no way
+   to see WHICH cell is still in flight; the stripe makes the per-cell
+   state visible without adding a separate icon column. The stripe
+   fades back to the normal border on commit/rollback. */
+.rg-cell--saving {
+  box-shadow: inset -2px 0 0 0 var(--accent);
+}
+.rg-cell--saving.rg-cell--focus {
+  /* Avoid double box-shadow conflict with the focus ring — keep the
+     focus ring outline visible on top of the saving stripe. */
+  box-shadow: inset 0 0 0 2px var(--rowgrid-focus-ring), inset -2px 0 0 0 var(--accent);
+}
 .rg-cell__input {
   width: 100%;
   height: 100%;

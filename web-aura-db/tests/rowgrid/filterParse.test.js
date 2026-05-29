@@ -51,9 +51,31 @@ describe('parseFilterInput', () => {
     expect(serializeFilter('foo', r)).toBe('foo:IN:["a","b"]')
   })
   it('serializes NOT IN with JSON-encoded array (WIRE-03)', () => {
-    // parseFilterInput emits IN; NOT IN isn't currently recognized by the
-    // parser regex but the serializer must still handle it for completeness.
+    // parseFilterInput emits NOT IN since PR #12.5 (WIRE-10). This test
+    // remains green to guarantee the serializer handles externally-
+    // constructed parsed objects too.
     const parsed = { ok: true, op: 'NOT IN', value: ['1', '2', '3'], raw: 'not in (1,2,3)' }
     expect(serializeFilter('id', /** @type {any} */(parsed))).toBe('id:NOT IN:["1","2","3"]')
+  })
+  // WIRE-10 (PR #12.5): NOT IN is now reachable from the filter input.
+  it('parses NOT IN with multiple values', () => {
+    const r = parseFilterInput('not in (1,2,3)', 'number')
+    expect(r?.ok).toBe(true)
+    expect(r?.op).toBe('NOT IN')
+    expect(r?.value).toEqual(['1', '2', '3'])
+  })
+  it('NOT IN with no values is an error', () => {
+    const r = parseFilterInput('not in ( )', 'number')
+    expect(r?.ok).toBe(false)
+  })
+  // edit-12 (PR #12.5): the malformed `is null xyz` form previously
+  // downgraded to ILIKE '%is null xyz%' silently — now an explicit error.
+  it('rejects malformed IS NULL with trailing text', () => {
+    const r = parseFilterInput('is null xyz', 'text')
+    expect(r?.ok).toBe(false)
+    const r2 = parseFilterInput('null and something', 'text')
+    expect(r2?.ok).toBe(false)
+    const r3 = parseFilterInput('not null xyz', 'text')
+    expect(r3?.ok).toBe(false)
   })
 })

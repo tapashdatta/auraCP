@@ -12,10 +12,16 @@
  * @param {number} opts.viewportH    body clientHeight (excluding sticky header)
  * @param {number} opts.rowH         row height in px (after density)
  * @param {number} opts.total        total rows in the current data slice
- * @param {number} [opts.buffer]     overscan rows above + below (default 4)
+ * @param {number} [opts.buffer]     overscan rows above + below (default 8)
  * @returns {{startIdx:number, endIdx:number, visCount:number, yOffset:number}}
+ *
+ * perf-3 (PR #12.5): buffer default raised from 4 → 8. The original 4-row
+ * overscan was below the spec's >=5 floor; on fast flick-scroll a 4-row
+ * cushion still allowed brief blank-row flashes at the leading edge. Eight
+ * rows costs ~64 extra rendered nodes (1.5 KB DOM per cell × 8 × cols) —
+ * trivial next to the layout savings from never repainting torn slices.
  */
-export function virtualWindow({ scrollTop, viewportH, rowH, total, buffer = 4 }) {
+export function virtualWindow({ scrollTop, viewportH, rowH, total, buffer = 8 }) {
   if (!rowH || rowH <= 0 || total <= 0) {
     return { startIdx: 0, endIdx: 0, visCount: 0, yOffset: 0 }
   }

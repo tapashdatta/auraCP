@@ -11,16 +11,35 @@
 //   > <value>     >= <value>              → > / >=
 //   < <value>     <= <value>              → < / <=
 //   like <pattern>     ilike <pattern>    → LIKE / ILIKE
-//   in (a,b,c)                            → IN (joined comma)
+//   in (a,b,c)                            → IN (JSON-encoded array on wire)
+//   not in (a,b,c)                        → NOT IN (JSON-encoded array on wire)
 //   default text col                      → ILIKE %raw%
 //   default numeric col                   → =
+//
+// edit-12 (PR #12.5): the IS NULL / IS NOT NULL / NULL / NOT NULL forms are
+// strict — trailing text is rejected so `is null xyz` no longer silently
+// downgrades to ILIKE '%is null xyz%'. The user gets a clear error toast
+// surfaced via the rg-filter__input--err style + tooltip.
+//
+// WIRE-10 (PR #12.5): NOT IN is now reachable from the filter input. The
+// wire serialization (serializeFilter) was already JSON-encoding NOT IN
+// when given one — this just exposes the operator on the client parser.
+//
+// WIRE-15 (PR #12.5): filter wire format is `col:op:value`. Operators with
+// spaces (IS NULL, IS NOT NULL, NOT IN) are preserved verbatim in the op
+// slot; the value slot is JSON for IN/NOT IN and an empty string for
+// IS NULL / IS NOT NULL. Colons inside the value are NOT escaped — the
+// backend parser splits on the FIRST two colons only and treats the
+// remainder as the literal value. Bare colons in filter values are
+// therefore safe; this is documented here for parity with backend
+// pkg/dbadmin/httpapi/handlers_rows.go parseFilter.
 
 /**
  * @typedef {import('./cellRenderers.js').CellKind} CellKind
  *
  * @typedef {{
  *   ok: true,
- *   op: '='|'!='|'<'|'<='|'>'|'>='|'LIKE'|'ILIKE'|'IS NULL'|'IS NOT NULL'|'IN',
+ *   op: '='|'!='|'<'|'<='|'>'|'>='|'LIKE'|'ILIKE'|'IS NULL'|'IS NOT NULL'|'IN'|'NOT IN',
  *   value: string | string[] | null,
  *   raw: string,
  * } | {
@@ -39,9 +58,14 @@ export function parseFilterInput(raw, kind = 'text') {
   const trimmed = String(raw ?? '').trim()
   if (trimmed === '') return null
 
-  // is [not] null
+  // is [not] null — strict, anchored to end of string (edit-12).
+  // Detect the malformed `is null xyz` / `not null xyz` forms early and
+  // surface a parse error instead of silently downgrading to ILIKE.
   if (/^is\s+null$|^null$/i.test(trimmed)) return { ok: true, op: 'IS NULL', value: null, raw: trimmed }
   if (/^is\s+not\s+null$|^not\s+null$/i.test(trimmed)) return { ok: true, op: 'IS NOT NULL', value: null, raw: trimmed }
+  if (/^(is\s+)?(not\s+)?null\b/i.test(trimmed)) {
+    return { ok: false, error: 'use "is null" or "is not null" with no trailing text', raw: trimmed }
+  }
 
   // Comparison operators
   let m
@@ -53,6 +77,15 @@ export function parseFilterInput(raw, kind = 'text') {
   if (m) return { ok: true, op: /** @type {any} */(m[1]), value: m[2].trim(), raw: trimmed }
   m = /^(i?like)\s+(.+)$/i.exec(trimmed)
   if (m) return { ok: true, op: /** @type {any} */(m[1].toUpperCase()), value: m[2].trim(), raw: trimmed }
+  // WIRE-10: NOT IN must come before IN — same-prefix match would otherwise
+  // route `not in (a,b)` to the bare IN branch and accept the literal
+  // `not in (a,b)` parens contents (wrong shape).
+  m = /^not\s+in\s*\(\s*(.+?)\s*\)$/i.exec(trimmed)
+  if (m) {
+    const parts = m[1].split(',').map((s) => s.trim()).filter((s) => s !== '')
+    if (parts.length === 0) return { ok: false, error: 'NOT IN requires at least one value', raw: trimmed }
+    return { ok: true, op: 'NOT IN', value: parts, raw: trimmed }
+  }
   m = /^in\s*\(\s*(.+?)\s*\)$/i.exec(trimmed)
   if (m) {
     const parts = m[1].split(',').map((s) => s.trim()).filter((s) => s !== '')
@@ -61,7 +94,10 @@ export function parseFilterInput(raw, kind = 'text') {
   }
 
   // Default: numeric col → equality; everything else → substring ILIKE.
-  if (kind === 'number') {
+  // edit-15 / WIRE-10: both 'integer' and 'number' kinds route through
+  // the numeric branch — the backend treats them identically once the
+  // value is on the wire, so the filter contract stays a string.
+  if (kind === 'number' || kind === 'integer') {
     if (Number.isNaN(Number(trimmed))) {
       return { ok: false, error: 'numeric column expects a number or comparison', raw: trimmed }
     }

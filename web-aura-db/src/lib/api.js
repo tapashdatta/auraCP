@@ -127,8 +127,15 @@ export class AuraDBClient {
   // Rows (used by PR #12). The insert/update bodies wrap into
   // {values}/{set} envelopes matching httpapi.insertRowRequest /
   // updateRowRequest.
-  /** @param {string} id @param {string} s @param {string} t @param {Record<string,string>} q @param {AbortSignal} [signal] */
-  listRows(id, s, t, q, signal)  { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows?${new URLSearchParams(q).toString()}`, { signal }) }
+  //
+  // WIRE-14 (PR #12.5): the previous AuraDBClient.listRows wrapper was
+  // dead code — it accepted a Record<string,string> query bag, which
+  // cannot represent multi-sort or multi-filter (URLSearchParams(record)
+  // dedupes repeat keys). The real call path is
+  // useRowGrid.svelte.js → listRowsRaw(), which threads a hand-built
+  // query string with repeated `sort` / `filter` params straight to
+  // request(). Keeping the dead wrapper invited future callers to use
+  // it and silently drop their filters / sort keys — removed.
   /** @param {string} id @param {string} s @param {string} t @param {object} row @param {AbortSignal} [signal] */
   insertRow(id, s, t, row, signal) { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows`, { method: 'POST', body: { values: row }, signal }) }
   /**

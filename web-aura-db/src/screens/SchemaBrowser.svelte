@@ -24,17 +24,33 @@
     }).catch(() => { /* shell-stage */ }).finally(() => { loading = false })
   })
 
+  // WIRE-11 (PR #12.5): a real double-click previously fired BOTH the
+  // single-click and the double-click handlers in sequence (browser
+  // semantics — the second mousedown raises dblclick only AFTER the
+  // first click event has fired). The grid de-dups by path, so the
+  // user never saw two tabs, but they did see the table-detail route
+  // mount briefly before the rows route replaced it (a flash of the
+  // wrong screen). Fix: schedule the single-click open on a short
+  // timer; if a dblclick arrives within ~250 ms, cancel the timer and
+  // route to the rows screen instead.
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let pendingClickTimer = null
+  const DBLCLICK_WINDOW_MS = 250
+
   function openTable(tbl) {
-    // Single-click → table detail page. Double-click would jump straight
-    // to the row grid; SchemaBrowser uses single-click for now.
-    openTab({
-      title: `${schema}.${tbl.name}`,
-      path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}`,
-      icon: 'table',
-    })
-    navigate(`/connections/${id}/schemas/${schema}/tables/${tbl.name}`)
+    if (pendingClickTimer) clearTimeout(pendingClickTimer)
+    pendingClickTimer = setTimeout(() => {
+      pendingClickTimer = null
+      openTab({
+        title: `${schema}.${tbl.name}`,
+        path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}`,
+        icon: 'table',
+      })
+      navigate(`/connections/${id}/schemas/${schema}/tables/${tbl.name}`)
+    }, DBLCLICK_WINDOW_MS)
   }
   function openTableRows(tbl) {
+    if (pendingClickTimer) { clearTimeout(pendingClickTimer); pendingClickTimer = null }
     openTab({
       title: `${schema}.${tbl.name}`,
       path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}/rows`,
@@ -67,7 +83,20 @@
                 aria-label={`Open ${tbl.name}`}
                 onclick={() => openTable(tbl)}
                 ondblclick={() => openTableRows(tbl)}
-                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); openTable(tbl) } }}
+                onkeydown={(e) => {
+                  // Enter bypasses the dblclick debounce — keyboard
+                  // users can't double-click, so the open is immediate.
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    if (pendingClickTimer) { clearTimeout(pendingClickTimer); pendingClickTimer = null }
+                    openTab({
+                      title: `${schema}.${tbl.name}`,
+                      path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}`,
+                      icon: 'table',
+                    })
+                    navigate(`/connections/${id}/schemas/${schema}/tables/${tbl.name}`)
+                  }
+                }}
                 title="Double-click to open rows"
               >
                 <td class="num">{tbl.name}</td>

@@ -15,7 +15,11 @@
   import ConnectionDetail from './screens/ConnectionDetail.svelte'
   import SchemaBrowser from './screens/SchemaBrowser.svelte'
   import TableDetail from './screens/TableDetail.svelte'
-  import RowGrid from './screens/RowGrid.svelte'
+  // WIRE-16 (PR #12.5): the old RowGrid.svelte was a one-line re-export
+  // wrapper around TableScreen.svelte (a leftover from when the file was
+  // renamed). Importing TableScreen directly removes a dead indirection
+  // and a useless component instance from the runtime tree.
+  import TableScreen from './screens/TableScreen.svelte'
   // a11y-12 / bundle: SqlEditor pulls CodeMirror (~140 KB gz). Lazy-
   // load it so non-/query routes never pay that tax. Vite splits the
   // import into its own chunk; loaded on demand when the user navigates
@@ -121,7 +125,7 @@
     {:else if routeState.name === 'table'}
       <TableDetail />
     {:else if routeState.name === 'rows'}
-      <RowGrid />
+      <TableScreen />
     {:else if routeState.name === 'query'}
       {#if SqlEditorComp}
         <SqlEditorComp />

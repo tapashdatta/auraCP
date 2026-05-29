@@ -9,20 +9,29 @@
 // classification is cached at the screen level so each cell pays O(1).
 
 /**
- * @typedef {'number'|'boolean'|'json'|'datetime'|'binary'|'uuid'|'text'|'array'|'unknown'} CellKind
+ * @typedef {'integer'|'number'|'boolean'|'json'|'datetime'|'binary'|'uuid'|'text'|'array'|'unknown'} CellKind
  */
 
 /**
  * Classify a column by its DatabaseTypeName.
+ *
+ * edit-15 (PR #12.5): integer columns are split out of the catch-all
+ * 'number' kind so parseEditValue can reject decimal input ("42.7") on
+ * an INT column before it hits the wire — drivers that silently floor
+ * the value are MySQL-specific; Postgres rejects with 22P02, SQLite
+ * happily stores the float. Floats stay under 'number' (DECIMAL /
+ * NUMERIC / FLOAT / DOUBLE / REAL / MONEY).
+ *
  * @param {string} typeName
  * @returns {CellKind}
  */
 export function classifyKind(typeName) {
   const u = String(typeName || '').toUpperCase()
-  // Boolean must come before number because TINYINT(1) and BIT(1) start
+  // Boolean must come before integer because TINYINT(1) and BIT(1) start
   // with type names that the number regex also accepts.
   if (/^(BOOL|BOOLEAN|BIT\(1\)|TINYINT\(1\))/.test(u)) return 'boolean'
-  if (/^(INT|BIGINT|SMALLINT|TINYINT|MEDIUMINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|MONEY|SERIAL|BIGSERIAL)/.test(u)) return 'number'
+  if (/^(INT|BIGINT|SMALLINT|TINYINT|MEDIUMINT|SERIAL|BIGSERIAL)/.test(u)) return 'integer'
+  if (/^(DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|MONEY)/.test(u)) return 'number'
   if (/^(JSON|JSONB)/.test(u)) return 'json'
   if (/^(DATE|TIME|TIMESTAMP|DATETIME|TIMESTAMPTZ)/.test(u)) return 'datetime'
   if (/^(BYTEA|BLOB|VARBINARY|BINARY|RAW)/.test(u)) return 'binary'
@@ -78,6 +87,30 @@ export function binaryByteLen(v) {
   return Math.max(0, Math.floor((v.length / 4) * 3) - padding)
 }
 
+// perf-7 (PR #12.5): module-scoped LRU-ish cache for parsed array values.
+// renderCell is called for every visible cell on every scroll tick, so
+// caching the JSON.parse output by the raw input string is a meaningful
+// win on tables that have wide array/jsonb columns. Cap at 256 entries
+// to bound memory; oldest entry evicted on overflow.
+/** @type {Map<string, unknown>} */
+const arrayParseCache = new Map()
+const ARRAY_CACHE_CAP = 256
+function parseArrayCached(s) {
+  const hit = arrayParseCache.get(s)
+  if (hit !== undefined) return hit
+  /** @type {unknown} */
+  let parsed
+  try { parsed = JSON.parse(s) } catch { parsed = [s] }
+  arrayParseCache.set(s, parsed)
+  if (arrayParseCache.size > ARRAY_CACHE_CAP) {
+    // Map preserves insertion order; deleting the first key evicts the
+    // oldest. Cheap enough that we don't need a true LRU.
+    const oldest = arrayParseCache.keys().next().value
+    if (oldest !== undefined) arrayParseCache.delete(oldest)
+  }
+  return parsed
+}
+
 /**
  * Render a value to a display object the cell template can consume directly.
  * Distinguishes NULL (value===null|undefined) from empty string ("").
@@ -102,6 +135,7 @@ export function renderCell(value, colMeta) {
     return { text: '·', className: 'rg-cell rg-cell--empty', title: '(empty string)', isNull: false, isEmpty: true }
   }
   switch (kind) {
+    case 'integer':
     case 'number': {
       const display = formatNumber(/** @type {any} */(value))
       const neg = typeof value === 'number' ? value < 0 : String(value).trim().startsWith('-')
@@ -162,7 +196,15 @@ export function renderCell(value, colMeta) {
       }
     }
     case 'array': {
-      const arr = Array.isArray(value) ? value : (() => { try { return JSON.parse(String(value)) } catch { return [value] } })()
+      // perf-7 (PR #12.5): renderCell runs every scroll tick for every
+      // visible cell — JSON.parse on a string-encoded array column was
+      // measurable in profiles on tables with arr<<jsonb>> columns. The
+      // module-level WeakMap-ish cache below keys parsed results by the
+      // raw string so we pay JSON.parse once per unique value across
+      // every render, not once per render. Cache is intentionally a
+      // bounded LRU-ish Map (cleared above 256 entries) so it never
+      // grows unbounded on long-lived sessions.
+      const arr = Array.isArray(value) ? value : parseArrayCached(String(value))
       const joined = (Array.isArray(arr) ? arr : []).map((x) => String(x)).join(', ')
       const display = joined.length > 60 ? `[${joined.slice(0, 60)}…]` : `[${joined}]`
       return {
@@ -227,6 +269,21 @@ export function parseEditValue(raw, kind, opts = {}) {
     return { ok: true, value: null }
   }
   switch (kind) {
+    case 'integer': {
+      // edit-15 (PR #12.5): INT-family columns reject decimal input
+      // before it hits the wire. MySQL silently floors "42.7" to 42;
+      // Postgres returns 22P02 invalid_text_representation. Surfacing
+      // the error at parse time is consistent across drivers.
+      const t = raw.trim()
+      // Allow optional sign + digits only — no decimal point, no
+      // scientific notation, no thousand separators (the user can
+      // paste a comma-separated number and we'd silently NaN below
+      // otherwise; explicit early reject is clearer).
+      if (!/^-?\d+$/.test(t)) return { ok: false, error: 'integer required (no decimals)' }
+      const n = Number(t)
+      if (Number.isNaN(n) || !Number.isFinite(n)) return { ok: false, error: 'not an integer' }
+      return { ok: true, value: n }
+    }
     case 'number': {
       const n = Number(raw)
       if (Number.isNaN(n)) return { ok: false, error: 'not a number' }

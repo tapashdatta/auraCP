@@ -12,7 +12,7 @@ import { classifyKind, parseEditValue } from './cellRenderers.js'
 import { buildPKKey } from './pkKey.js'
 import { cycleSort, serializeSort } from './sortCycle.js'
 import { parseFilterInput, serializeFilter } from './filterParse.js'
-import { loadLayout, saveLayout } from './layoutPersist.js'
+import { loadLayout, saveLayoutDebounced, flushLayoutSave } from './layoutPersist.js'
 import { createUndoStack } from './undoStack.js'
 import { runPool } from './promisePool.js'
 import { pushToast, toastFromError } from './toasts.svelte.js'
@@ -81,17 +81,34 @@ export function createRowGrid(params) {
 
   const undoStack = createUndoStack()
 
-  /** @type {Map<string,{row:number,col:number,originalValue:any}>} */
+  /** @type {Map<string,{row:number,col:number,originalValue:any,pkKey:string,colName:string}>} */
   const pending = new Map()
-  const pendingState = $state({ count: 0 })
-  function bumpPending() { pendingState.count = pending.size }
+  const pendingState = $state({
+    count: 0,
+    /**
+     * edit-14 (PR #12.5): per-cell saving indicator. Keyed by
+     * `${pkKey}:${colName}` so the cell template can light up a tiny
+     * spinner / saving badge while an optimistic write is in flight.
+     * @type {Set<string>}
+     */
+    cells: new Set(),
+  })
+  function bumpPending() {
+    pendingState.count = pending.size
+    /** @type {Set<string>} */
+    const cells = new Set()
+    for (const op of pending.values()) {
+      if (op.pkKey && op.colName) cells.add(`${op.pkKey}:${op.colName}`)
+    }
+    pendingState.cells = cells
+  }
 
   /** @type {AbortController | null} */
   let inflight = null
   let reqId = 0
 
-  function persistLayout() {
-    saveLayout(params.connId, params.schema, params.table, {
+  function buildLayoutSnapshot() {
+    return {
       v: 1,
       columnWidths: view.columnWidths,
       columnOrder: view.columnOrder,
@@ -100,7 +117,19 @@ export function createRowGrid(params) {
       pageSize: page.limit,
       density: density.mode,
       sortKeys: view.sortKeys.slice(),
-    })
+    }
+  }
+
+  /**
+   * PR #12.5: layout writes are now debounced (150 ms trailing). Column
+   * resize drags fire pointermove ~60 Hz; without debouncing each tick
+   * re-serializes the full layout JSON + a sync localStorage write —
+   * measurable jank on large layouts. The trailing edge guarantees the
+   * final width still lands; teardown (dispose) flushes any pending
+   * timer so a tab close doesn't drop the last write.
+   */
+  function persistLayout() {
+    saveLayoutDebounced(params.connId, params.schema, params.table, buildLayoutSnapshot())
   }
 
   /**
@@ -147,10 +176,13 @@ export function createRowGrid(params) {
       // (filter / sort / refresh).
       const wantTotal = rows.total == null
       const qs = buildSearchParams({ wantTotal })
-      // listRows takes a record — we call request() shape directly by
-      // re-using api.listRows but pass a record that URLSearchParams will
-      // pass-through. Since URLSearchParams(record) calls .toString(), and
-      // we already have the raw qs, we hand-craft via a helper.
+      // WIRE-14: the rows-list endpoint accepts repeated `sort` and
+      // `filter` query keys (e.g. `?sort=-id&sort=created_at&filter=…`).
+      // URLSearchParams(Record<string,string>) deduplicates repeat keys,
+      // so we hand-build the encoded query string via buildSearchParams
+      // (which uses .append) and call request() directly through
+      // listRowsRaw(). The previous AuraDBClient.listRows wrapper was
+      // dead code and was removed in PR #12.5.
       const data = await listRowsRaw(params.connId, params.schema, params.table, qs, ac?.signal)
       if (myId !== reloadReqId) return
       // WIRE-04: the canonical wire field names are camelCase
@@ -418,15 +450,24 @@ export function createRowGrid(params) {
     // distinguish null vs "" vs 0.
     if (Object.is(newValue, before)) return
 
-    // Optimistic write
+    // Optimistic write.
+    // perf-4 (PR #12.5): the previous implementation called
+    // `rows.data = rows.data.slice()` after every cell edit to nudge
+    // reactivity — that is an O(n) copy per commit. Svelte 5's deep
+    // reactivity tracks index-assignment on $state arrays directly, so
+    // we replace just the touched row reference and let Svelte propagate.
+    // We DO build the new row via .slice()+set to keep row references
+    // immutable (other code paths snapshot rows.data[i] expecting it not
+    // to mutate under them) — that's O(cols), not O(rows*cols).
     const oldRow = rows.data[rowIdx]
-    rows.data[rowIdx] = oldRow.map((v, i) => (i === colIdx ? newValue : v))
-    rows.data = rows.data.slice()
+    const newRow = oldRow.slice()
+    newRow[colIdx] = newValue
+    rows.data[rowIdx] = newRow
     const opId = `u:${pkKey}:${col.name}:${Date.now()}:${Math.random()}`
-    pending.set(opId, { row: rowIdx, col: colIdx, originalValue: before })
+    pending.set(opId, { row: rowIdx, col: colIdx, originalValue: before, pkKey, colName: col.name })
     bumpPending()
     try {
-      await api.updateRow(
+      const result = await api.updateRow(
         params.connId, params.schema, params.table, pkKey,
         { [col.name]: newValue },
         { where: whereSnap },
@@ -434,6 +475,22 @@ export function createRowGrid(params) {
       // edit-2 / edit-3: undo entries identify the row by PK, not rowIdx,
       // so reorder / pagination doesn't corrupt the wrong row.
       undoStack.push({ kind: 'update', pkKey, colName: col.name, before, after: newValue })
+      // WIRE-13 (PR #12.5): the server may have coerced the value (e.g.
+      // MySQL silently truncates an over-long VARCHAR, Postgres trims
+      // trailing space on CHAR(n), all engines normalize DATETIME format).
+      // If the response carries a `row` payload, swap it in by PK so the
+      // user sees what was actually persisted. Backwards-compatible:
+      // when the server doesn't return a row, behavior matches the
+      // pre-WIRE-13 optimistic path.
+      if (result && Array.isArray(result.row)) {
+        const idxNow = findRowByPK(pkKey)
+        if (idxNow >= 0) rows.data[idxNow] = result.row
+      } else if (result && result.coerced) {
+        // Server signalled a coercion happened but didn't include the
+        // row — schedule a quiet background reload so the displayed
+        // value reconverges without disrupting the user's focus.
+        void reload()
+      }
     } catch (err) {
       // edit-7: locate the row by PK at rollback time. If it's no longer
       // in the view (paged out, filtered out, reload happened), surface
@@ -443,7 +500,6 @@ export function createRowGrid(params) {
         const r2 = rows.data[currentIdx].slice()
         r2[colIdx] = before
         rows.data[currentIdx] = r2
-        rows.data = rows.data.slice()
       } else {
         pushToast('info', 'Row no longer visible; refresh to see the saved state')
       }
@@ -560,32 +616,49 @@ export function createRowGrid(params) {
       await api.deleteRow(params.connId, params.schema, params.table, s.pkKey)
       return s
     })
-    let firstErr = null
+    // edit-9 (PR #12.5): the previous restore path iterated results in
+    // pool-completion order and spliced each failure back at its
+    // pre-delete index. That index was correct at delete time but every
+    // PRIOR restore had since shifted later rows down by one — leaving
+    // failures clustered near the wrong end of the list. We now collect
+    // failures, sort by ascending original index, and splice them back
+    // in order so each restore's target index is still valid (each prior
+    // restore at index i can only push rows at index ≥ i down by one,
+    // which is exactly what a later restore at a larger index expects).
+    /** @type {Array<{snap:typeof snapshots[number], err:any}>} */
+    const failures = []
+    /** @type {typeof snapshots} */
+    const successes = []
     for (let i = 0; i < results.length; i++) {
       const r = results[i]
-      if (!r.ok) {
-        firstErr = r.error
-        // Restore that row at original index
-        const s = snapshots[i]
-        const out = rows.data.slice()
-        out.splice(Math.min(s.i, out.length), 0, s.row)
-        rows.data = out
-      } else {
-        const s = snapshots[i]
-        // edit-2 / edit-10: undo entry identifies the row by PK and
-        // records the columnOrder snapshot so reconstruction is correct
-        // even if the user reorders columns afterwards.
-        undoStack.push({
-          kind: 'delete',
-          pkKey: s.pkKey,
-          beforeRow: s.row,
-          columnOrder: orderAtDelete.slice(),
-        })
-      }
+      const s = snapshots[i]
+      if (!r.ok) failures.push({ snap: s, err: r.error })
+      else successes.push(s)
     }
-    if (firstErr) {
-      const t = toastFromError(firstErr)
-      pushToast(t.level, t.text)
+    if (failures.length > 0) {
+      const out = rows.data.slice()
+      failures
+        .slice()
+        .sort((a, b) => a.snap.i - b.snap.i)
+        .forEach((f) => { out.splice(Math.min(f.snap.i, out.length), 0, f.snap.row) })
+      rows.data = out
+    }
+    for (const s of successes) {
+      // edit-2 / edit-10: undo entry identifies the row by PK and
+      // records the columnOrder snapshot so reconstruction is correct
+      // even if the user reorders columns afterwards.
+      undoStack.push({
+        kind: 'delete',
+        pkKey: s.pkKey,
+        beforeRow: s.row,
+        columnOrder: orderAtDelete.slice(),
+      })
+    }
+    if (failures.length > 0) {
+      const t = toastFromError(failures[0].err)
+      pushToast(t.level, failures.length === snapshots.length
+        ? t.text
+        : `${failures.length} of ${snapshots.length} delete(s) failed — ${t.text}`)
     } else {
       pushToast('success', `Deleted ${snapshots.length} row(s)`)
     }
@@ -602,6 +675,8 @@ export function createRowGrid(params) {
         // edit-2: identify the row by PK at undo time. If still in view,
         // patch optimistically; otherwise just issue the PATCH and rely
         // on the next refresh to surface state.
+        // perf-4: drop the outer `rows.data = rows.data.slice()` — row
+        // index assignment is reactive on its own in Svelte 5.
         await api.updateRow(params.connId, params.schema, params.table, entry.pkKey, { [entry.colName]: entry.before })
         const idx = findRowByPK(entry.pkKey)
         const colIdx = view.columnOrder.indexOf(entry.colName)
@@ -609,7 +684,6 @@ export function createRowGrid(params) {
           const r = rows.data[idx].slice()
           r[colIdx] = entry.before
           rows.data[idx] = r
-          rows.data = rows.data.slice()
         }
       } else if (entry.kind === 'delete') {
         // edit-10: reconstruct using the column order captured at delete
@@ -643,10 +717,11 @@ export function createRowGrid(params) {
         const idx = findRowByPK(entry.pkKey)
         const colIdx = view.columnOrder.indexOf(entry.colName)
         if (idx >= 0 && colIdx >= 0) {
+          // perf-4: see commitEdit comment — drop the redundant whole-
+          // array slice; Svelte 5 propagates from the index assignment.
           const r = rows.data[idx].slice()
           r[colIdx] = entry.after
           rows.data[idx] = r
-          rows.data = rows.data.slice()
         }
       } else if (entry.kind === 'delete') {
         await api.deleteRow(params.connId, params.schema, params.table, entry.pkKey)
@@ -666,6 +741,25 @@ export function createRowGrid(params) {
     }
   }
 
+  /**
+   * perf-9 (PR #12.5): teardown hook. The previous implementation
+   * created a fresh grid on every (conn, schema, table) change without
+   * ever releasing the AbortController or flushing the debounced
+   * localStorage timer — memory churn on tab-hop and (rarely) lost layout
+   * writes on fast tab close. dispose() aborts the inflight fetch,
+   * clears the pending map, and flushes any pending layout save so the
+   * effect cleanup in TableScreen can run synchronously.
+   */
+  function dispose() {
+    if (inflight) {
+      try { inflight.abort() } catch { /* already-aborted is fine */ }
+      inflight = null
+    }
+    pending.clear()
+    bumpPending()
+    flushLayoutSave(params.connId, params.schema, params.table, buildLayoutSnapshot())
+  }
+
   return {
     params,
     meta, rows, view, page, density, selection, pendingState, undoStack,
@@ -679,14 +773,26 @@ export function createRowGrid(params) {
     startNewRow, setNewRowValue, cancelNewRow, commitNewRow,
     deleteRows,
     undo, redo,
+    dispose,
+    /**
+     * edit-14 helper: return true when a (rowIdx, colIdx) cell has an
+     * optimistic write in flight. Used by TableScreen to apply the
+     * per-cell saving indicator without leaking the pending Map shape.
+     * @param {string} pkKey @param {string} colName
+     */
+    isCellSaving(pkKey, colName) {
+      return pendingState.cells.has(`${pkKey}:${colName}`)
+    },
     get densityPx() { return DENSITY_PX[density.mode] },
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────
 // Internal: low-level rows fetch that supports repeated query keys.
-// api.js.listRows takes Record<string,string> which can't represent
-// multi-sort or multi-filter. We re-use api.request via a hand-built path.
+// The rows endpoint accepts repeated `sort` and `filter` query keys —
+// URLSearchParams(record) deduplicates them, so callers must hand-build
+// the query string. listRowsRaw is the single hot path; WIRE-14 removed
+// the now-dead AuraDBClient.listRows wrapper that took a record bag.
 // ─────────────────────────────────────────────────────────────────────
 
 /**
