@@ -35,7 +35,7 @@ export class AuraDBError extends Error {
  * Low-level request. Exposed so tests can stub `globalThis.fetch`.
  *
  * @param {string} path
- * @param {{method?:string, headers?:Record<string,string>, body?:unknown}} [opts]
+ * @param {{method?:string, headers?:Record<string,string>, body?:unknown, signal?:AbortSignal}} [opts]
  * @returns {Promise<any>}
  */
 export async function request(path, opts = {}) {
@@ -55,6 +55,9 @@ export async function request(path, opts = {}) {
     headers,
     body: /** @type {BodyInit | null | undefined} */ (body),
     credentials: 'same-origin',
+    // WIRE-07: thread the caller's AbortSignal through to fetch so
+    // useRowGrid can cancel an in-flight reload when a new one fires.
+    signal: opts.signal,
   })
   if (res.status === 401) {
     // Hard redirect to the panel login. Strip 'request' loop by using the
@@ -66,14 +69,18 @@ export async function request(path, opts = {}) {
     throw new AuraDBError(401, 'unauthenticated', 'session expired')
   }
   if (!res.ok) {
-    let env = /** @type {{code?:string, message?:string, detail?:unknown, request_id?:string}} */ ({})
+    let env = /** @type {any} */ ({})
     try { env = await res.json() } catch { /* non-JSON error body */ }
+    // WIRE-01: the canonical envelope is { error: { code, message, request_id, details } }
+    // but legacy / tests may emit a flat { code, message, request_id, detail } body.
+    // Unwrap both shapes so the UI sees consistent fields.
+    const e = (env && typeof env === 'object' && env.error && typeof env.error === 'object') ? env.error : env
     throw new AuraDBError(
       res.status,
-      env.code || 'unknown',
-      env.message || res.statusText || 'request failed',
-      env.detail,
-      env.request_id,
+      e.code || env.code || 'unknown',
+      e.message || env.message || res.statusText || 'request failed',
+      e.details !== undefined ? e.details : (e.detail !== undefined ? e.detail : env.detail),
+      e.request_id || env.request_id,
     )
   }
   if (res.status === 204) return null
@@ -117,15 +124,28 @@ export class AuraDBClient {
   /** @param {string} id @param {string} schema @param {string} table */
   getTable(id, schema, table)    { return request(`/connections/${enc(id)}/schemas/${enc(schema)}/tables/${enc(table)}`) }
 
-  // Rows (used by PR #12)
-  /** @param {string} id @param {string} s @param {string} t @param {Record<string,string>} q */
-  listRows(id, s, t, q)          { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows?${new URLSearchParams(q).toString()}`) }
-  /** @param {string} id @param {string} s @param {string} t @param {object} row */
-  insertRow(id, s, t, row)       { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows`, { method: 'POST', body: row }) }
-  /** @param {string} id @param {string} s @param {string} t @param {string} pk @param {object} patch */
-  updateRow(id, s, t, pk, patch) { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows/${enc(pk)}`, { method: 'PATCH', body: patch }) }
-  /** @param {string} id @param {string} s @param {string} t @param {string} pk */
-  deleteRow(id, s, t, pk)        { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows/${enc(pk)}`, { method: 'DELETE' }) }
+  // Rows (used by PR #12). The insert/update bodies wrap into
+  // {values}/{set} envelopes matching httpapi.insertRowRequest /
+  // updateRowRequest.
+  /** @param {string} id @param {string} s @param {string} t @param {Record<string,string>} q @param {AbortSignal} [signal] */
+  listRows(id, s, t, q, signal)  { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows?${new URLSearchParams(q).toString()}`, { signal }) }
+  /** @param {string} id @param {string} s @param {string} t @param {object} row @param {AbortSignal} [signal] */
+  insertRow(id, s, t, row, signal) { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows`, { method: 'POST', body: { values: row }, signal }) }
+  /**
+   * Patch a row. edit-1: the optional `where` snapshot lets the backend
+   * verify the row has not been modified out-of-band before applying the
+   * `set` patch. Backend returns 409/conflict if the snapshot mismatches.
+   * @param {string} id @param {string} s @param {string} t @param {string} pk @param {object} patch
+   * @param {{where?:object, signal?:AbortSignal}} [opts]
+   */
+  updateRow(id, s, t, pk, patch, opts = {}) {
+    /** @type {any} */
+    const body = { set: patch }
+    if (opts.where && typeof opts.where === 'object') body.where = opts.where
+    return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows/${enc(pk)}`, { method: 'PATCH', body, signal: opts.signal })
+  }
+  /** @param {string} id @param {string} s @param {string} t @param {string} pk @param {AbortSignal} [signal] */
+  deleteRow(id, s, t, pk, signal) { return request(`/connections/${enc(id)}/schemas/${enc(s)}/tables/${enc(t)}/rows/${enc(pk)}`, { method: 'DELETE', signal }) }
 
   // Queries (PR #13)
   /** @param {string} id @param {string} sql @param {unknown[]} [params] */

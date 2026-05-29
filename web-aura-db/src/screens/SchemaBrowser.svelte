@@ -2,6 +2,7 @@
   import { routeState, navigate } from '../lib/router.svelte.js'
   import { api } from '../lib/api.js'
   import { t } from '../lib/strings.js'
+  import { openTab } from '../lib/workspaces.svelte.js'
   import LoadingPane from '../lib/components/LoadingPane.svelte'
 
   const id = $derived(routeState.params.id)
@@ -24,7 +25,22 @@
   })
 
   function openTable(tbl) {
+    // Single-click → table detail page. Double-click would jump straight
+    // to the row grid; SchemaBrowser uses single-click for now.
+    openTab({
+      title: `${schema}.${tbl.name}`,
+      path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}`,
+      icon: 'table',
+    })
     navigate(`/connections/${id}/schemas/${schema}/tables/${tbl.name}`)
+  }
+  function openTableRows(tbl) {
+    openTab({
+      title: `${schema}.${tbl.name}`,
+      path: `/connections/${id}/schemas/${schema}/tables/${tbl.name}/rows`,
+      icon: 'table',
+    })
+    navigate(`/connections/${id}/schemas/${schema}/tables/${tbl.name}/rows`)
   }
 </script>
 
@@ -44,7 +60,7 @@
         <table class="data">
           <tbody>
             {#each data.tables as tbl (tbl.name)}
-              <tr onclick={() => openTable(tbl)} style="cursor:pointer">
+              <tr onclick={() => openTable(tbl)} ondblclick={() => openTableRows(tbl)} style="cursor:pointer" title="Double-click to open rows">
                 <td class="num">{tbl.name}</td>
                 <td class="num" style="color:var(--text-mute)">{tbl.rowEstimate ?? ''}</td>
               </tr>

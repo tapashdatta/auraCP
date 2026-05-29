@@ -306,6 +306,15 @@ type UpdateByPKOpts struct {
 	// Set is the {column: new-value} map. Empty set returns
 	// ErrEmptyUpdate without making a query.
 	Set map[string]any
+
+	// Where is an optional optimistic-concurrency snapshot (edit-1).
+	// Keys must be declared columns; each {col: val} pair is added to
+	// the UPDATE's WHERE alongside the PK clause. If the row's current
+	// value for any column no longer matches, the UPDATE affects zero
+	// rows and UpdateByPK returns ErrConcurrentModification so the
+	// client can refresh + retry without clobbering a concurrent write.
+	// Empty / nil disables the snapshot check.
+	Where map[string]any
 }
 
 // UpdateResult is the outcome of UpdateByPK / DeleteByPK / Insert.
@@ -314,7 +323,10 @@ type UpdateResult struct {
 	LastInsertID int64 // Insert-only; meaningful only when the table has an auto-increment / IDENTITY column
 }
 
-// UpdateByPK runs the parameterized UPDATE.
+// UpdateByPK runs the parameterized UPDATE. When opts.Where is non-empty,
+// the WHERE clause anchors on both the PK and the snapshot columns; a
+// concurrent change to any snapshot column causes the UPDATE to affect
+// zero rows, which UpdateByPK reports as ErrConcurrentModification.
 func (o *Operator) UpdateByPK(ctx context.Context, opts UpdateByPKOpts) (*UpdateResult, error) {
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return nil, err
@@ -335,6 +347,11 @@ func (o *Operator) UpdateByPK(ctx context.Context, opts UpdateByPKOpts) (*Update
 			return nil, err
 		}
 	}
+	for k := range opts.Where {
+		if err := schema.ValidateIdentifier(k); err != nil {
+			return nil, err
+		}
+	}
 
 	// PK preflight.
 	t, err := o.schema.GetTable(ctx, opts.Schema, opts.Table)
@@ -348,13 +365,19 @@ func (o *Operator) UpdateByPK(ctx context.Context, opts UpdateByPKOpts) (*Update
 		return nil, err
 	}
 
-	q, args, err := buildUpdate(o.engine, opts.Schema, opts.Table, opts.Set, t.PrimaryKey, opts.PK)
+	q, args, err := buildUpdateWithWhere(o.engine, opts.Schema, opts.Table, opts.Set, t.PrimaryKey, opts.PK, opts.Where)
 	if err != nil {
 		return nil, err
 	}
 	res, err := o.conn.Exec(ctx, o.limits, q, args...)
 	if err != nil {
 		return nil, err
+	}
+	// edit-1: a snapshot-anchored UPDATE that touches zero rows means
+	// the row's snapshot columns changed since the client last loaded —
+	// surface as a typed conflict the handler maps to 409.
+	if len(opts.Where) > 0 && res.RowsAffected == 0 {
+		return nil, ErrConcurrentModification
 	}
 	return &UpdateResult{RowsAffected: res.RowsAffected}, nil
 }
@@ -472,6 +495,12 @@ var (
 	// ErrEmptyUpdate is returned when UpdateByPKOpts.Set is empty —
 	// a no-op update is almost certainly a bug in the caller.
 	ErrEmptyUpdate = errors.New("rows: empty update set")
+
+	// ErrConcurrentModification is returned by UpdateByPK when an
+	// optimistic-concurrency snapshot (UpdateByPKOpts.Where) failed to
+	// match — the row changed under the client between read and write.
+	// The handler maps this to HTTP 409 / conflict.
+	ErrConcurrentModification = errors.New("rows: row changed since last read")
 )
 
 // ─── Defaults ────────────────────────────────────────────────────────

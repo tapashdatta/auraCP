@@ -23,7 +23,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    include: ['src/**/*.test.js'],
+    include: ['src/**/*.test.js', 'tests/**/*.test.js'],
     // The svelte plugin's resolveId hook lets us import .svelte.js modules
     // (runes-enabled) the same way `vite build` does.
     server: { deps: { inline: ['svelte'] } },

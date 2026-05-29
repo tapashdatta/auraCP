@@ -59,6 +59,13 @@ type insertRowRequest struct {
 
 type updateRowRequest struct {
 	Set map[string]any `json:"set"`
+
+	// edit-1: optimistic-concurrency snapshot. When present, the row is
+	// updated only if every {col: val} pair in Where still matches the
+	// current value in the target row. On mismatch the handler returns
+	// 409 / conflict so the client can refresh + retry. Keys must be
+	// declared columns; the rows package validates them.
+	Where map[string]any `json:"where,omitempty"`
 }
 
 type patchHistoryRequest struct {

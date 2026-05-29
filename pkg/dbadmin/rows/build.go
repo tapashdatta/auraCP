@@ -259,6 +259,21 @@ func buildUpdate(
 	pkCols []string,
 	pkValues map[string]any,
 ) (string, []any, error) {
+	return buildUpdateWithWhere(engine, schemaName, table, set, pkCols, pkValues, nil)
+}
+
+// buildUpdateWithWhere extends buildUpdate with optional
+// optimistic-concurrency snapshot columns (edit-1). When `where` is
+// non-empty, each {col: val} pair is added to the WHERE clause alongside
+// the PK; the SQL still hits at most one row because the PK is unique.
+func buildUpdateWithWhere(
+	engine dbadmin.EngineKind,
+	schemaName, table string,
+	set map[string]any,
+	pkCols []string,
+	pkValues map[string]any,
+	where map[string]any,
+) (string, []any, error) {
 	if len(set) == 0 {
 		return "", nil, ErrEmptyUpdate
 	}
@@ -276,7 +291,7 @@ func buildUpdate(
 	b.WriteString(qualifyTable(schemaName, table, engine))
 	b.WriteString(" SET ")
 
-	args := make([]any, 0, len(set)+len(pkValues))
+	args := make([]any, 0, len(set)+len(pkValues)+len(where))
 	for i, k := range setKeys {
 		if i > 0 {
 			b.WriteString(", ")
@@ -301,6 +316,28 @@ func buildUpdate(
 			quoteIdent(c, engine), placeholder(idx, engine)))
 		args = append(args, v)
 		idx++
+	}
+
+	// edit-1: snapshot clauses. Sort keys for deterministic SQL.
+	if len(where) > 0 {
+		whereKeys := make([]string, 0, len(where))
+		for k := range where {
+			whereKeys = append(whereKeys, k)
+		}
+		sort.Strings(whereKeys)
+		for _, c := range whereKeys {
+			b.WriteString(" AND ")
+			v := where[c]
+			// Match-by-NULL needs IS NULL, not = NULL.
+			if v == nil {
+				b.WriteString(fmt.Sprintf("%s IS NULL", quoteIdent(c, engine)))
+				continue
+			}
+			b.WriteString(fmt.Sprintf("%s = %s",
+				quoteIdent(c, engine), placeholder(idx, engine)))
+			args = append(args, v)
+			idx++
+		}
 	}
 
 	return b.String(), args, nil

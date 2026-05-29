@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -96,16 +97,55 @@ func handleReadRows(s *server) http.HandlerFunc {
 			opts.Filter = append(opts.Filter, p)
 		}
 
+		// WIRE-08: clients request the row count once (typically on
+		// the first page load) by setting ?total=1. We piggy-back a
+		// Count() call under the same conn so the footer can show
+		// "Page X of Y". Subsequent page navigations reuse the count.
+		wantTotal := false
+		if v := q.Get("total"); v == "1" || v == "true" {
+			wantTotal = true
+		}
+
 		res, err := op.Read(r.Context(), opts)
 		if err != nil {
 			writeMappedErr(w, r, err)
 			return
 		}
-		setAuditRows(r.Context(), int64(len(res.Rows)))
-		writeJSON(w, http.StatusOK, readRowsResponse{
-			Columns: columnInfosToDTO(res.Columns),
+
+		// WIRE-05: rows.Read returns columns from the driver, which does
+		// NOT populate the PrimaryKey flag (the driver only knows column
+		// names + DatabaseTypeName + Nullable). We fetch the table once
+		// from the schema reader to mark PK columns so the client can
+		// distinguish read-only-by-PK from read-only-by-table.
+		colDTOs := columnInfosToDTO(res.Columns)
+		if tbl, terr := rdr.GetTable(r.Context(), schemaName, table); terr == nil && tbl != nil {
+			pkSet := make(map[string]bool, len(tbl.PrimaryKey))
+			for _, c := range tbl.PrimaryKey {
+				pkSet[c] = true
+			}
+			for i := range colDTOs {
+				if pkSet[colDTOs[i].Name] {
+					colDTOs[i].PrimaryKey = true
+				}
+			}
+		}
+
+		resp := readRowsResponse{
+			Columns: colDTOs,
 			Rows:    res.Rows,
-		})
+		}
+		if wantTotal {
+			n, cerr := op.Count(r.Context(), opts)
+			if cerr == nil {
+				total := n
+				resp.Total = &total
+			}
+			// If Count fails (driver lacks support, permission, etc.)
+			// we silently omit the field — clients fall back to the
+			// page-count display.
+		}
+		setAuditRows(r.Context(), int64(len(res.Rows)))
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
@@ -222,6 +262,8 @@ func handleUpdateRow(s *server) http.HandlerFunc {
 		}
 		res, err := op.UpdateByPK(r.Context(), rows.UpdateByPKOpts{
 			Schema: schemaName, Table: table, PK: pkMap, Set: in.Set,
+			// edit-1: optimistic-concurrency snapshot, optional.
+			Where: in.Where,
 		})
 		if err != nil {
 			writeMappedErr(w, r, err)
@@ -290,8 +332,12 @@ func handleDeleteRow(s *server) http.HandlerFunc {
 	}
 }
 
-// parseFilter parses "col:op:value" into a rows.Predicate. The "value"
-// is decoded JSON to preserve type when possible; falls back to string.
+// parseFilter parses "col:op:value" into a rows.Predicate.
+//
+// For OpIn / OpNotIn the value is JSON-decoded into a []any so the
+// downstream rows.Predicate has the slice shape that rows.buildSelect
+// requires (see WIRE-03). For all other ops the value is kept verbatim
+// as a string and the driver coerces during parameter binding.
 func parseFilter(spec string) (rows.Predicate, error) {
 	parts := strings.SplitN(spec, ":", 3)
 	if len(parts) < 2 {
@@ -301,7 +347,22 @@ func parseFilter(spec string) (rows.Predicate, error) {
 	op := rows.Op(parts[1])
 	p := rows.Predicate{Column: col, Op: op}
 	if len(parts) == 3 {
-		p.Value = parts[2]
+		raw := parts[2]
+		if op == rows.OpIn || op == rows.OpNotIn {
+			// WIRE-03: client sends a JSON-encoded array. Decode it
+			// into a []any so the rows package can rebuild the
+			// parameterized IN ($1,$2,…) tuple.
+			var arr []any
+			if err := json.Unmarshal([]byte(raw), &arr); err != nil {
+				return rows.Predicate{}, fmt.Errorf("IN value must be a JSON array: %w", err)
+			}
+			if len(arr) == 0 {
+				return rows.Predicate{}, errors.New("IN value cannot be empty")
+			}
+			p.Value = arr
+		} else {
+			p.Value = raw
+		}
 	}
 	return p, nil
 }

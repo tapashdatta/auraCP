@@ -1131,6 +1131,162 @@ amplifier is latent), pending the inline-style migration tracked in
 
 ---
 
+## Source: PR #12 adversarial review (workflow run wf_0d0b427e-524)
+
+The 4-lens review of the row-grid SPA shell + edit pipeline
+(`web-aura-db/` grid composable, edit path, filter/sort wire, a11y
+surface) produced 62 findings (4 critical, 12 high, 8 medium, 1 low,
+0 nit on the must-fix side; 1 high, 18 medium, 17 low, 1 nit on the
+defer side). After dedupe + triage: 25 must-fix items landed in PR #12
+itself — WIRE-01 (envelope-unwrap of `{error:{code,message,request_id,
+details}}`), WIRE-02 (hyphen-form code constants shared client/server),
+WIRE-03 (server-side comma split for `IN`/`NOT IN` filter values),
+edit-1 (optimistic concurrency via before-values on PATCH + `pk-mismatch`
+toast), WIRE-04 (camelCase `databaseTypeName` read), WIRE-05
+(`PrimaryKey` stamped from schema reader in `handleReadRows`), WIRE-06
+(PK moved off URL path into JSON body + `rowsAffected===0` surfacing),
+WIRE-07 (AbortController signal threaded through `api.js` to `fetch`),
+WIRE-08 (`Total` populated via `?withTotal=1` Count gate on filter
+change), edit-2 / edit-7 / edit-13 (undo + rollback now key on
+`pkKey` not `rowIdx`, refresh safe), edit-3 (insert pushes to undo
+stack with server-returned PK), edit-4 (no-op detection compares
+parsed-value to parsed-value), edit-5 (`\N` sentinel reserved for
+NULL, `''` writes empty string), edit-6 (separate `opSeq` for edit
+ops vs `reqId` reload guard), edit-8 (insert payload routes through
+`parseEditValue`), edit-10 (undo-delete snapshots `columnOrder` at
+delete time), a11y-2 (filter bar moved out of grid root), a11y-3
+(new-row + header + filter `aria-rowindex` slots renumbered
+contiguously), a11y-4 (resize handle replaced with in-tree
+`ResizeHandle.svelte` separator pattern), a11y-6 (Tab leaves the
+grid in cell mode), a11y-10 (error/warning toasts use `role=alert`),
+a11y-16 (ArrowUp at row 0 enters header row with roving tabindex),
+edit-1-followup-a11y-24 (Backspace → `edit.clear` mapping removed).
+The remaining 37 findings are deferred below.
+
+### Deferred high findings — PR #12.5
+
+- **a11y-1** — aria-rowindex/aria-rowcount slot mismatch (structural
+  rows missing slots); reason: polish around rowindex alignment;
+  addressed structurally by a11y-3 / a11y-26 fixes — keep tracked but
+  not gating. **Target:** PR #12.5.
+
+### Deferred medium findings — PR #12.5
+
+- **perf-2** — Scroll listener queues rAF per event with no
+  de-duplication; reason: perf-medium with isolated impact (extra
+  reactive recomputes during scroll), not user-blocking and easy to
+  address in a follow-up. **Target:** PR #12.5.
+- **perf-3** — `virtualWindow` buffer is 4 rows (spec asks >=5);
+  reason: cosmetic flash on fast flick-scroll, one-line constant
+  change deferrable to perf pass. **Target:** PR #12.5.
+- **perf-4** — Cell edit/undo/redo does `rows.data.slice()` — O(n)
+  per commit; reason: sub-ms cost on 1k-row pages, structural
+  improvement not correctness — defer to perf pass. **Target:**
+  PR #12.5.
+- **perf-5** — Sticky header+filterbar inside `overflow:auto` —
+  Safari repaint hazard; reason: needs Safari verification, if real
+  it's a perf medium not a blocker — defer pending browser test.
+  **Target:** PR #12.5.
+- **edit-9** — Bulk delete partial-failure restore at stale indices;
+  reason: display-order quirk on partial failure (rare); `reload()`
+  workaround documented in fix. **Target:** PR #12.5.
+- **edit-11** — Cell blur commits without checking whether blur was
+  triggered by Esc; reason: currently safe by side-effect, flagged as
+  fragile rather than broken — refactor follow-up. **Target:**
+  PR #12.5.
+- **edit-12** — Filter parser downgrades `is null xyz` to ILIKE;
+  reason: annoyance not data loss; tighten regex in follow-up.
+  **Target:** PR #12.5.
+- **a11y-5** — Roving tabindex: grid root and focused cell both
+  `tabindex=0`; reason: two tab-stops instead of one, nonconformant
+  but not a keyboard trap. **Target:** PR #12.5.
+- **a11y-7** — `aria-multiselectable` not set; reason: single
+  attribute polish, defer. **Target:** PR #11.5 (overlaps with the
+  PR #11.5 a11y polish pass).
+- **a11y-8** — `aria-readonly` not exposed; reason: visible
+  "READ-ONLY" pill is announced, `aria-readonly` is canonical
+  addition — defer to a11y polish pass. **Target:** PR #11.5.
+- **a11y-9** — `aria-busy` not set during loads; reason:
+  announcement quality, deferrable. **Target:** PR #11.5.
+- **a11y-11** — Sort change has no aria-live announcement; reason:
+  `aria-sort` is set on header, live-region polish. **Target:**
+  PR #11.5.
+- **a11y-12** — PK column header has no accessible label; reason:
+  polish, visual glyph only — deferrable. **Target:** PR #11.5.
+- **a11y-13** — Empty-string sentinel `·` reads as "middle dot";
+  reason: polish, minor announcement quality. **Target:** PR #11.5.
+- **a11y-14** — Density/page-size selects have terse `aria-label`s;
+  reason: label-copy polish, one-line fix in follow-up. **Target:**
+  PR #11.5.
+- **WIRE-10** — `NOT IN` operator unreachable from filter input;
+  reason: becomes free once WIRE-03 lands server-side, add regex in
+  follow-up. **Target:** PR #12.5.
+- **WIRE-11** — `SchemaBrowser` double-click opens two tabs; reason:
+  UX bug outside the grid's correctness envelope, small debounce fix
+  in follow-up. **Target:** PR #12.5.
+- **WIRE-13** — `commitEdit` doesn't refetch — server coercion
+  invisible; reason: behavioral polish, rare-enough to defer until
+  `updateRow` returns full row. **Target:** PR #12.5.
+
+### Deferred low findings — PR #12.5
+
+- **perf-6** — Inline `grid-template-columns` on every row vs CSS
+  variable; reason: polish, compounds perf-1 but only matters during
+  resize — bundle into perf-1 fix or defer. **Target:** PR #12.5.
+- **perf-7** — `renderCell` re-runs per scroll tick; array-kind
+  re-parses JSON; reason: visible only on large JSON/array columns,
+  memoization is a polish improvement. **Target:** PR #12.5.
+- **perf-9** — `$effect` creates new grid without disposing
+  AbortController/pending; reason: memory churn on tab-switch,
+  covered partly by WIRE-07 signal threading — remaining cleanup is
+  low-risk. **Target:** PR #12.5.
+- **edit-14** — No per-cell saving indicator; reason: UX polish,
+  pending count is shown in toolbar so feedback exists. **Target:**
+  PR #12.5.
+- **edit-15** — `INT` column accepts decimals via `Number()`; reason:
+  driver-dependent behavior, predictable enough — sub-classification
+  can land in a follow-up. **Target:** PR #12.5.
+- **a11y-15** — Filter `aria-label` lowercase "filter X" vs "Filter
+  column X"; reason: copy polish. **Target:** PR #11.5.
+- **a11y-17** — Gutter rowheader missing `aria-colindex`; reason:
+  index-consistency polish. **Target:** PR #11.5.
+- **a11y-18** — Edit input lacks `aria-label` tying it to the cell;
+  reason: announcement quality polish. **Target:** PR #11.5.
+- **a11y-19** — `Cmd+Home`/`End` jump to first/last page instead of
+  first/last cell; reason: spec deviation, consider rebinding in
+  a11y polish pass. **Target:** PR #11.5.
+- **a11y-20** — `aria-rowcount` lies when total is unknown; reason:
+  tied to WIRE-08 (no total); once total is populated this becomes
+  moot — one-line guard otherwise. **Target:** PR #12.5 (now mostly
+  moot post-WIRE-08).
+- **a11y-21** — Truncated JSON/binary/array cells have no accessible
+  summary; reason: polish for AT, tooltip path exists. **Target:**
+  PR #11.5.
+- **a11y-22** — No empty-state markup or "no rows" announcement;
+  reason: UX/AT polish. **Target:** PR #11.5.
+- **a11y-23** — Freeze-left / column-menu / column-reorder have no
+  UI; reason: feature gap, persisted state is stable — hide unused
+  fields until UI lands. **Target:** PR #12.5 (or later when the
+  feature UI lands).
+- **a11y-25** — Toast dismiss button inside `role=status`; reason:
+  live-region structure polish. **Target:** PR #11.5.
+- **a11y-26** — Header/filter row missing `aria-rowindex`; reason:
+  bundled with a11y-3 — fix together, tracking separately is
+  unnecessary. **Target:** PR #12.5 (converges with the a11y-3
+  must-fix landed in PR #12; close on next sweep).
+- **WIRE-14** — `api.listRows` is dead code; reason: cleanup, no
+  functional impact. **Target:** PR #12.5.
+- **WIRE-15** — Filter wire format colon-quoting undocumented;
+  reason: latent concern, document grammar in follow-up. **Target:**
+  PR #12.5.
+
+### Deferred nit findings — PR #12.5
+
+- **WIRE-16** — `RowGrid.svelte` is a one-line re-export of
+  `TableScreen`; reason: pure cleanup. **Target:** PR #12.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

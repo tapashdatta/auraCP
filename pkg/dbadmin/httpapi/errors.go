@@ -152,6 +152,9 @@ func mapErr(err error) (status int, code string, msg string) {
 		return http.StatusBadRequest, CodePKMismatch, "primary key mismatch"
 	case errors.Is(err, rows.ErrEmptyUpdate):
 		return http.StatusBadRequest, CodeEmptyUpdate, "empty update"
+	case errors.Is(err, rows.ErrConcurrentModification):
+		// edit-1: the row's snapshot columns moved under the client.
+		return http.StatusConflict, CodeConflict, "row changed since last read"
 
 	// classifier
 	case errors.Is(err, classifier.ErrTooLarge):

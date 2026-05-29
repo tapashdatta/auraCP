@@ -2,8 +2,15 @@
   import { routeState, navigate } from '../lib/router.svelte.js'
   import { api } from '../lib/api.js'
   import { t } from '../lib/strings.js'
+  import { openTab } from '../lib/workspaces.svelte.js'
   import Btn from '../lib/components/Btn.svelte'
   import LoadingPane from '../lib/components/LoadingPane.svelte'
+
+  function openRows() {
+    const path = `/connections/${id}/schemas/${schema}/tables/${table}/rows`
+    openTab({ title: `${schema}.${table}`, path, icon: 'table' })
+    navigate(path)
+  }
 
   const id = $derived(routeState.params.id)
   const schema = $derived(routeState.params.schema)
@@ -31,7 +38,7 @@
   <header class="pane__head">
     <h1 class="pane__title">{t('table.title', { table })}</h1>
     <span style="flex:1"></span>
-    <Btn variant="primary" onclick={() => navigate(`/connections/${id}/schemas/${schema}/tables/${table}/rows`)}>{t('rows.title')}</Btn>
+    <Btn variant="primary" onclick={openRows}>{t('rows.title')}</Btn>
   </header>
 
   <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px">

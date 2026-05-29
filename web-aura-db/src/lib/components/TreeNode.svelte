@@ -22,14 +22,18 @@
    *   expanded?: boolean,
    *   onToggle?: ()=>void,
    *   onSelect?: ()=>void,
+   *   onActivate?: ()=>void,
    * }} */
-  let { node, depth = 0, ariaLevel = 1, selected = false, expanded = false, onToggle, onSelect } = $props()
+  let { node, depth = 0, ariaLevel = 1, selected = false, expanded = false, onToggle, onSelect, onActivate } = $props()
 
   const canExpand = $derived(node.kind === 'connection' || node.kind === 'schema')
 
   function click() {
     if (canExpand) onToggle?.()
     onSelect?.()
+  }
+  function dblclick() {
+    onActivate?.()
   }
 </script>
 
@@ -44,6 +48,7 @@
   data-conn-id={node.kind === 'connection' ? node.id : (node.id || '').split(':')[0]}
   data-kind={node.kind}
   onclick={click}
+  ondblclick={dblclick}
   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); click() } }}
 >
   {#if canExpand}
