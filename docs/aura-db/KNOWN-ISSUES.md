@@ -403,105 +403,106 @@ itself (C1 structural ClassRead gate on Analyze, H1 post-fetch
 byte cap, H2 Sscanf→strconv+NaN/Inf sanitization, H3 depth +
 node-count caps, H4 RowsActual overflow clamp, H8 lowerCamelCase
 JSON tags + shape test, H10 truthful Plan.Warnings docstring).
-Everything below is deferred to PR #6.5.
+**Status (PR #6.5): all deferred items below are RESOLVED.** See
+`pkg/dbadmin/explain/` for the implementing changes; the bullets
+are retained for historical context.
 
-### Deferred high findings — PR #6.5
+### Resolved high findings — PR #6.5
 
-- **H5** — MariaDB rollup semantics: `mergeMetrics` sums
-  `RowsExpected` additively, but join cardinality is multiplicative
-  (a Nested Loop with 100 outer × 10 inner produces 1000, not 110).
-  **Fix in PR #6.5:** model join cardinality on the JOIN node itself
-  using outer.RowsExpected × inner.RowsExpected for Nested Loop.
-- **H6** — Missing Postgres per-node metadata: Sort Key, Group Key,
-  Hash Keys, Output, Subplan Name, Workers Planned/Launched, Parallel
-  Aware, JIT, Triggers, Settings are decoded by neither `pgPlan` nor
-  surfaced on `Node`. Operators inspecting parallel plans see less
-  than `EXPLAIN ANALYZE` console output. **Fix in PR #6.5:** add the
-  fields to `pgPlan` + extend `Node` with a typed `Extras` map.
-- **H7** — MariaDB shape coverage gaps: windowing, having_subqueries,
-  select_list_subqueries, "Impossible WHERE", and a coexisting
-  subquery+table shape are silently mapped to `Kind: "Unknown"`
-  without emitting a warning. **Fix in PR #6.5:** handle each shape
-  explicitly and append an "MariaDB block shape not recognized:
-  <keys>" warning for the residual unknowns.
-- **H9** — `Plan.Total` semantics diverge per engine: MariaDB only
-  fills `CostTotal` (no row/time/buffer rollup); Postgres mirrors
-  `Root.Metrics`. doc.go says "Mirrors Root.Metrics", which is true
-  only for Postgres. **Fix in PR #6.5:** roll up MariaDB metrics to
-  match, or document the divergence per-engine.
-- **H11** — Engine-parity field availability matrix missing from
-  doc.go. The README-style table that says "Postgres fills Buffers*,
-  RowsActual, TimeStartMS; MariaDB fills CostTotal, RowsExpected only"
-  is essential for callers. **Fix in PR #6.5:** add the matrix.
+- **H5** [resolved] — MariaDB Nested Loop now sets `RowsExpected`
+  multiplicatively (outer × inner) on the join node itself; see
+  `parseMySQLNestedLoop` in mysql.go and `TestMySQL_NestedLoop_MultiplicativeRows`.
+- **H6** [resolved] — Postgres per-node metadata (Sort Key, Group
+  Key, Hash Keys, Output, Subplan Name, Workers Planned/Launched,
+  Parallel Aware, JIT, Triggers, Settings) is decoded by `pgPlan`
+  and surfaced on the new `Node.Extras` map (a typed
+  `map[string]any` with stable lowerCamelCase keys). See
+  `walkPgNode` in postgres.go and `TestPostgres_Extras_H6`.
+- **H7** [resolved] — MariaDB shapes for windowing, having /
+  select-list subqueries, "Impossible WHERE", and coexisting
+  subquery+table all parse explicitly. Residual unknown shapes emit
+  `MariaDB block shape not recognized: keys=[...]` on
+  `Plan.Warnings`. See `parseMySQLBlock`, `isImpossibleWhereBlock`,
+  `attachMySQLSubqueries`, and `TestMySQL_ShapeCoverage_H7`.
+- **H9** [resolved] — MariaDB `Plan.Total` is now a rolled-up view
+  of the whole tree (cost = max, buffers = additive); doc.go
+  documents per-engine divergence in the matrix. See
+  `rollupMariaDBTotals` and `TestPlan_Total_H9_MariaDB`.
+- **H11** [resolved] — Engine-parity field availability matrix
+  added to `doc.go`.
 
-### Deferred medium findings — PR #6.5
+### Resolved medium findings — PR #6.5
 
-- **M1** — Brittle EXPLAIN wrap: string prepend with no
-  multi-statement / leading-comment check. `--; DROP TABLE x;` slips
-  through the wrap.
-- **M2** — Postgres JIT / Triggers / Settings fields dropped during
-  decode (overlaps H6).
-- **M3** — `PlanningTimeMS=0` is ambiguous: it means both "not
-  measured" and "sub-microsecond". Add an explicit `PlanningTimed
-  bool` or document the convention.
-- **M4** — `asFloat64("1K")` returns 0 (silent partial-parse). MariaDB
-  emits "1K" / "10M" for `data_read_per_join`; we drop the value.
-- **M5** — `parseMySQLTable` overwrites `RowsExpected` with
-  `RowsProducedPJ` when the latter is > 0, but the former is the
-  examined-per-scan count which is sometimes more useful.
-- **M6** — MariaDB `warnings[].Code` and `warnings[].Level` are
-  discarded; only `Message` is kept. Operators triaging warnings need
-  the code.
-- **M7** — `defaultExplainTimeout=60s` is hardcoded; not plumbed from
-  `Config.Query.TimeoutMax`. Operators with shorter budgets get an
-  effective 60s on EXPLAIN paths.
-- **M8** — `fmt.Sscanf` perf: post-H2 strconv migration covers most
-  paths, but any remaining Sscanf call should also move (the H2 fix
-  covers all known call sites).
-- **M9** — `Plan.Raw` always retained; no `OmitRaw` option to drop
-  the bytes when the response body is constrained.
-- **M10** — Double-counting in `mergeMetrics` via wrapper nesting:
-  an Ordering wrapper passes child metrics up AND the parent's own
-  metrics include the same children's contribution.
-- **M11** — `Normalizer` interface exported but no public
-  implementation slot; reads as forward-compat but inviting
-  third-party extensions we don't intend to support.
-- **M12** — `Plan.Raw` shape is engine-specific (Postgres = JSON
-  array, MariaDB = JSON object) but undocumented; the frontend's
-  "raw tab" needs to know.
-- **M13** — Engine string literals `"mariadb"` / `"postgres"`
-  duplicated across mysql.go + postgres.go + tests; should be const.
-- **M14** — Postgres EXPLAIN options are hardcoded to `BUFFERS,
-  FORMAT JSON` (+ ANALYZE); no plumbing for SETTINGS / VERBOSE / WAL.
-- **M15** — `Node.Filter` collapses five Postgres conditions (Filter,
-  Index Cond, Hash Cond, Merge Cond, Recheck Cond) via `firstNonEmpty`;
-  the lost ones (e.g., Bitmap Heap Scan's Recheck Cond when Filter is
-  also present) are silently dropped.
+- **M1** [resolved] — `validateSQLForExplain` rejects multi-statement
+  payloads and leading line comments with embedded semicolons before
+  the EXPLAIN keyword is prepended. See `TestExplain_ValidateSQL_M1`
+  + `TestExplain_ValidateSQL_GateInExplain`.
+- **M2** [resolved with H6] — JIT / Triggers / Settings surface on
+  `Plan.Root.Extras["jit"|"triggers"|"settings"]`.
+- **M3** [resolved] — New `Plan.PlanningTimed bool` disambiguates
+  "not measured" from "sub-microsecond". See
+  `TestPlan_PlanningTimed_M3`.
+- **M4** [resolved] — `asFloat64` recognizes K/M/G/T/P suffixes
+  (base 1024) so MariaDB's `data_read_per_join` "10M" parses to
+  10485760. See `parseFloatWithSuffix` + `TestAsFloat64_KMG_M4`.
+- **M5** [resolved] — `parseMySQLTable` keeps `RowsExpected` =
+  `rows_examined_per_scan` and surfaces `rows_produced_per_join` on
+  `Node.Extras["rowsProducedPerJoin"]`. See `TestParseMySQLTable_M5`.
+- **M6** [resolved] — MariaDB warning code+level prefix the message;
+  codes are also collected on `Plan.Root.Extras["warningCodes"]` for
+  filterable triage. See `TestMySQL_Normalize_Warnings`.
+- **M7** [resolved] — `ExplainWithConfig` plumbs
+  `cfg.Query.TimeoutMax` into the EXPLAIN-wrapping limits when
+  caller didn't set one. See `TestExplainWithConfig_M7`.
+- **M8** [resolved with H2] — No remaining Sscanf paths.
+- **M9** [resolved] — `ExplainOpts.OmitRaw` drops `Plan.Raw` when
+  set. See `TestExplainOpts_OmitRaw_M9`.
+- **M10** [resolved] — `mergeMetrics` no longer sums RowsExpected
+  additively (it takes the max across siblings); join nodes set
+  cardinality multiplicatively (H5). The Ordering / Grouping wrapper
+  paths preserve their own cost via `combineWrapperMetrics` instead
+  of double-counting via parent rollup.
+- **M11** [resolved] — `Normalizer` interface unexported as
+  `normalizer` to stop implying a public extension surface.
+- **M12** [resolved] — Engine-specific Raw shape documented in
+  `doc.go` (Postgres = JSON array, MariaDB = JSON object).
+- **M13** [resolved] — `EngineMariaDB` / `EnginePostgres` consts
+  added; normalizers use them. See `TestEngineConstants_M13`.
+- **M14** [resolved] — `ExplainOpts.PGOptions` (typed struct) toggles
+  BUFFERS / VERBOSE / SETTINGS / WAL; ANALYZE remains controlled by
+  the ClassRead gate. See `buildPostgresExplainFlags` +
+  `TestPostgresExplainFlags_M14`.
+- **M15** [resolved] — `Node.Extras` keeps the full set of Postgres
+  condition fields ("filter"/"indexCond"/"hashCond"/"mergeCond"/
+  "recheckCond") even though `Node.Filter` still collapses to one.
+  See `TestPostgres_Filter_Recheck_M15`.
 
-### Deferred low + nit findings — PR #6.5
+### Resolved low + nit findings — PR #6.5
 
-- **L1** — `asInt64(float64)` truncates (1.9 → 1); should round.
-- **L2** — Shared Dirtied Blocks decoded but discarded;
-  Local/Temp/IO timing fields absent entirely.
-- **L3** — `firstNonEmpty` drops Bitmap Heap Scan's Recheck Cond
-  (overlaps M15).
-- **L4** — `mysqlAccessKind` misses `index_merge` / `index_subquery`
-  / `unique_subquery`; they fall through to "Table Scan (<access>)".
-- **L5** — Nested unions silently skipped (no recursion for
-  union-within-union).
-- **L6** — `parseMySQLNestedLoop` entries without a `table` key are
-  dropped silently (e.g., when a `block-nl-join` operator appears).
-- **L7** — Wrapper `cost_info` is overwritten by child metrics in
-  `parseMySQLBlock` instead of merged.
-- **L8** — `readSingleJSONRow` doesn't assert that a second `Next()`
-  returns EOF; a malformed driver returning two rows passes silently.
-- **L9** — "Unknown" fallback in `parseMySQLBlock` has no warning
-  collector (overlaps H7).
-- **N1** — `Plan` struct lacks an explicit additive-stability
-  statement (forward-compat note for future field additions).
-- **N2** — `Metrics.CostStart` is documented as "always 0 on MariaDB"
-  but the field is never actively zeroed — operators relying on the
-  doc could see junk if a future MariaDB version starts populating it.
+- **L1** [resolved] — `asInt64(float64)` now rounds half-away-from-
+  zero. See `TestAsInt64`.
+- **L2** [resolved] — Shared Dirtied Blocks surfaced on
+  `Metrics.BuffersDirtied`. See `TestPostgres_BuffersDirtied_L2`.
+- **L3** [resolved with M15] — Recheck Cond preserved on Extras.
+- **L4** [resolved] — `index_merge` / `index_subquery` /
+  `unique_subquery` mapped explicitly. See `TestMysqlAccessKind_L4`.
+- **L5** [resolved] — Nested unions recurse via the generic block
+  dispatcher. See `TestMySQL_NestedUnion_L5`.
+- **L6** [resolved] — Non-`table` entries in `nested_loop` now
+  re-enter `parseMySQLBlock` rather than dropping. See
+  `TestMySQL_BlockNLJoin_L6`.
+- **L7** [resolved] — Wrapper `cost_info` is combined with child
+  metrics via `combineWrapperMetrics` instead of being overwritten.
+- **L8** [resolved] — `readSingleJSONRow` asserts the iterator is
+  exhausted after the first row. See
+  `TestExplain_AssertSecondNextEOF_L8`.
+- **L9** [resolved with H7] — Unknown shapes emit a warning naming
+  the keys actually seen.
+- **N1** [resolved] — `Plan` / `Node` / `Metrics` document their
+  additive-stability contract in their respective doc comments.
+- **N2** [resolved] — `Metrics.CostStart` is actively zeroed on
+  every MariaDB path (`parseMySQLTable` + `rollupMariaDBTotals`).
+  See `TestMariaDB_CostStart_AlwaysZero_N2`.
 
 ---
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/auracp/auracp/pkg/dbadmin/driver"
 )
@@ -13,29 +14,56 @@ import (
 // and parses the result into a normalized Plan.
 //
 // Options assembled per opts:
-//   - BUFFERS: always — operators want the cache-hit picture.
+//   - BUFFERS: enabled by default (operators want the cache-hit picture);
+//     can be disabled via opts.PGOptions.DisableBuffers (PR #6.5 M14).
 //   - ANALYZE: only when opts.Analyze=true. ANALYZE actually executes
 //     the query; callers must gate on classifier output upstream.
-//   - VERBOSE: false (extra columns are unused by the normalizer).
+//   - VERBOSE: opts.PGOptions.Verbose (default false).
+//   - SETTINGS: opts.PGOptions.Settings (PG 12+; default false).
+//   - WAL: opts.PGOptions.WAL (PG 13+, requires ANALYZE; default false).
 //   - FORMAT JSON: always.
 func postgresExplain(ctx context.Context, conn driver.Conn, opts ExplainOpts, limits driver.Limits) (*Plan, error) {
-	q := "EXPLAIN ("
-	if opts.Analyze {
-		q += "ANALYZE, BUFFERS, FORMAT JSON"
-	} else {
-		q += "BUFFERS, FORMAT JSON"
-	}
-	q += ") " + opts.SQL
+	flags := buildPostgresExplainFlags(opts)
+	q := "EXPLAIN (" + flags + ") " + opts.SQL
 
 	raw, err := readSingleJSONRow(ctx, conn, limits, q)
 	if err != nil {
 		return nil, err
 	}
-	return (&postgresNormalizer{}).Normalize(raw, opts.Analyze)
+	return (&postgresNormalizer{analyzed: opts.Analyze}).Normalize(raw, opts.Analyze)
 }
 
-// postgresNormalizer implements Normalizer for PostgreSQL.
-type postgresNormalizer struct{}
+// buildPostgresExplainFlags assembles the EXPLAIN (...) option list.
+// Public-internal for testing. (PR #6.5 M14.)
+func buildPostgresExplainFlags(opts ExplainOpts) string {
+	parts := make([]string, 0, 6)
+	if opts.Analyze {
+		parts = append(parts, "ANALYZE")
+	}
+	if !opts.PGOptions.DisableBuffers {
+		parts = append(parts, "BUFFERS")
+	}
+	if opts.PGOptions.Verbose {
+		parts = append(parts, "VERBOSE")
+	}
+	if opts.PGOptions.Settings {
+		parts = append(parts, "SETTINGS")
+	}
+	if opts.PGOptions.WAL && opts.Analyze {
+		// WAL is only meaningful with ANALYZE; silently drop otherwise
+		// rather than letting the engine error.
+		parts = append(parts, "WAL")
+	}
+	parts = append(parts, "FORMAT JSON")
+	return strings.Join(parts, ", ")
+}
+
+// postgresNormalizer implements normalizer for PostgreSQL.
+type postgresNormalizer struct {
+	// analyzed marks whether the source ran with ANALYZE; controls
+	// whether PlanningTimed is set true on the resulting Plan.
+	analyzed bool
+}
 
 // Normalize parses a Postgres EXPLAIN ... FORMAT JSON payload.
 //
@@ -45,7 +73,10 @@ type postgresNormalizer struct{}
 //	  {
 //	    "Plan": { ...recursive Plan nodes... },
 //	    "Planning Time": 0.234,
-//	    "Execution Time": 1.567   (only when ANALYZE)
+//	    "Execution Time": 1.567,   (only when ANALYZE)
+//	    "Settings": { ... },        (only when SETTINGS)
+//	    "JIT":  { ... },             (only with JIT)
+//	    "Triggers": [ ... ]         (only when ANALYZE on trigger fire)
 //	  }
 //	]
 //
@@ -72,16 +103,37 @@ func (n *postgresNormalizer) Normalize(raw []byte, analyzed bool) (*Plan, error)
 
 	ws := &walkState{}
 	root := walkPgNode(top.Plan, ws)
+
+	// PR #6.5 H6 / M2: surface JIT / Triggers / Settings on root.Extras.
+	if root != nil {
+		if root.Extras == nil {
+			root.Extras = map[string]any{}
+		}
+		if len(top.JIT) > 0 {
+			root.Extras["jit"] = json.RawMessage(top.JIT)
+		}
+		if len(top.Triggers) > 0 {
+			root.Extras["triggers"] = json.RawMessage(top.Triggers)
+		}
+		if len(top.Settings) > 0 {
+			root.Extras["settings"] = json.RawMessage(top.Settings)
+		}
+		if len(root.Extras) == 0 {
+			root.Extras = nil
+		}
+	}
+
 	plan := &Plan{
-		Engine:          "postgres",
+		Engine:          EnginePostgres,
 		Root:            root,
 		Total:           root.Metrics,
 		Raw:             raw,
 		PlanningTimeMS:  sanitizeFloat(top.PlanningTime),
 		ExecutionTimeMS: sanitizeFloat(top.ExecutionTime),
+		PlanningTimed:   analyzed, // PR #6.5 M3: planning time is only measured with ANALYZE.
 		Warnings:        ws.warnings,
 	}
-	_ = analyzed
+	_ = n.analyzed
 	return plan, nil
 }
 
@@ -105,38 +157,58 @@ func postProcessPgPlan(p *pgPlan) {
 
 // pgTop is the outer wrapper of a Postgres EXPLAIN JSON result.
 type pgTop struct {
-	Plan          *pgPlan `json:"Plan"`
-	PlanningTime  float64 `json:"Planning Time"`
-	ExecutionTime float64 `json:"Execution Time"`
+	Plan          *pgPlan         `json:"Plan"`
+	PlanningTime  float64         `json:"Planning Time"`
+	ExecutionTime float64         `json:"Execution Time"`
+	JIT           json.RawMessage `json:"JIT"`
+	Triggers      json.RawMessage `json:"Triggers"`
+	Settings      json.RawMessage `json:"Settings"`
 }
 
 // pgPlan is the recursive plan-node shape. Postgres emits dozens of
 // fields per node; we capture the ones the flame-tree renderer + the
 // inspector pane need, and leave the rest in Plan.Raw.
+//
+// PR #6.5 H6: added Sort Key, Group Key, Hash Keys, Output, Subplan
+// Name, Parent Relationship, Workers Planned, Workers Launched,
+// Parallel Aware. These are surfaced on Node.Extras (not on the
+// flat Node struct) to keep the common shape stable.
+//
+// PR #6.5 L2: added Shared Dirtied (BuffersDirtied) — was decoded
+// before but discarded; now surfaced.
 type pgPlan struct {
-	NodeType         string    `json:"Node Type"`
-	RelationName     string    `json:"Relation Name"`
-	Schema           string    `json:"Schema"`
-	Alias            string    `json:"Alias"`
-	IndexName        string    `json:"Index Name"`
-	JoinType         string    `json:"Join Type"`
-	StartupCost      float64   `json:"Startup Cost"`
-	TotalCost        float64   `json:"Total Cost"`
-	PlanRows         int64     `json:"Plan Rows"`
-	ActualRows       float64   `json:"Actual Rows"`
-	ActualStartTime  float64   `json:"Actual Startup Time"`
-	ActualTotalTime  float64   `json:"Actual Total Time"`
-	ActualLoops      int64     `json:"Actual Loops"`
-	SharedHitBlocks  int64     `json:"Shared Hit Blocks"`
-	SharedReadBlocks int64     `json:"Shared Read Blocks"`
-	SharedDirtBlocks int64     `json:"Shared Dirtied Blocks"`
-	SharedWritBlocks int64     `json:"Shared Written Blocks"`
-	IndexCond        string    `json:"Index Cond"`
-	Filter           string    `json:"Filter"`
-	HashCond         string    `json:"Hash Cond"`
-	MergeCond        string    `json:"Merge Cond"`
-	RecheckCond      string    `json:"Recheck Cond"`
-	Plans            []*pgPlan `json:"Plans"`
+	NodeType           string    `json:"Node Type"`
+	RelationName       string    `json:"Relation Name"`
+	Schema             string    `json:"Schema"`
+	Alias              string    `json:"Alias"`
+	IndexName          string    `json:"Index Name"`
+	JoinType           string    `json:"Join Type"`
+	StartupCost        float64   `json:"Startup Cost"`
+	TotalCost          float64   `json:"Total Cost"`
+	PlanRows           int64     `json:"Plan Rows"`
+	ActualRows         float64   `json:"Actual Rows"`
+	ActualStartTime    float64   `json:"Actual Startup Time"`
+	ActualTotalTime    float64   `json:"Actual Total Time"`
+	ActualLoops        int64     `json:"Actual Loops"`
+	SharedHitBlocks    int64     `json:"Shared Hit Blocks"`
+	SharedReadBlocks   int64     `json:"Shared Read Blocks"`
+	SharedDirtBlocks   int64     `json:"Shared Dirtied Blocks"`
+	SharedWritBlocks   int64     `json:"Shared Written Blocks"`
+	IndexCond          string    `json:"Index Cond"`
+	Filter             string    `json:"Filter"`
+	HashCond           string    `json:"Hash Cond"`
+	MergeCond          string    `json:"Merge Cond"`
+	RecheckCond        string    `json:"Recheck Cond"`
+	SortKey            []string  `json:"Sort Key"`
+	GroupKey           []string  `json:"Group Key"`
+	HashKeys           []string  `json:"Hash Keys"`
+	Output             []string  `json:"Output"`
+	SubplanName        string    `json:"Subplan Name"`
+	ParentRelationship string    `json:"Parent Relationship"`
+	WorkersPlanned     int64     `json:"Workers Planned"`
+	WorkersLaunched    int64     `json:"Workers Launched"`
+	ParallelAware      bool      `json:"Parallel Aware"`
+	Plans              []*pgPlan `json:"Plans"`
 }
 
 // walkPgNode converts one pgPlan into our *Node. Recurses on Plans
@@ -164,10 +236,64 @@ func walkPgNode(p *pgPlan, ws *walkState) *Node {
 			Loops:          p.ActualLoops,
 			BuffersHit:     p.SharedHitBlocks,
 			BuffersRead:    p.SharedReadBlocks,
+			BuffersDirtied: p.SharedDirtBlocks, // PR #6.5 L2.
 			BuffersWritten: p.SharedWritBlocks,
 		},
 		Children: []*Node{},
+		Extras:   map[string]any{},
 	}
+
+	// PR #6.5 M15: preserve ALL condition fields on Extras so a
+	// Bitmap Heap Scan with both Filter and Recheck Cond doesn't
+	// lose either, even though Node.Filter collapses to one.
+	if p.Filter != "" {
+		node.Extras["filter"] = p.Filter
+	}
+	if p.IndexCond != "" {
+		node.Extras["indexCond"] = p.IndexCond
+	}
+	if p.HashCond != "" {
+		node.Extras["hashCond"] = p.HashCond
+	}
+	if p.MergeCond != "" {
+		node.Extras["mergeCond"] = p.MergeCond
+	}
+	if p.RecheckCond != "" {
+		node.Extras["recheckCond"] = p.RecheckCond
+	}
+
+	// PR #6.5 H6: per-node metadata.
+	if len(p.SortKey) > 0 {
+		node.Extras["sortKey"] = p.SortKey
+	}
+	if len(p.GroupKey) > 0 {
+		node.Extras["groupKey"] = p.GroupKey
+	}
+	if len(p.HashKeys) > 0 {
+		node.Extras["hashKeys"] = p.HashKeys
+	}
+	if len(p.Output) > 0 {
+		node.Extras["output"] = p.Output
+	}
+	if p.SubplanName != "" {
+		node.Extras["subplanName"] = p.SubplanName
+	}
+	if p.ParentRelationship != "" {
+		node.Extras["parentRelation"] = p.ParentRelationship
+	}
+	if p.WorkersPlanned > 0 {
+		node.Extras["workersPlanned"] = p.WorkersPlanned
+	}
+	if p.WorkersLaunched > 0 {
+		node.Extras["workersLaunched"] = p.WorkersLaunched
+	}
+	if p.ParallelAware {
+		node.Extras["parallelAware"] = true
+	}
+	if len(node.Extras) == 0 {
+		node.Extras = nil
+	}
+
 	ws.depth++
 	for _, child := range p.Plans {
 		c := walkPgNode(child, ws)
@@ -199,6 +325,7 @@ func clampToInt64(f float64) int64 {
 
 // firstNonEmpty returns the first non-empty string from the list, used
 // to collapse Postgres's several condition fields into one Filter slot.
+// (See Node.Extras for the lossless representation — PR #6.5 M15.)
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if v != "" {
