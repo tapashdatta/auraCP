@@ -628,7 +628,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 9.5 | Standalone hardening follow-up         | deferred |              |
 | 10  | Panel-integrated glue                  | ✓ done   | 10235b1      |
 | 10.5| Panel glue hardening follow-up         | deferred |              |
-| 11  | Frontend shell + trees                 | pending  |              |
+| 11  | Frontend shell + trees                 | ✓ done   | 052726e      |
+| 11.5| SPA shell hardening follow-up          | deferred |              |
 | 12  | Row grid                               | pending  |              |
 | 13  | SQL editor                             | pending  |              |
 | 14  | Inspector pane                         | pending  |              |
