@@ -1,0 +1,7 @@
+listen: "127.0.0.1:0"
+storage:
+  db_path: "/tmp/aura-db-test/aura.db"
+  audit_log_path: "/tmp/aura-db-test/audit.log"
+  history_db_path: "/tmp/aura-db-test/history.db"
+kek:
+  file: "/tmp/aura-db-test/kek.key"

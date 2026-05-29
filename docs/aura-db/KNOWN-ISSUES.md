@@ -686,6 +686,137 @@ of the stream.
 
 ---
 
+## Source: PR #9 adversarial review (workflow run wf_feeb557d-b15)
+
+The 4-lens review of the standalone runtime (`pkg/dbadmin/standalone/`)
+produced 50 findings (0 critical, 6 high, 7 medium, ~37 low/nit).
+Thirteen must-fix items landed in PR #9 itself (SEC-01 case-rotation
+lockout bypass, SEC-02 TOTP replay, SEC-03 MFA password oracle, SEC-04
+AEAD missing AAD, SEC-07 XFF not consulted, C2 Save+Grant non-atomic,
+C3 Grant error masking, C4 forwarder ctx leak, C11 canonical-marshal
+fragility, audit-forwarders-unwired, connstore-get-no-tenant-filter,
+stepup-no-session-rebinding). The remaining 37 findings are deferred
+below.
+
+### Deferred high findings — PR #9.5
+
+- **OPS-01** — First-run bootstrap is broken: `kek-rotate --generate`
+  requires an existing KEK file. **Reason:** operational/ergonomic gap,
+  not a security boundary or interface contract violation; single lens.
+  **Target:** PR #9.5.
+
+### Deferred medium findings — PR #9.5
+
+- **SEC-05** — KEK file mode check is fstat-the-path BEFORE open
+  (TOCTOU); also accepts mode==0. **Reason:** defense-in-depth gap,
+  exploitable only by an attacker who already has write access to the
+  KEK file's parent dir (root-owned); single lens. **Target:** PR #9.5.
+- **SEC-06** — Webhook forwarder does not enforce HTTPS and does not
+  require an HMAC secret. **Reason:** single lens, partially mitigated
+  by audit-forwarders-unwired must-fix (forwarder is currently inert);
+  fix alongside wiring. **Target:** PR #9.5.
+- **SEC-08** — KEK rotation has a window where on-disk key file does
+  not match in-DB ciphertexts. **Reason:** operational concern with
+  manual-recovery path; single lens. **Target:** PR #9.5.
+- **SEC-09** — HIBPClient does not enforce HTTPS and CLI tooling fails
+  open on network errors. **Reason:** opt-in feature; single lens.
+  **Target:** PR #9.5.
+- **SEC-10** — `PHCWithFakeWorkload` uses current policy params; older
+  stored hashes leak via timing. **Reason:** single lens; real-world
+  impact bounded by infrequent policy rotation. **Target:** PR #9.5.
+- **C1** — Session expiry uses strict `>` not `>=`: off-by-one at
+  boundary. **Reason:** single tick correctness gap, not exploitable
+  in practice. **Target:** PR #9.5.
+- **C5** — Login leaks unused `now` variable; TOTP and session use
+  separate clock reads. **Reason:** mostly cosmetic/consistency, no
+  exploitability. **Target:** PR #9.5.
+- **C7** — Tail-file follow mode uses `time.Sleep(500ms)` and ignores
+  process-level signals. **Reason:** operator-experience for tail
+  subcommand; not a boundary. **Target:** PR #9.5.
+- **OPS-02** — `user-create` + `user-passwd` advertise `--grant` and
+  `--role` flags that are silent no-ops. **Reason:** operator-ergonomics;
+  docs/code drift; not a security boundary. **Target:** PR #9.5.
+- **OPS-03** — KEK file ownership/uid is never checked. **Reason:**
+  defense-in-depth on a doc-stated invariant; single lens. **Target:**
+  PR #9.5.
+- **OPS-04** — No `/healthz` or `/readyz` endpoint. **Reason:**
+  operator-tooling gap surfaced by the panel-integration story; not a
+  security/interface boundary. **Target:** PR #10 (panel-integrated).
+- **OPS-05** — Logging defaults to `text` format. **Reason:**
+  default-tuning preference. **Target:** PR #9.5.
+- **OPS-06** — TLS `min_version` + logging fields are not validated at
+  config load. **Reason:** validation hygiene. **Target:** PR #9.5.
+- **OPS-07** — KEK rotation procedure lacks verification / retention /
+  destruction guidance. **Reason:** documentation completeness.
+  **Target:** PR #9.5.
+- **OPS-08** — No documentation or tooling for online SQLite backup.
+  **Reason:** missing tooling/docs; not a security boundary. **Target:**
+  PR #9.5.
+- **OPS-09** — No sample systemd unit file shipped. **Reason:**
+  packaging gap. **Target:** PR #9.5.
+- **OPS-10** — PID file defaults to `/var/run` and falls back to `$HOME`
+  silently. **Reason:** operator-ergonomics; modernize path defaults.
+  **Target:** PR #9.5.
+- **OPS-11** — `audit verify` output is human-only; no `--json` mode.
+  **Reason:** tooling ergonomics for monitoring integration. **Target:**
+  PR #9.5.
+
+### Deferred low + nit findings — PR #9.5
+
+- **SEC-11** — Recovery-code consume runs Argon2id against every unused
+  code per attempt. **Reason:** bounded amplification; requires
+  authenticated session. **Target:** PR #9.5.
+- **SEC-12** — Audit log Reopen blanks prior recovered hash on a fresh
+  post-rotate file. **Reason:** no security loss; operational
+  verification ergonomics. **Target:** PR #9.5.
+- **SEC-13** — ULID monotonicity loses entropy on rollover and is not
+  safe on clock-step-backward. **Reason:** collision plausibility
+  astronomically low. **Target:** PR #9.5.
+- **SEC-14** — Session token compare on lookup uses bytewise SQL
+  equality. **Reason:** leak is on SHA-256 hash not the token; practical
+  risk negligible. **Target:** PR #9.5.
+- **SEC-15** — Audit-log 0640 mode check does not match docs' 0600
+  expectation. **Reason:** documentation alignment. **Target:** PR #9.5.
+- **C6** — Audit `Reopen` does NOT verify the new file's mode before
+  reopening. **Reason:** defense-in-depth gap on logrotate misconfig.
+  **Target:** PR #9.5.
+- **C8** — `Engine.Shutdown` + `srv.Shutdown` share the same 30s
+  deadline; ordering backwards. **Reason:** graceful-shutdown ordering;
+  no security loss. **Target:** PR #9.5.
+- **C9** — `consumeRecoveryCode` race produces misleading UX under
+  concurrent recovery. **Reason:** confusing error not security loss.
+  **Target:** PR #9.5.
+- **C10** — `RotateKEK` uses per-row clock and PID-file check is racy.
+  **Reason:** operator-discipline required; non-monotonic `updated_at`.
+  **Target:** PR #9.5.
+- **OPS-12** — `KEY-ROTATION.md` claims fsync of directory; `WriteKEKFile`
+  doesn't fsync. **Reason:** doc-vs-code drift; durability gap rarely
+  triggered. **Target:** PR #9.5.
+- **OPS-13** — `serve --dry-run` claims to print routes but only prints
+  config path + listen. **Reason:** doc-vs-code drift. **Target:** PR #9.5.
+- **OPS-14** — `AuditForwarderConfig` defines an `s3` kind in code
+  comment unsupported elsewhere. **Reason:** comment drift; addressed
+  alongside forwarders wiring. **Target:** PR #9.5.
+- **OPS-15** — SIGUSR1 diagnostics dump is minimal. **Reason:**
+  diagnostic ergonomics. **Target:** PR #9.5.
+- **OPS-16** — `Config.Validate` doesn't enforce `kek.file` mode at
+  `LoadConfig`; `--dry-run` side-effects. **Reason:** related to OPS-13
+  dry-run cleanup. **Target:** PR #9.5.
+- **user-attrs-leak-token-hash** — `Auth.Authenticate` puts full session
+  token hash hex into `User.Attrs`. **Reason:** bounded; storage-side
+  identifier cannot be reversed to the cookie. **Target:** PR #9.5.
+- **audit-recover-prevhash-trusts-tail** — `recoverPrevHash` blindly
+  trusts the last line of the audit file on boot. **Reason:** `audit
+  verify` will still detect divergence. **Target:** PR #9.5.
+- **cfg-validate-skips-merge-then-validate** — `standalone.Config.Validate`
+  duplicates `dbadmin.Config.validate` logic. **Reason:** drift risk for
+  future invariants. **Target:** PR #9.5.
+- **save-uses-clock-for-createdat-not-handler-time** — `Connections.Save`
+  overwrites `Connection.CreatedAt` / `UpdatedAt`. **Reason:** test-only
+  surprise; documented in follow-up. **Target:** PR #9.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

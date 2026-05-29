@@ -1,0 +1,75 @@
+listen: "127.0.0.1:7878"
+tls:
+  cert_file: ""
+  key_file: ""
+  min_version: "TLS1.3"
+  cipher_suite: "mozilla_modern"
+  mtls:
+    enabled: false
+    ca_bundle: ""
+storage:
+  db_path: "/var/lib/aura-db/aura.db"
+  audit_log_path: "/var/lib/aura-db/audit.log"
+  history_db_path: "/var/lib/aura-db/history.db"
+kek:
+  file: "/etc/aura-db/kek.key"
+  rotate_on_boot: false
+session:
+  idle_ttl: 15m
+  absolute_ttl: 8h
+  max_concurrent: 5
+  bind_to_ip_class: true
+  bind_to_ua_hash: true
+auth:
+  password_min_length: 14
+  argon2:
+    time: 3
+    memory_kib: 65536
+    threads: 4
+    key_len: 32
+    salt_len: 16
+  hibp_check: true
+  mfa:
+    required_for: ["writer", "dba", "owner"]
+    totp_enabled: true
+    webauthn_enabled: false
+    recovery_codes: 8
+rate_limits:
+  login_per_ip_15m: 10
+  login_per_user_15m: 5
+  query_per_user_per_min: 30
+  query_per_ip_per_min: 60
+  lockout_escalation_minutes: [15, 30, 60, 120, 240, 480, 1440]
+query:
+  timeout_default: 30s
+  timeout_max: 5m
+  result_rows_default: 10000
+  result_rows_max: 100000
+  result_bytes_default: 52428800
+  result_bytes_max: 524288000
+  concurrent_per_user_per_conn: 1
+  concurrent_max: 3
+  sql_input_max_bytes: 1048576
+  pool_size_per_conn: 4
+  pool_idle_timeout: 5m
+audit:
+  sample_read_queries: 0.01
+  redact_sensitive_params: true
+  chain_signing:
+    enabled: false
+    key_file: "/etc/aura-db/audit-sign.key"
+    every_events: 1000
+    every: 5m
+  forwarders: []
+  retention_days: 365
+network:
+  csp_report_uri: ""
+logging:
+  level: "info"
+  format: "text"
+  destination: "stderr"
+csp:
+  report_uri: ""
+  require_trusted_types: true
+forbidden_list:
+  additional_function_names: []
