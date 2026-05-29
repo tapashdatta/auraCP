@@ -573,8 +573,8 @@ PRs without their tests are blocked at review. We do not retroactively
 
 | PR  | Title                                  | Status   | Merge commit |
 | --- | -------------------------------------- | -------- | ------------ |
-| 1   | `pkg/dbadmin` skeleton + test helpers  | next    |              |
-| 2   | Classifier                             | pending  |              |
+| 1   | `pkg/dbadmin` skeleton + test helpers  | ✓ done   | c6419e9      |
+| 2   | Classifier                             | next     |              |
 | 3   | Driver layer                           | pending  |              |
 | 4   | Schema readers                         | pending  |              |
 | 5   | Row operations                         | pending  |              |
