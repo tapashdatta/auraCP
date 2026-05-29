@@ -1,9 +1,10 @@
 # Aura DB — Documentation Index
 
 Aura DB is auraCP's native database administration tool for MariaDB /
-MySQL and PostgreSQL. Designed to replace Adminer (currently bundled)
-while staying compatible with auraCP's lightweight motto. Distributed
-in two deployment modes from a single Go codebase:
+MySQL and PostgreSQL. It replaced Adminer (bundled in v0.2.x, removed
+in PR #17 for v0.3.0) while staying compatible with auraCP's
+lightweight motto. Distributed in two deployment modes from a single
+Go codebase:
 
 - **Integrated** — built into `auracpd`; surfaces in the panel at `/dbadmin`.
 - **Standalone** — separate `aura-db` binary with its own user database
@@ -52,7 +53,12 @@ These will be added as the implementation lands:
 - `REPRODUCIBLE-BUILDS.md` — verify a release against source.
 - `BACKUP-AND-RESTORE.md` — back up Aura DB state itself.
 - `STANDALONE-INSTALL.md` — standalone-mode deployment.
-- `MIGRATING-FROM-ADMINER.md` — what's the same, what's different.
+
+Already landed in v0.3.0:
+
+- [`MIGRATING-FROM-ADMINER.md`](MIGRATING-FROM-ADMINER.md) — what
+  changes for operators upgrading from v0.2.x (Adminer bundled) to
+  v0.3.0 (Aura DB).
 
 ## Reading order
 

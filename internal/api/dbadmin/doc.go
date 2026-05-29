@@ -5,13 +5,12 @@
 // and exposes a single public entrypoint, Mount, that wires everything
 // onto the panel's *http.ServeMux at /api/dbadmin/.
 //
-// Coexistence with legacy Adminer:
-//
-//   - Adminer continues to be served by nginx at /_adminer/ (PHP-FPM,
-//     SSO-token bridge — unchanged in this PR). Aura DB lives on a
-//     completely different route subtree, /api/dbadmin/, so the two
-//     surfaces never collide. Operators can use either UI until PR #17
-//     deletes Adminer.
+// Adminer was removed in PR #17 (v0.3.0). Aura DB is the sole DB
+// admin surface; the legacy /_adminer/ nginx route, the PHP-FPM
+// auracp-adminer pool, the SSO-token bridge under /run/auracp/
+// adminer-sso/, and the bundled wrapper at /opt/auracp/adminer/ no
+// longer exist. All database management flows through /api/dbadmin/
+// (this package) and /dbadmin/ (the embedded Svelte SPA).
 //
 // Schema strategy (see migrate.go):
 //

@@ -231,10 +231,10 @@
     if (!notice) notice = `Basic auth credentials saved. Visitors will now be prompted as ${basicAuth.user}.`
     basicAuth = { user: '', password: '' }
   }
-  // v0.2.25: open Adminer for the chosen database. Mints a one-time SSO
-  // token server-side, then opens the returned URL in a new tab. The PHP
-  // wrapper at /_adminer/ consumes the token (single-use) and seeds
-  // Adminer's session with the credentials — no login form, no typing.
+  // PR #17 (v0.3.0): the "Manage" button used to mint a one-time Adminer
+  // SSO token and open /_adminer/?sso=… in a new tab. Adminer was removed;
+  // the endpoint now returns a /dbadmin/#/connections?engine=…&name=… deep
+  // link, and the SPA simply opens it in a new tab.
   // v0.2.40: kick off an ACME re-issuance for this site's cert. lego runs
   // synchronously inside the panel request — typical issuance is 5–15s for
   // HTTP-01, ~30–60s for DNS-01 (TXT propagation), so we show a 'busy'
@@ -1142,9 +1142,9 @@
                   <td><span class="mono" style="color:var(--txt-2);font-size:12.5px">{d.user}</span></td>
                   <td style="text-align:right">
                     <div style="display:inline-flex;gap:6px;align-items:center">
-                      <button type="button" class="btn btn-ghost" style="padding:5px 11px;font-size:12px" onclick={() => manageDb(d.engine, d.name)} title="Open Adminer">
+                      <button type="button" class="btn btn-ghost" style="padding:5px 11px;font-size:12px" onclick={() => manageDb(d.engine, d.name)} title="Open in Aura DB">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:13px;height:13px;vertical-align:-2px;margin-right:5px"><polyline points="14 3 21 3 21 10"/><line x1="21" y1="3" x2="10" y2="14"/><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/></svg>
-                        Manage
+                        Open
                       </button>
                       <button type="button" class="file-del" onclick={() => deleteDb(d.engine, d.name)} title="Drop database" aria-label="Delete {d.name}">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>

@@ -6,11 +6,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"os/user"
-	"path/filepath"
-	"strconv"
-	"time"
+	"net/url"
 
 	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/auth"
@@ -446,26 +442,16 @@ func (s *Server) deleteDatabase(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/sites/{domain}/databases/{engine}/{name}/manage
 //
-// v0.2.25: mint a one-time SSO token, write it to /run/auracp/adminer-sso/
-// with the decrypted credentials, and return a URL the browser can open
-// to land in Adminer pre-authenticated. The PHP wrapper at /_adminer/ reads
-// the token, deletes it (single-use), and seeds Adminer's session with the
-// credentials. Token TTL is 60s — long enough to survive a slow browser
-// open, short enough that a leaked URL is unusable a minute later.
+// PR #17 (v0.3.0): Adminer was removed; Aura DB is the sole DB admin
+// surface. This endpoint no longer mints an SSO token — it simply
+// validates that the database exists and returns the Aura DB deep-link
+// the SPA should open in a new tab. Identity / credentials flow through
+// Aura DB's own auth path (panel session cookie + ResolveIdentity), so
+// the panel doesn't need to ship credentials over the wire here.
 func (s *Server) manageDatabase(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
 	engine := r.PathValue("engine")
 	name := r.PathValue("name")
-	// v0.2.26: pre-flight check — refuse if Adminer wasn't installed (rather
-	// than mint a token that 502s when the browser opens the URL). PHP-FPM
-	// being absent at install time is the usual cause; tell the operator how
-	// to fix it.
-	if _, err := os.Stat("/opt/auracp/adminer/index.php"); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "Adminer is not installed on this host. Re-run the installer with PHP enabled: sudo auracp-install --yes --php=yes",
-		})
-		return
-	}
 	dbs, err := s.store.DatabasesForSite(domain)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -482,53 +468,16 @@ func (s *Server) manageDatabase(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "database not found"})
 		return
 	}
-	enc, err := s.store.DatabasePasswordEnc(engine, name)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	password, err := s.secret.Decrypt(enc)
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	tok, err := auth.RandomToken()
-	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err)
-		return
-	}
-	dir := "/run/auracp/adminer-sso"
-	if mkerr := os.MkdirAll(dir, 0o700); mkerr != nil {
-		writeErr(w, http.StatusInternalServerError, mkerr)
-		return
-	}
-	// Token file holds JSON { engine, name, user, password, expires }. The
-	// PHP wrapper checks expires before honouring it; auracpd separately
-	// sweeps stale tokens every minute (cleanup goroutine, future).
-	payload := map[string]any{
-		"engine":   engine,
-		"name":     name,
-		"user":     rec.DBUser,
-		"password": password,
-		"expires":  time.Now().Add(60 * time.Second).Unix(),
-	}
-	blob, _ := json.Marshal(payload)
-	tokPath := filepath.Join(dir, tok)
-	// Mode 0640: readable by www-data (Adminer's PHP-FPM pool group), not
-	// world-readable. Owner stays root (auracpd) so the file can't be
-	// rewritten from PHP.
-	if werr := os.WriteFile(tokPath, blob, 0o640); werr != nil {
-		writeErr(w, http.StatusInternalServerError, werr)
-		return
-	}
-	// Chown the token file to root:www-data so PHP-FPM (www-data) can read it.
-	if u, lookErr := user.Lookup("www-data"); lookErr == nil {
-		gid, _ := strconv.Atoi(u.Gid)
-		_ = os.Chown(tokPath, 0, gid)
-	}
 	s.audit(r, "database.manage", engine+":"+name)
+	// Deep-link into the Aura DB SPA's connection picker, pre-filtering by
+	// engine + database name so the operator can click through to the SQL
+	// editor with minimal friction. If Aura DB hasn't enrolled this database
+	// as a connection yet, the picker explains how to add it.
+	q := url.Values{}
+	q.Set("engine", engine)
+	q.Set("name", name)
 	writeJSON(w, http.StatusOK, map[string]string{
-		"url": "/_adminer/?sso=" + tok,
+		"url": "/dbadmin/#/connections?" + q.Encode(),
 	})
 }
 

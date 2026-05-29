@@ -133,7 +133,7 @@
           `Admin user:  ${d.wpInstall.adminUser}\n` +
           `Admin pass:  ${d.wpInstall.adminPass}\n` +
           `Admin email: ${d.wpInstall.adminEmail}\n\n` +
-          `Database (saved in the panel; password retrievable via Adminer):\n` +
+          `Database (saved in the panel; manage via Aura DB at /dbadmin/):\n` +
           `  Name: ${d.wpInstall.dbName}\n` +
           `  User: ${d.wpInstall.dbUser}`,
         confirmText: 'I saved the password',

@@ -35,7 +35,7 @@ This plan sequences the build. See [SCOPE.md](SCOPE.md), [ARCHITECTURE.md](ARCHI
 | P6 | Backups (local+rclone), admin users/RBAC w/ granular CRUD perms, instance/settings, config write-backs (cache/SSL/security/cloudflare), SSH-FTP users, SSL status, audit log — all wired UI↔API | ✅ built + smoke-tested (dry-run) |
 | P7 | Packaging: `.deb` (amd64+arm64) + systemd unit + installer `.deb` support; `make dist`/`make deb` | ✅ built + verified |
 | REMAINING | **Real-server validation on Debian/Ubuntu VM** — see [TESTING.md](TESTING.md) | ⬜ |
-| FUTURE | Web DB-admin UI (browse/query) — preferred direction **AdminerEvo** (single PHP file, MariaDB+Postgres+SQLite) or a native in-panel console; deferred until after VM test | ⬜ |
+| FUTURE | Web DB-admin UI (browse/query) — implemented as **Aura DB**, the native in-panel console at `/dbadmin/` (Svelte SPA + Go engine under `/api/dbadmin/`). Adminer was bundled in v0.2.x and removed in PR #17 (v0.3.0). | ✅ done |
 
 ---
 

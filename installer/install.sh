@@ -800,7 +800,7 @@ EOF
   # Default version — first one listed unless explicitly overridden.
   [ -z "$PHP_DEFAULT" ] && PHP_DEFAULT="${PHP_VERSIONS%% *}"
   ok "PHP-FPM ready: ${PHP_VERSIONS} (default ${PHP_DEFAULT})."
-  install_adminer "$PHP_DEFAULT"
+  purge_legacy_adminer
   install_wp_cli
 }
 
@@ -847,102 +847,38 @@ install_wp_cli() {
   ok "wp-cli ${WP_CLI_VERSION} ready at /usr/local/bin/wp (sha256 verified)."
 }
 
-# v0.2.25: install Adminer (single-file PHP DB manager) so each panel-managed
-# database gets a 1-click Manage button. We pin a known-good upstream
-# version + sha256 so a compromised packages.adminer.org couldn't substitute
-# code on us. Wrapper PHP + plugins live alongside; nginx panel vhost serves
-# /_adminer/ via a dedicated PHP-FPM pool (default PHP version).
-# v0.2.53: bumped from 4.8.1 → 5.4.2 to match the new theme CSS
-# (packaging/adminer.css), which targets Adminer 5.x DOM. The 4.8.1
-# DOM was different enough that the theme rendered ~nothing — operators
-# reported "Adminer CSS didn't work" until this version match.
-# SHA is real (unlike wp-cli's pre-v0.2.50 placeholder).
-ADMINER_VERSION="5.4.2"
-ADMINER_SHA256="5b761efe7049bf586119256324fd417b49e5bb9243b40d9734fe86655e4402fd"
-install_adminer() {
-  local default_php="$1"
-  [ -z "$default_php" ] && return 0
-  msg "Installing Adminer ${ADMINER_VERSION} (database manager UI)…"
-
-  run "install -d -m 0755 /opt/auracp/adminer"
-  if [ "$DRY_RUN" -eq 0 ]; then
-    local tmp
-    tmp=$(mktemp /tmp/adminer.XXXXXX.php)
-    curl -fsSL "https://github.com/vrana/adminer/releases/download/v${ADMINER_VERSION}/adminer-${ADMINER_VERSION}.php" -o "$tmp" \
-      || { rm -f "$tmp"; warn "Adminer download failed; Manage buttons won't work until install_adminer succeeds."; return 0; }
-    local got
-    got=$(sha256sum "$tmp" | cut -d' ' -f1)
-    if [ "$got" != "$ADMINER_SHA256" ]; then
-      rm -f "$tmp"
-      warn "Adminer sha256 mismatch (got ${got}, expected ${ADMINER_SHA256}); skipping."
-      return 0
-    fi
-    install -m 0644 "$tmp" /opt/auracp/adminer/adminer.php
-    rm -f "$tmp"
+# PR #17 (v0.3.0): Adminer was removed. Aura DB (the embedded /dbadmin/
+# SPA + /api/dbadmin/ engine) is now the sole DB admin surface. This
+# function purges any leftover Adminer artefacts on hosts upgrading
+# from v0.2.x so operators don't see orphaned files (the PHP-FPM pool,
+# the tmpfiles drop-in, the bundled wrapper directory, and the SSO
+# token runtime dirs). Safe to call on a fresh install — every step
+# is a no-op when the target is already absent.
+purge_legacy_adminer() {
+  # Pool file lives under /etc/php/<ver>/fpm/pool.d/auracp-adminer.conf —
+  # glob across whatever PHP versions are installed.
+  local pool reload_needed=0
+  for pool in /etc/php/*/fpm/pool.d/auracp-adminer.conf; do
+    [ -e "$pool" ] || continue
+    run "rm -f $pool"
+    reload_needed=1
+  done
+  if [ -d /opt/auracp/adminer ]; then
+    run "rm -rf /opt/auracp/adminer"
   fi
-  # Wrapper PHP + theme CSS are shipped in the .deb at /opt/auracp/packaging/.
-  # During install_adminer we copy them next to adminer.php — the wrapper
-  # via __DIR__/index.php, the theme via __DIR__/adminer.css (Adminer
-  # auto-loads adminer.css from its own directory). v0.2.31: stale
-  # adminer-plugins.php from earlier installs is removed (the wrapper now
-  # uses Adminer's own auth flow and no longer depends on a plugin subclass).
-  # v0.2.39: theme CSS shipped to replace Adminer's 2012-era default look.
-  if [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
-    run "install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php"
-    run "rm -f /opt/auracp/adminer/adminer-plugins.php"
-  else
-    warn "Adminer wrapper not bundled in the .deb (re-build with v0.2.31+ packaging); Manage buttons will 500 until fixed."
+  if [ -f /etc/tmpfiles.d/auracp-adminer.conf ]; then
+    run "rm -f /etc/tmpfiles.d/auracp-adminer.conf"
   fi
-  if [ -f /opt/auracp/packaging/adminer.css ]; then
-    run "install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css"
+  # /run is tmpfs but on long-running hosts the dirs may still be present
+  # from before the reboot — clear them so nothing references the old
+  # SSO contract.
+  run "rm -rf /run/auracp/adminer-sso /run/auracp/adminer-sessions"
+  if [ "$reload_needed" -eq 1 ] && [ -n "${PHP_VERSIONS:-}" ]; then
+    local v
+    for v in $PHP_VERSIONS; do
+      run "systemctl reload php${v}-fpm" || true
+    done
   fi
-  # v0.2.48: companion JS — drives theme-toggle persistence, brand chrome,
-  # login-shell wrap. Loaded by the SSO wrapper's adminer_object() subclass
-  # via <script src="adminer.js" defer>.
-  if [ -f /opt/auracp/packaging/adminer.js ]; then
-    run "install -m 0644 /opt/auracp/packaging/adminer.js /opt/auracp/adminer/adminer.js"
-  fi
-  # Tmpfile for the SSO token directory — /run is tmpfs so this re-creates
-  # on every boot; mode 0700 root:www-data so only PHP-FPM can read tokens.
-  cat > /etc/tmpfiles.d/auracp-adminer.conf <<'EOF'
-d /run/auracp 0755 root root -
-d /run/auracp/adminer-sso 0750 root www-data -
-d /run/auracp/adminer-sessions 0700 www-data www-data -
-EOF
-  run "systemd-tmpfiles --create /etc/tmpfiles.d/auracp-adminer.conf"
-
-  # Dedicated FPM pool for Adminer on the default PHP version. Runs as
-  # www-data so the panel doesn't bind it to any single site's identity.
-  #
-  # v0.2.28: explicitly set session.save_path to /run/auracp/adminer-sessions
-  # — the Debian/Ubuntu default of /var/lib/php/sessions isn't in our
-  # open_basedir, so session writes silently failed and the SSO redirect
-  # always landed on "No active panel session". This save_path IS in
-  # open_basedir + writable by the pool user (www-data:www-data 0700).
-  local pool="/etc/php/${default_php}/fpm/pool.d/auracp-adminer.conf"
-  if [ "$DRY_RUN" -eq 0 ]; then
-    cat > "$pool" <<EOF
-[auracp-adminer]
-user = www-data
-group = www-data
-listen = /run/php-fpm/auracp-adminer.sock
-listen.owner = www-data
-listen.group = www-data
-listen.mode = 0660
-pm = ondemand
-pm.max_children = 5
-pm.process_idle_timeout = 30s
-chdir = /opt/auracp/adminer
-php_admin_value[open_basedir] = /opt/auracp/adminer:/run/auracp/adminer-sso:/run/auracp/adminer-sessions:/tmp
-php_admin_value[session.save_path] = /run/auracp/adminer-sessions
-php_admin_value[upload_max_filesize] = 512M
-php_admin_value[post_max_size] = 512M
-php_admin_value[memory_limit] = 256M
-EOF
-  fi
-  run "systemctl reload php${default_php}-fpm"
-  ADMINER_DEFAULT_PHP="$default_php"
-  ok "Adminer ready at /_adminer/ on the panel domain (PHP ${default_php})."
 }
 
 install_mariadb() {

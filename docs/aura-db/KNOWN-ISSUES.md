@@ -856,6 +856,8 @@ The remaining 25 findings are deferred below.
   through, not the nginx config. **Reason:** Adminer is served by
   nginx, not auracpd's mux, so the test asserts the wrong layer.
   **Target:** PR #10.5 (add nginx template render test).
+  **Resolved in PR #17:** Adminer was removed; the test (and the
+  route it asserted coexistence with) were deleted together.
 - **INT-6** — `aura_db_grants` has no FK to `panel_users`; orphan
   grants survive user delete. **Reason:** orphan rows accumulate
   but cause no security exposure. **Target:** PR #10.5.

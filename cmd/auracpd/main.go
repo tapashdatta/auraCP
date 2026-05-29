@@ -222,9 +222,9 @@ func main() {
 		PanelBackend: panelBackend,
 	}) // /api/*
 
-	// PR #10: Aura DB — modern DB admin UI mounted alongside legacy
-	// Adminer. Adminer continues to be served by nginx at /_adminer/
-	// (untouched). The dbadmin engine takes its identity from the panel
+	// PR #10: Aura DB — modern DB admin UI mounted under /dbadmin/.
+	// Adminer was removed in PR #17; Aura DB is now the sole DB admin
+	// surface. The dbadmin engine takes its identity from the panel
 	// session cookie via ResolveIdentity (FIX-7 / INT-11: surfaces only
 	// UserID/Email/Role/MFA — no PasswordHash, no TOTPSecret) and uses
 	// the panel's secret.Box for credential encryption at rest.

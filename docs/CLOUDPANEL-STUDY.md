@@ -633,9 +633,12 @@ Refactor #5).
 
 ### Refactor #5 — Unix socket OR TCP, decided at install time, never per-site
 
-Today we mix — Adminer uses Unix socket on a panel-shared pool, sites
-use Unix socket too. CloudPanel uses TCP throughout. Pick one and stick
-to it: **stay on Unix socket** but make the socket path canonical and
+Historically we mixed — Adminer (removed in v0.3.0 / PR #17) used a
+Unix socket on a panel-shared pool; sites use Unix sockets too. With
+Adminer gone the panel-shared pool is gone too; sites stay on Unix
+sockets per the rule below. CloudPanel uses TCP throughout. Pick one
+and stick to it: **stay on Unix socket** but make the socket path
+canonical and
 fix the version-switch ergonomics by using
 `/run/php-fpm/<domain>.sock` (no version in path; old version's pool
 file gets swept by Refactor #2's Delete on PHP version change). v0.2.47
@@ -662,8 +665,10 @@ at create time** instead of three days into debugging.
   stock `nginx.org` mainline. Wait for QUIC GA upstream.
 - **Varnish** — their per-RAM cost is too high for "lightweight". Our
   nginx `fastcgi_cache` covers 95% of the same use case.
-- **PHPMyAdmin** — Adminer wins on size + UX. Our SSO wrapper makes
-  the login flow one-click.
+- **PHPMyAdmin** — historically we shipped Adminer (smaller, better
+  UX); v0.3.0 / PR #17 replaced the bundled Adminer with **Aura DB**,
+  a native in-panel console (`/dbadmin/`) that ships zero PHP and is
+  audit-logged end to end.
 - **ProFTPD** — OpenSSH internal-sftp with chroot is lighter. We keep
   this.
 - **`/home/clp/services/nginx/` centralization** — operators expect

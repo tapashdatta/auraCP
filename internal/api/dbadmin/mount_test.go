@@ -14,9 +14,7 @@ import (
 // TestMount_RoutesUnderPrefix verifies Mount installs the dbadmin engine
 // under /api/dbadmin/, that unauthenticated requests are rejected by the
 // engine (not the panel mux), and that requests OUTSIDE the prefix still
-// reach the panel handlers untouched. The "Adminer coexists" semantic is
-// modeled here: Adminer is served by nginx (not auracpd's mux), so the
-// only mux concern is that pre-existing panel routes still work.
+// reach the panel handlers untouched.
 func TestMount_RoutesUnderPrefix(t *testing.T) {
 	dir := t.TempDir()
 	st, err := store.Open(filepath.Join(dir, "auracp.db"))
@@ -30,10 +28,8 @@ func TestMount_RoutesUnderPrefix(t *testing.T) {
 	}
 
 	mux := http.NewServeMux()
-	// Pre-existing panel route ("Adminer co-existence" proxy): the
-	// panel's mux serves /api/health and /_adminer/ via nginx (out of
-	// process). We model the panel side as a single sentinel handler
-	// at /api/health and ensure it still works after Mount runs.
+	// Sentinel panel route: ensure pre-existing panel handlers continue to
+	// work after Mount runs.
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("panel-health-ok"))
@@ -93,54 +89,9 @@ func TestMount_NilArgsRejected(t *testing.T) {
 	}
 }
 
-// TestAdapter_AdminerCoexists is the design-mandated coexistence test.
-// In production Adminer is served by nginx at /_adminer/ — not by
-// auracpd's mux. The only way our changes could break it is if Mount
-// installed a route that swallowed /_adminer/ from the mux. We assert
-// that's not the case by verifying a custom /_adminer/ handler on the
-// mux survives a Mount call.
-func TestAdapter_AdminerCoexists(t *testing.T) {
-	dir := t.TempDir()
-	st, err := store.Open(filepath.Join(dir, "auracp.db"))
-	if err != nil {
-		t.Fatalf("store.Open: %v", err)
-	}
-	defer st.Close()
-	box, err := secret.Open(dir)
-	if err != nil {
-		t.Fatalf("secret.Open: %v", err)
-	}
-
-	mux := http.NewServeMux()
-	// Stand-in for the nginx-served Adminer location. The mux NEVER
-	// answers /_adminer/ in production, but we wire one here so we can
-	// prove Mount did not register a swallowing pattern.
-	mux.HandleFunc("/_adminer/", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("adminer-passthrough"))
-	})
-
-	cfg := defaultConfig()
-	cfg.AuditPath = filepath.Join(dir, "aura-db", "audit.ndjson")
-	restore := SetSigningKeyPathForTest(filepath.Join(dir, "aura-db-audit.key"))
-	defer restore()
-	if _, closer, err := Mount(mux, st, box, func(r *http.Request) (api.IdentitySummary, bool) {
-		return api.IdentitySummary{}, false
-	}, cfg); err != nil {
-		t.Fatalf("Mount: %v", err)
-	} else {
-		defer closer.Close()
-	}
-
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/_adminer/")
-	if err != nil {
-		t.Fatalf("GET /_adminer/: %v", err)
-	}
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("/_adminer/ status = %d, want 200 (Adminer route swallowed by Mount)", resp.StatusCode)
-	}
-}
+// Adminer was removed in PR #17 (v0.3.0). The historical
+// TestAdapter_AdminerCoexists test — which asserted Mount did not
+// swallow the nginx-served /_adminer/ route — was deleted alongside
+// the Adminer route itself. Aura DB is now the sole DB admin
+// surface; the engine's only mux concern is /api/dbadmin/, covered
+// by TestMount_RoutesUnderPrefix above.

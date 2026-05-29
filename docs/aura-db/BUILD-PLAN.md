@@ -640,7 +640,7 @@ PRs without their tests are blocked at review. We do not retroactively
 | 15.5| Palette + history hardening follow-up  | deferred |              |
 | 16  | Export                                 | ✓ done   | b7d5cad      |
 | 16.5| Export hardening follow-up             | deferred |              |
-| 17  | Adminer removal + cutover              | pending  |              |
+| 17  | Adminer removal + cutover              | ✓ done   |              |
 | 18  | Release v0.3.0                         | pending  |              |
 
 This table is the single source of truth for v0.3.0 progress.

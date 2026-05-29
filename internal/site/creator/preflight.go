@@ -122,7 +122,7 @@ func Preflight(spec *Spec, deps *Deps) error {
 		//
 		// v0.2.58: refined message. The "use a node/python site type"
 		// suggestion confused operators who legitimately want to front
-		// a separate local backend (Adminer, Grafana, a Docker
+		// a separate local backend (Grafana, a Docker
 		// container on 127.0.0.1:3000, etc.). The block is still right
 		// for the auth-bypass class — the OS firewall + the panel's
 		// own bind-to-loopback design make a loopback reverse-proxy

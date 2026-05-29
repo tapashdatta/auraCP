@@ -35,19 +35,9 @@ install -m 0644 "$ROOT/packaging/auracpd.service" "$PKG/etc/systemd/system/aurac
 install -m 0755 "$ROOT/packaging/auracpd-watchdog.sh"      "$PKG/opt/auracp/bin/auracpd-watchdog"
 install -m 0644 "$ROOT/packaging/auracpd-watchdog.service" "$PKG/etc/systemd/system/auracpd-watchdog.service"
 install -m 0644 "$ROOT/packaging/auracpd-watchdog.timer"   "$PKG/etc/systemd/system/auracpd-watchdog.timer"
-# v0.2.25: ship the Adminer SSO wrapper alongside the installer; install_adminer
-# copies it into /opt/auracp/adminer/index.php once PHP-FPM is in place.
-# v0.2.31: dropped adminer-plugins.php — the new wrapper uses Adminer's own
-# auth POST flow and doesn't need a plugin subclass.
-install -m 0644 "$ROOT/packaging/adminer-wrapper.php" "$PKG/opt/auracp/packaging/adminer-wrapper.php"
-# v0.2.39: ship the Adminer theme CSS alongside the wrapper. Adminer
-# auto-loads adminer.css from its own directory if present.
-install -m 0644 "$ROOT/packaging/adminer.css" "$PKG/opt/auracp/packaging/adminer.css"
-# v0.2.48: ship the Adminer bootstrap JS too — theme persistence, brand
-# chrome injection, login-shell wrap. Adminer 4.x doesn't auto-load
-# adminer.js (it auto-loads adminer.css only), so the SSO wrapper's
-# adminer_object() subclass emits a <script> tag in head() pointing at it.
-install -m 0644 "$ROOT/packaging/adminer.js"  "$PKG/opt/auracp/packaging/adminer.js"
+# PR #17 (v0.3.0): Adminer was removed. Aura DB (the embedded /dbadmin/
+# SPA + /api/dbadmin/ engine) is now the sole DB admin surface, so the
+# wrapper PHP / theme CSS / bootstrap JS are no longer bundled.
 # Bundle the data-plane installer + uninstaller so users don't need the repo.
 install -m 0755 "$ROOT/installer/install.sh"   "$PKG/opt/auracp/installer/install.sh"
 install -m 0755 "$ROOT/installer/uninstall.sh" "$PKG/opt/auracp/installer/uninstall.sh"
@@ -113,46 +103,23 @@ if [ -d /run/systemd/system ]; then
   # (e.g. after an in-panel upgrade from a pre-v0.2.15 release) recovers
   # by itself within ~60s instead of leaving the operator at a 502.
   systemctl enable --now auracpd-watchdog.timer >/dev/null 2>&1 || true
-  # v0.2.32: if Adminer was installed previously (i.e. PHP is on the host),
-  # refresh the SSO wrapper from the just-unpacked packaging directory.
-  # Without this an upgrade leaves the daemon on the new version but the
-  # wrapper PHP on the prior version — which is exactly what bit the
-  # Adminer "No active panel session" flow on v0.2.31. install_adminer
-  # does this normally, but it's gated behind a full auracp-install run;
-  # this line makes panel-pill / auracp-update upgrades self-healing too.
-  if [ -d /opt/auracp/adminer ] && [ -f /opt/auracp/packaging/adminer-wrapper.php ]; then
-    install -m 0644 /opt/auracp/packaging/adminer-wrapper.php /opt/auracp/adminer/index.php
-    # v0.2.39: refresh the theme CSS too so design changes self-deploy.
-    if [ -f /opt/auracp/packaging/adminer.css ]; then
-      install -m 0644 /opt/auracp/packaging/adminer.css /opt/auracp/adminer/adminer.css
-    fi
-    # v0.2.48: refresh the bootstrap JS the same way. Required for theme
-    # toggle + brand chrome — without it, only the CSS lands and the head()
-    # override in the wrapper points at a missing file (404, no chrome).
-    if [ -f /opt/auracp/packaging/adminer.js ]; then
-      install -m 0644 /opt/auracp/packaging/adminer.js /opt/auracp/adminer/adminer.js
-    fi
-    # Stale subclass file from < v0.2.31 — current wrapper doesn't use it.
-    rm -f /opt/auracp/adminer/adminer-plugins.php
-    # v0.2.53: auto-upgrade Adminer from 4.x → 5.4.2. The new theme CSS
-    # targets the 5.x DOM; 4.8.1 + 5.x CSS = ugly half-styled UI.
-    # Self-heal on panel-pill upgrade so operators don't have to re-run
-    # auracp-install. Best-effort: SHA verify on download; if any step
-    # fails, leave the existing adminer.php in place.
-    if [ -f /opt/auracp/adminer/adminer.php ] && \
-       ! grep -q "VERSION = '5\." /opt/auracp/adminer/adminer.php 2>/dev/null; then
-      tmp_admin=$(mktemp /tmp/adminer.XXXXXX.php)
-      if curl -fsSL "https://github.com/vrana/adminer/releases/download/v5.4.2/adminer-5.4.2.php" -o "$tmp_admin" 2>/dev/null; then
-        got=$(sha256sum "$tmp_admin" | cut -d' ' -f1)
-        if [ "$got" = "5b761efe7049bf586119256324fd417b49e5bb9243b40d9734fe86655e4402fd" ]; then
-          install -m 0644 "$tmp_admin" /opt/auracp/adminer/adminer.php
-        fi
-      fi
-      rm -f "$tmp_admin"
-    fi
-    # Reload any installed PHP-FPM versions so an op-code cache (if enabled)
-    # picks up the new wrapper. Safe to ignore failures — opcache will
-    # re-validate on next access by mtime anyway.
+  # PR #17 (v0.3.0): purge any leftover Adminer artefacts on hosts
+  # upgrading from v0.2.x. Aura DB replaced Adminer; nothing under
+  # /opt/auracp/adminer/, the auracp-adminer FPM pool, or the SSO
+  # tmpfiles drop-in should remain. Each step is a no-op when the
+  # target is already absent.
+  if [ -d /opt/auracp/adminer ]; then
+    rm -rf /opt/auracp/adminer
+  fi
+  rm -f /etc/tmpfiles.d/auracp-adminer.conf
+  pool_reload=0
+  for pool in /etc/php/*/fpm/pool.d/auracp-adminer.conf; do
+    [ -e "$pool" ] || continue
+    rm -f "$pool"
+    pool_reload=1
+  done
+  rm -rf /run/auracp/adminer-sso /run/auracp/adminer-sessions
+  if [ "$pool_reload" = "1" ]; then
     for unit in $(systemctl list-units --type=service --state=active --no-legend 'php*-fpm.service' 2>/dev/null | awk '{print $1}'); do
       systemctl reload "$unit" 2>/dev/null || true
     done
