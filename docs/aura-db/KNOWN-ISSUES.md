@@ -162,6 +162,101 @@ correctness impact but are worth fixing:
 
 ---
 
+## Source: PR #4 adversarial review (workflow run wf_5d1d6f67-0f8)
+
+The 4-lens review of the schema reader (`pkg/dbadmin/schema/`) produced
+70 findings (17 high, 29 medium, 17 low, 7 nit). The 10 must-fix items
+landed in PR #4 itself. Everything below is deferred.
+
+### Deferred — high-severity, PR #4.5 (schema reader follow-up)
+
+These need real work but the must-fix set covers the immediate
+correctness / security blockers for v0.3.0 alpha.
+
+#### H6 — singleflight: in-flight load coalescing
+
+**Finding (limits lens):** when N concurrent callers request the same
+uncached key, the cache fires N parallel loads against the backend.
+For a slow GetTable that fans out to columns / indexes / FKs /
+triggers, that's a thundering herd against information_schema.
+
+**Fix in PR #4.5:** wrap `cacheFetch` in `golang.org/x/sync/singleflight`
+so the first caller does the load and the rest wait for the result.
+The generation-counter race protection (H7) interacts with this — the
+singleflight slot must capture the generation at slot-acquisition time.
+
+#### H9 — Config.Query.Timeout plumbing into schema reads
+
+**Finding (SDK lens):** schema reads currently use this package's own
+`defaultLimits()` (30s / 50K-rows / 50MB). The engine's
+`Config.Query.Timeout` is documented as the canonical operator-tunable
+read budget but does NOT apply to schema reads in PR #4.
+
+**Fix in PR #4.5:** thread the engine `Config` into `For(...)` (or a
+new `ForWithLimits`) so operators can shrink the schema-read budget
+without monkeying with this package's defaults.
+
+#### H12 — ErrCapped partial-result handling
+
+**Finding (limits lens):** if `Conn.Query` returns `ErrCapped` mid-loop
+(row or byte cap tripped), the schema reader currently returns the
+partial slice silently. A 5-column table whose index list got truncated
+to 4 entries is worse than a clean error.
+
+**Fix in PR #4.5:** on `ErrCapped`, propagate the error AND attach the
+partial slice via a typed `CappedError{Got: partial}` so callers can
+choose to display "partial result, increase limits".
+
+#### H14 — ViewSummary parity (Postgres `is_updatable`)
+
+**Finding (correctness lens):** Postgres `ViewSummary.Updatable` is
+hard-wired to `false`. MySQL reads `information_schema.views.is_updatable`.
+
+**Fix in PR #4.5:** Postgres views are updatable iff they meet
+PostgreSQL's "simple view" rules. Query
+`information_schema.views.is_updatable` (Postgres has the same view)
+and surface it.
+
+### Deferred — medium-severity, PR #4.5 polish
+
+These have real impact but are quality / performance issues, not
+correctness blockers:
+
+- **Cross-user cache poisoning:** the cache is keyed by schema/table
+  name only, not by the connecting role. Two operators with different
+  visibility into the same schema see the same cached `GetTable`
+  result. Fix: include a per-conn cache-bucket discriminator (or move
+  the cache from per-engine to per-connection).
+- **Postgres index expression columns dropped:** the column-trim loop
+  in `fillIndexes` silently drops expression-index entries (indkey 0).
+  Fix: surface them as `(expr)` placeholders via `pg_get_indexdef`.
+- **MySQL system-schema case-bypass:** the `ListDatabases` filter
+  excludes lowercase `mysql`, `sys`, etc., but case-insensitive
+  collations let `MYSQL` slip through. Fix: lower-case the filter on
+  both sides.
+- **N+1 GetTable batch:** the engine fans out per-table `GetTable`
+  calls for the table-tree view. Fix: a batch path that does
+  `WHERE table_schema = ?` once and groups in Go.
+- **Slow `information_schema.statistics`:** on busy MySQL servers
+  this view is a known hot spot. Fix: pre-filter by `table_name` IN
+  (...) when the caller knows the tables of interest.
+- **`ListFunctions` pulls full bodies:** `pg_get_function_arguments`
+  + full result type for hundreds of functions adds up. Fix: split
+  into list (cheap) + GetFunction (expensive, on-demand).
+- **`evictLRULocked` O(n):** linear scan + linear filter. With
+  `MaxEntries=1000` this is fine, but a true LRU (doubly-linked list)
+  would be O(1).
+- **`MaxEntries` byte-based:** today MaxEntries counts cache keys,
+  not bytes. A single 50 MB GetTable counts as "1" even though it
+  dominates the byte footprint. Fix: track approximate per-entry
+  size and cap by both count AND bytes.
+- **Trigger fetch error swallowing:** `fillTriggers` discards the
+  error to "best-effort" past privilege issues; a transport error
+  gets the same treatment. Fix: surface non-permission errors,
+  swallow only `ErrPermission`.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

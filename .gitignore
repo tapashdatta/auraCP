@@ -17,3 +17,11 @@ auracp.db*
 # OS / editor cruft
 .DS_Store
 *.swp
+
+# Claude Code agent state — worktrees, transcripts, scratch artifacts.
+# Lives in the operator's checkout, never committed.
+.claude/
+
+# Standalone HTML mock-ups produced during design exploration; not part
+# of the panel source.
+auraDBPrototype.html
