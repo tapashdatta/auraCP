@@ -295,11 +295,18 @@
   })
 </script>
 
+<!-- FIX (PR #12.5 a11y-7/8/9 routed to PR #11.5): expose
+     aria-multiselectable so AT users know the grid is multi-select,
+     aria-readonly so the canonical READ-ONLY semantic is announced
+     (separate from the visible pill), and aria-busy during loads. -->
 <div
   class="rowgrid"
   role="grid"
   aria-rowcount={(grid?.rows.total ?? grid?.rows.data.length ?? 0) + 2}
   aria-colcount={(columnsForRender.length || 0) + 1}
+  aria-multiselectable="true"
+  aria-readonly={grid?.meta.readOnly ? 'true' : 'false'}
+  aria-busy={grid?.rows.loading ? 'true' : undefined}
   data-readonly={grid?.meta.readOnly ? 'true' : 'false'}
   data-density={grid?.density.mode}
   tabindex="0"
@@ -311,10 +318,10 @@
       <span class="rg-toolbar__title">
         <strong>{schema}.{table}</strong>
         {#if grid.meta.readOnly}
-          <span class="pill pill--warning" style="margin-left:8px">READ-ONLY · no PK</span>
+          <span class="pill pill--warning u-ml-2">READ-ONLY · no PK</span>
         {/if}
         {#if grid.pendingState.count > 0}
-          <span class="pill pill--info" style="margin-left:8px">{grid.pendingState.count} pending</span>
+          <span class="pill pill--info u-ml-2">{grid.pendingState.count} pending</span>
         {/if}
       </span>
       <div class="rg-toolbar__spacer"></div>
@@ -347,7 +354,7 @@
       {#if grid.view.filters.size > 0}
         <button class="btn btn--ghost btn--sm" onclick={() => grid.clearAllFilters()}>Clear filters</button>
       {/if}
-      <div class="rg-toolbar__export" style="position:relative">
+      <div class="rg-toolbar__export rg-toolbar__export--pos">
         <button
           bind:this={exportBtn}
           class="btn btn--sm"

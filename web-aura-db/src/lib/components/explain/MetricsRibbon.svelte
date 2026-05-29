@@ -27,7 +27,40 @@
   )
 
   let popoverOpen = $state(false)
-  function toggleWarn() { popoverOpen = !popoverOpen }
+  /** @type {HTMLDivElement|undefined} */
+  let popEl = $state(undefined)
+  /** @type {HTMLButtonElement|undefined} */
+  let warnBtn = $state(undefined)
+
+  function toggleWarn() {
+    popoverOpen = !popoverOpen
+    if (popoverOpen) {
+      queueMicrotask(() => popEl?.focus())
+    }
+  }
+  // FIX (PR #14.5 A11Y-9 routed to PR #11.5): the previous popover
+  // claimed role=dialog without a focus trap, Esc handler, or focus
+  // restore. We're not promoting it to a full Modal (the metric chip
+  // anchor pattern wouldn't survive that), but we do add: Esc-to-close,
+  // outside-click-to-close, focus on open, and restore on close.
+  function onPopKey(e) {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      popoverOpen = false
+      queueMicrotask(() => warnBtn?.focus())
+    }
+  }
+  $effect(() => {
+    if (!popoverOpen) return
+    const onDocClick = (ev) => {
+      if (!popEl) return
+      if (popEl === ev.target || popEl.contains(ev.target)) return
+      if (warnBtn && (warnBtn === ev.target || warnBtn.contains(ev.target))) return
+      popoverOpen = false
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  })
 </script>
 
 <div class="metrics-ribbon" role="group" aria-label="Plan summary metrics">
@@ -61,8 +94,10 @@
   <button
     class="metric metric--warn"
     type="button"
+    bind:this={warnBtn}
     aria-expanded={popoverOpen}
     aria-haspopup="dialog"
+    aria-controls="metrics-warn-popover"
     onclick={toggleWarn}
     disabled={warnings.length === 0}
   >
@@ -71,7 +106,15 @@
   </button>
 
   {#if popoverOpen && warnings.length > 0}
-    <div class="metric__popover" role="dialog" aria-label="Plan warnings">
+    <div
+      id="metrics-warn-popover"
+      bind:this={popEl}
+      class="metric__popover"
+      role="dialog"
+      aria-label="Plan warnings"
+      tabindex="-1"
+      onkeydown={onPopKey}
+    >
       <ul class="metric__warnList">
         {#each warnings as w (w)}
           <li>{w}</li>

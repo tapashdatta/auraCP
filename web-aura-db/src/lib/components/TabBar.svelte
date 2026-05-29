@@ -14,13 +14,17 @@
     navigate('/connections')
   }
 
-  // Auto-sync: if the user navigates to a route that's not represented by a
-  // tab, just leave activeId alone — the route content still renders. The
-  // tab strip is a convenience, not the source of truth for the route.
   void routeState
 </script>
 
-<div class="tabbar" role="tablist">
+<!-- FIX (PR #11 a11y-05): the tab strip looked like role=tablist with
+     role=tab children but actually each "tab" is a route navigator,
+     not a panel switcher. Per WAI-ARIA spec a tablist must own a
+     tabpanel that toggles via aria-controls — we don't. Drop the
+     role and expose it as a navigation region instead. The Tab
+     component still carries role=tab visually, but is now treated as
+     a navigation item. -->
+<div class="tabbar" role="toolbar" aria-label="Open workspaces">
   {#each workspaces.tabs as t (t.id)}
     <Tab
       id={t.id}
@@ -30,7 +34,7 @@
       onClose={() => closeTab(t.id)}
     />
   {/each}
-  <button class="tabbar__new" onclick={newTab} aria-label="new tab">
+  <button type="button" class="tabbar__new" onclick={newTab} aria-label="Open new workspace">
     <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
       <path d={icons.plus} stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
     </svg>

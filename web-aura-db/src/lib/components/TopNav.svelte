@@ -28,17 +28,30 @@
   }
 </script>
 
+<!-- FIX (PR #11 a11y-19): each nav button now exposes aria-current="page"
+     when it represents the active route, so SR users can hear which
+     section they are in. -->
 <header class="topnav">
   <span class="topnav__brand">{t('brand')}</span>
-  <nav class="topnav__nav" aria-label="primary">
+  <nav class="topnav__nav" aria-label="Primary">
     {#each navItems as item (item.id)}
       <button
+        type="button"
         class="topnav__btn {isActive(item) ? 'topnav__btn--active' : ''}"
+        aria-current={isActive(item) ? 'page' : undefined}
         onclick={() => navigate(item.path)}
       >{item.label}</button>
     {/each}
   </nav>
   <span class="topnav__spacer"></span>
-  <button class="topnav__user" bind:this={userBtn} onclick={() => userOpen = !userOpen} aria-label="user menu">A</button>
+  <button
+    type="button"
+    class="topnav__user"
+    bind:this={userBtn}
+    onclick={() => userOpen = !userOpen}
+    aria-haspopup="menu"
+    aria-expanded={userOpen}
+    aria-label="User menu"
+  >A</button>
   <DropdownMenu bind:open={userOpen} items={menuItems} anchor={userBtn} />
 </header>

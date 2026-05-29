@@ -33,5 +33,9 @@
     <Btn variant="ghost" onclick={cancel}>{cancelLabel}</Btn>
     <Btn variant={tone === 'danger' ? 'danger' : 'primary'} onclick={confirm}>{confirmLabel}</Btn>
   {/snippet}
-  <p style="margin:0;color:var(--text-dim)">{message}</p>
+  <p class="confirm__msg">{message}</p>
 </Modal>
+
+<style>
+  .confirm__msg { margin: 0; color: var(--text-dim); }
+</style>

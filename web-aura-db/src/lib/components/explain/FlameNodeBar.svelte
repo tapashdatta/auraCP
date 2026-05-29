@@ -97,11 +97,16 @@
     pointer-events="none"
   ></rect>
   <foreignObject x={barX + 4} y={2} width={Math.max(8, barWidth - 8)} height={rowHeight - 4}>
+    <!-- FIX (PR #14.5 A11Y-15 routed): role=presentation MUST NOT carry
+         interactive event handlers (keyboard listener is then unreachable
+         to AT). The parent <g> already has role=treeitem with its own
+         keyboard handler at FlameTree level; the div here is purely a
+         visual container and click is fine because the bar is the
+         pointer target. -->
     <div
       class="flame-row__content"
       role="presentation"
       onclick={clickBar}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); clickBar() } }}
     >
       {#if entry.hasChildren}
         <!-- svelte-ignore a11y_consider_explicit_label -->

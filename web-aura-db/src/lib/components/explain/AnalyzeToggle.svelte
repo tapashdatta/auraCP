@@ -92,7 +92,7 @@
     <Btn variant="danger" onclick={onConfirm} disabled={!canConfirm}>Confirm ANALYZE</Btn>
   {/snippet}
   <div class="analyze-toggle__dialogBody">
-    <p style="margin:0 0 12px;color:var(--text-dim)">
+    <p class="analyze-toggle__dialogP">
       EXPLAIN ANALYZE executes the statement. For non-read statements this is destructive.
       Type <strong>ANALYZE</strong> to confirm.
     </p>
@@ -110,9 +110,8 @@
     </label>
     {#if partialHint}
       <p
-        class="analyze-toggle__hint"
+        class="analyze-toggle__hint analyze-toggle__partialHint"
         data-testid="analyze-confirm-hint"
-        style="margin:6px 0 0;color:var(--warning);font-size:12px"
       >
         {partialHint}
       </p>

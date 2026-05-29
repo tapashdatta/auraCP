@@ -36,6 +36,10 @@
   }
 </script>
 
+<!-- FIX (PR #14.5 A11Y-5 routed): the static aria-label="Plan node details"
+     gave SR users no context as the selected node changed. Use
+     aria-labelledby pointing at the kind heading when a node is
+     selected; fall back to a static label when empty. -->
 {#if !node}
   <aside class="node-detail" role="region" aria-label="Plan node details">
     <div class="node-detail__empty">
@@ -46,14 +50,14 @@
     </div>
   </aside>
 {:else}
-  <aside class="node-detail" role="region" aria-label="Plan node details" aria-live="polite" aria-atomic="false">
+  <aside class="node-detail" role="region" aria-labelledby="node-detail-kind" aria-live="polite" aria-atomic="false">
     <span class="explain-inspector__sr-only">
       Selected: {node.kind}{node.relation ? ' on ' + node.relation : ''}
     </span>
 
     <header class="node-detail__head">
-      <h3 class="node-detail__kind">{node.kind || 'Node'}</h3>
-      <button class="node-detail__copy" type="button" onclick={copyKindPath} title="Copy node kind">⧉</button>
+      <h3 id="node-detail-kind" class="node-detail__kind">{node.kind || 'Node'}</h3>
+      <button class="node-detail__copy" type="button" onclick={copyKindPath} title="Copy node kind" aria-label="Copy node kind">⧉</button>
     </header>
 
     {#if node.relation || node.schema || node.alias || notExecuted}

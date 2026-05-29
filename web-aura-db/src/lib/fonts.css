@@ -1,0 +1,66 @@
+/*
+ * Self-hosted font face declarations.
+ *
+ * FIX (PR #11 FONTS-NO-SRI-THIRD-PARTY / dc-13 / PR #13.5 a11y-15):
+ * The previous build pulled IBM Plex Sans + Mono from Google Fonts at
+ * runtime — no SRI, no offline fallback, and an extra third-party
+ * cross-origin handshake that gated initial paint. We now bundle a small
+ * system-font stack as the @font-face source path so the SPA never
+ * dials out to a third party at runtime.
+ *
+ * If/when we ship the actual Plex `.woff2` blobs the install pulls them
+ * via Vite's asset graph (no Google Fonts dependency). For now the
+ * `local()` lookups fall through to the OS UI sans/mono if Plex is
+ * installed locally; otherwise the stack in --font-sans / --font-mono
+ * (ui-sans-serif / ui-monospace) takes over.
+ */
+
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('IBM Plex Sans'), local('IBMPlexSans');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local('IBM Plex Sans Medium'), local('IBMPlexSans-Medium');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local('IBM Plex Sans SemiBold'), local('IBMPlexSans-SemiBold');
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: local('IBM Plex Sans Bold'), local('IBMPlexSans-Bold');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: local('IBM Plex Mono'), local('IBMPlexMono');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: local('IBM Plex Mono Medium'), local('IBMPlexMono-Medium');
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: local('IBM Plex Mono SemiBold'), local('IBMPlexMono-SemiBold');
+}

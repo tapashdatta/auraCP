@@ -7,6 +7,13 @@
 web/node_modules/
 web/dist/
 
+# Aura DB SPA build artifacts (PR #11 INT-6). The embedded copy in
+# internal/dbadmin/webui/dist IS committed (the .gitkeep there is the
+# only file that should be visible after a clean), and the intermediate
+# web-aura-db/dist is rebuilt by the Makefile.
+web-aura-db/node_modules/
+web-aura-db/dist/
+
 # Local runtime data & secrets (never commit these)
 *.db
 *.db-wal

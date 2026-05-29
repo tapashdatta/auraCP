@@ -57,12 +57,16 @@
 </script>
 
 <aside class="tree" aria-label="connections">
+  <!-- FIX (PR #11 a11y-18): the filter input had no <label> and no
+       aria-label. Add an aria-label so AT users hear what the textbox
+       is for; the placeholder also doubles as a visible label. -->
   <div class="tree__filter">
     <input
       data-tree-filter
       type="text"
       class="input input--flat input--mono"
       placeholder={t('tree.search.placeholder')}
+      aria-label={t('tree.search.placeholder')}
       bind:value={filter}
     />
   </div>
@@ -76,8 +80,8 @@
     {#if connections.list.length === 0}
       <div class="tree__empty">
         <div>{t('tree.empty.title')}</div>
-        <div style="color:var(--text-mute);font-size:var(--fs-meta);margin-top:4px">{t('tree.empty.body')}</div>
-        <button onclick={() => navigate('/connections/new')}>{t('tree.empty.action')}</button>
+        <div class="tree__empty-hint">{t('tree.empty.body')}</div>
+        <button type="button" onclick={() => navigate('/connections/new')}>{t('tree.empty.action')}</button>
       </div>
     {:else}
       {#each filtered as c (c.id)}

@@ -35,7 +35,7 @@
     {#if connections.loading}
       <span>{t('status.loading')}</span>
     {:else if connections.error}
-      <span style="color:var(--danger)">{connections.error}</span>
+      <span class="u-color-danger">{connections.error}</span>
     {:else}
       <span>{t('status.ready')}</span>
     {/if}

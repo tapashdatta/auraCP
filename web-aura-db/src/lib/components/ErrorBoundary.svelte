@@ -15,7 +15,7 @@
     <h3 class="empty__title">{error.code || 'error'}</h3>
     <p class="empty__body">{error.message}</p>
     {#if error.requestId}
-      <p class="empty__body" style="font-family:var(--font-mono); font-size:var(--fs-meta)">req {error.requestId}</p>
+      <p class="empty__body empty__body--mono">req {error.requestId}</p>
     {/if}
     {#if onRetry}
       <Btn variant="primary" onclick={onRetry}>{t('action.retry')}</Btn>

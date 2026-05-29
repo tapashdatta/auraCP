@@ -555,7 +555,7 @@
     <div class="sql-editor__center">
       <div class="sql-editor__editor" data-testid="editor-shell">
         {#if connLoading}
-          <div style="padding:16px;color:var(--text-mute,#888)">Loading connection…</div>
+          <div class="u-loading" role="status">Loading connection…</div>
         {:else if conn}
           <CodeMirrorPane
             bind:this={editorRef}

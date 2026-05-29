@@ -5,7 +5,10 @@
 /** @type {Record<string,string>} */
 const STRINGS = {
   // Brand + nav
-  'brand': 'AuraDB',
+  // FIX (PR #11 dc-6): canonical brand is "Aura DB" (two words), matching
+  // the docs and the welcome screen. The compact spelling "AuraDB" only
+  // appears in CSS class prefixes / DB identifiers.
+  'brand': 'Aura DB',
   'nav.connections': 'Connections',
   'nav.queries': 'Queries',
   'nav.history': 'History',
@@ -20,7 +23,10 @@ const STRINGS = {
   'tree.empty.title': 'No connections',
   'tree.empty.body': 'Add one to begin.',
   'tree.empty.action': 'Add connection',
-  'tree.search.placeholder': 'Search…',
+  // FIX (PR #11 a11y-22): "Search connections" is more descriptive than
+  // just "Search…" inside the LeftTree filter; screen readers read the
+  // placeholder when no explicit aria-label is present.
+  'tree.search.placeholder': 'Search connections',
   'tree.engine.postgres': 'Postgres',
   'tree.engine.mysql': 'MySQL',
   'tree.engine.sqlite': 'SQLite',
@@ -30,7 +36,9 @@ const STRINGS = {
 
   // Welcome
   'welcome.title': 'Aura DB',
-  'welcome.subtitle': 'Native database administration for auraCP.',
+  // FIX (PR #11 dc-10): drop marketing copy; subtitle now states what
+  // the screen actually is.
+  'welcome.subtitle': 'Database workstation for auraCP.',
   'welcome.recent': 'Recent connections',
   'welcome.cheatsheet.title': 'Keyboard',
   'welcome.cheatsheet.search': 'Search connections',
@@ -177,6 +185,27 @@ const STRINGS = {
   'status.ws.open': 'sql stream: open',
   'status.ws.closed': 'sql stream: closed',
   'status.ws.error': 'sql stream: error',
+
+  // Per-route document titles (PR #11 a11y-07). All titles end with the
+  // brand for orientation when multiple tabs are open.
+  'doc.title.base': 'Aura DB',
+  'doc.title.welcome': 'Aura DB',
+  'doc.title.connections': 'Connections · Aura DB',
+  'doc.title.conn.new': 'New connection · Aura DB',
+  'doc.title.conn.detail': 'Connection · Aura DB',
+  'doc.title.schema': 'Schema · Aura DB',
+  'doc.title.table': 'Table · Aura DB',
+  'doc.title.rows': 'Rows · Aura DB',
+  'doc.title.query': 'SQL editor · Aura DB',
+  'doc.title.explain': 'EXPLAIN · Aura DB',
+  'doc.title.history': 'History · Aura DB',
+  'doc.title.audit': 'Audit · Aura DB',
+  'doc.title.account': 'Account · Aura DB',
+  'doc.title.auth.gate': 'Sign in · Aura DB',
+
+  // Skip link / landmark labels (PR #11 a11y-06, PR #14.5 A11Y-11)
+  'a11y.skip.main': 'Skip to main content',
+  'a11y.landmark.main': 'Main',
 
   // Generic
   'action.retry': 'Retry',

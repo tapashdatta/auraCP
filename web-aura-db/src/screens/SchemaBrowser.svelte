@@ -55,14 +55,23 @@
     <section class="section">
       <h2 class="section__title">{t('schema.objects.tables')}</h2>
       {#if data.tables.length === 0}
-        <div style="color:var(--text-dim);font-size:var(--fs-body)">No tables.</div>
+        <div class="schema__note">No tables.</div>
       {:else}
         <table class="data">
           <tbody>
             {#each data.tables as tbl (tbl.name)}
-              <tr onclick={() => openTable(tbl)} ondblclick={() => openTableRows(tbl)} style="cursor:pointer" title="Double-click to open rows">
+              <tr
+                class="u-cursor-pointer"
+                tabindex="0"
+                role="link"
+                aria-label={`Open ${tbl.name}`}
+                onclick={() => openTable(tbl)}
+                ondblclick={() => openTableRows(tbl)}
+                onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); openTable(tbl) } }}
+                title="Double-click to open rows"
+              >
                 <td class="num">{tbl.name}</td>
-                <td class="num" style="color:var(--text-mute)">{tbl.rowEstimate ?? ''}</td>
+                <td class="num u-color-mute">{tbl.rowEstimate ?? ''}</td>
               </tr>
             {/each}
           </tbody>
@@ -71,11 +80,15 @@
     </section>
     <section class="section">
       <h2 class="section__title">{t('schema.objects.views')}</h2>
-      <div style="color:var(--text-dim);font-size:var(--fs-body)">{data.views.length} view(s)</div>
+      <div class="schema__note">{data.views.length} view(s)</div>
     </section>
     <section class="section">
       <h2 class="section__title">{t('schema.objects.functions')}</h2>
-      <div style="color:var(--text-dim);font-size:var(--fs-body)">{data.functions.length} function(s)</div>
+      <div class="schema__note">{data.functions.length} function(s)</div>
     </section>
   {/if}
 </div>
+
+<style>
+  .schema__note { color: var(--text-dim); font-size: var(--fs-body); }
+</style>

@@ -26,6 +26,6 @@
 
   <section class="section">
     <h2 class="section__title">{t('account.stepup')}</h2>
-    <div style="color:var(--text-dim);font-size:var(--fs-body)">{t('account.stepup.notEnrolled')}</div>
+    <div class="u-color-dim">{t('account.stepup.notEnrolled')}</div>
   </section>
 </div>

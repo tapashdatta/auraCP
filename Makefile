@@ -25,10 +25,14 @@ ui: ui-dbadmin
 	cp -R web/dist internal/webui/dist
 
 ## ui-dbadmin: build the Aura DB Svelte SPA and embed it for /dbadmin/.
+## FIX (PR #11 INT-7): the previous recipe `rm -rf internal/dbadmin/
+## webui/dist` wiped the `.gitkeep` sentinel on every build, which left
+## git in a perpetually-dirty state. We now keep the dist directory and
+## delete only the previous build's artifacts.
 ui-dbadmin:
 	cd web-aura-db && npm install && npm run build
-	rm -rf internal/dbadmin/webui/dist
 	mkdir -p internal/dbadmin/webui/dist
+	find internal/dbadmin/webui/dist -mindepth 1 -name '.gitkeep' -prune -o -exec rm -rf {} +
 	cp -R web-aura-db/dist/. internal/dbadmin/webui/dist/
 
 ## build: native build of daemon + CLI.

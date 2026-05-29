@@ -8,6 +8,7 @@
 
   import AppShell from './lib/components/AppShell.svelte'
   import AuthGate from './screens/AuthGate.svelte'
+  import { t } from './lib/strings.js'
   import WelcomeScreen from './screens/WelcomeScreen.svelte'
   import ConnectionList from './screens/ConnectionList.svelte'
   import ConnectionForm from './screens/ConnectionForm.svelte'
@@ -87,6 +88,20 @@
     // No connections yet → kick off a fetch. Errors surface in the status bar.
     loadConnections()
   })
+
+  // FIX (PR #11 a11y-07): per-route document title. The static "Aura DB"
+  // title gave no orientation when multiple SPA tabs were open. We update
+  // document.title from a $derived so a route change syncs the tab label.
+  const docTitle = $derived.by(() => {
+    const key = 'doc.title.' + (routeState.name || 'welcome')
+    const candidate = t(key)
+    // If the key wasn't in STRINGS, t() returns the key verbatim. Fall
+    // back to the base brand string in that case.
+    return candidate === key ? t('doc.title.base') : candidate
+  })
+  $effect(() => {
+    if (typeof document !== 'undefined') document.title = docTitle
+  })
 </script>
 
 {#if routeState.name === 'auth.gate' || !session.hasCookie}
@@ -111,19 +126,19 @@
       {#if SqlEditorComp}
         <SqlEditorComp />
       {:else}
-        <div style="padding:24px;color:var(--text-mute,#888)">Loading SQL editor…</div>
+        <div class="u-loading" role="status">Loading SQL editor…</div>
       {/if}
     {:else if routeState.name === 'explain'}
       {#if ExplainInspectorComp}
         <ExplainInspectorComp />
       {:else}
-        <div style="padding:24px;color:var(--text-mute,#888)">Loading EXPLAIN inspector…</div>
+        <div class="u-loading" role="status">Loading EXPLAIN inspector…</div>
       {/if}
     {:else if routeState.name === 'history'}
       {#if HistoryScreenComp}
         <HistoryScreenComp />
       {:else}
-        <div style="padding:24px;color:var(--text-mute,#888)">Loading history…</div>
+        <div class="u-loading" role="status">Loading history…</div>
       {/if}
     {:else if routeState.name === 'audit'}
       <AuditView />

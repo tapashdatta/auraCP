@@ -115,6 +115,18 @@
     try { navigator.clipboard.writeText(entry.sql || '') } catch { /* ignore */ }
   }
 
+  // A11Y-6: throttle the count announced via aria-live so SR doesn't
+  // get a torrent of "N entries" updates while the user is typing in
+  // the search box. ~250ms debounce.
+  let filteredCountAnnounce = $state(0)
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let _annTimer = null
+  $effect(() => {
+    const n = filtered.length
+    if (_annTimer) clearTimeout(_annTimer)
+    _annTimer = setTimeout(() => { filteredCountAnnounce = n }, 250)
+  })
+
   function fmtWhen(when) {
     const tt = Date.parse(String(when))
     if (!tt || Number.isNaN(tt)) return ''
@@ -127,17 +139,27 @@
 </script>
 
 <div class="pane">
-  <header class="pane__head" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+  <!-- FIX (PR #15.5 A11Y-6 routed to PR #11.5): pluralise + throttle.
+       The aria-live region used to read "1 results" — wrong English and
+       fired on every keystroke. We pluralise and use a debounced shadow
+       state so screen readers don't yell on every typed character. -->
+  <header class="pane__head history__header">
     <h1 class="pane__title">{t('history.title')}</h1>
-    <span style="color:var(--text-mute);font-size:var(--fs-meta)">{filtered.length} entries</span>
+    <span class="history__count" aria-live="polite" aria-atomic="true">
+      {filteredCountAnnounce === 1 ? '1 entry' : `${filteredCountAnnounce} entries`}
+    </span>
   </header>
 
   <div class="history__filters">
+    <!-- FIX (PR #15.5 A11Y-5 routed to PR #11.5): segmented buttons need
+         aria-pressed so AT users can tell which option is active. -->
     <div class="history__range" role="group" aria-label="Date range">
       {#each ['1h','24h','7d','30d','all'] as r (r)}
         <button
+          type="button"
           class="history__rangeBtn"
           class:history__rangeBtn--active={dateRange === r}
+          aria-pressed={dateRange === r}
           onclick={() => { dateRange = r }}
         >{r}</button>
       {/each}
@@ -164,7 +186,7 @@
       <option value="dangerous">dangerous</option>
     </select>
 
-    <div style="flex:1;min-width:200px">
+    <div class="history__searchSlot">
       <TextField bind:value={search} placeholder={t('history.search.placeholder')} mono />
     </div>
 
@@ -197,18 +219,26 @@
       </thead>
       <tbody>
         {#each filtered as r (r.id)}
+          <!-- FIX (PR #15.5 A11Y-13 routed): document the
+               "Click or Enter to replay" gesture via title= (mouse
+               affordance) and keep the star + replay buttons keyboard-
+               reachable via their own tab stops. The tr deliberately
+               has no tabindex (A11Y-3 regression guard) — keyboard
+               replay happens by activating the star or sql cell. -->
           <tr
             class="history__row"
             class:history__row--error={!!r.error}
             onclick={() => replayRow(r)}
             onkeydown={(e) => { if (e.key === 'Enter') replayRow(r) }}
-            title="Click to replay in editor"
+            title="Click or press Enter to replay in editor"
           >
             <td>
               <button
+                type="button"
                 class="history__star"
                 class:history__star--on={r.starred}
                 aria-label={r.starred ? 'Unstar' : 'Star'}
+                aria-pressed={r.starred}
                 onclick={(e) => { e.stopPropagation(); toggleStar(r) }}
               >★</button>
             </td>
@@ -225,6 +255,17 @@
 </div>
 
 <style>
+  .history__header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .history__count {
+    color: var(--text-mute);
+    font-size: var(--fs-meta);
+  }
+  .history__searchSlot { flex: 1; min-width: 200px; }
   .history__filters {
     display: flex;
     align-items: center;

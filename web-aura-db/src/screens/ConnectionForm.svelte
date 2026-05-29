@@ -70,7 +70,7 @@
   </header>
 
   <section class="section">
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;max-width:680px">
+    <div class="u-grid-2 u-grid-2--narrow">
       <TextField label={t('conn.form.name')} bind:value={name} placeholder="Production replica" />
       <SelectField label={t('conn.form.engine')} bind:value={engine} options={engines} />
       <TextField label={t('conn.form.host')} bind:value={host} placeholder="db.internal" mono />
@@ -78,16 +78,16 @@
       <TextField label={t('conn.form.database')} bind:value={database} mono />
       <TextField label={t('conn.form.username')} bind:value={username} mono />
       <TextField label={t('conn.form.password')} bind:value={password} type="password" />
-      <div style="display:flex;align-items:flex-end">
+      <div class="u-row u-row--end">
         <Toggle bind:value={readOnly} label={t('conn.form.readonly')} />
       </div>
     </div>
 
     {#if error}
-      <div style="color:var(--danger);margin-top:12px;font-size:var(--fs-body)">{error}</div>
+      <div class="u-form-error" role="alert">{error}</div>
     {/if}
 
-    <div style="margin-top:16px;display:flex;gap:8px">
+    <div class="u-mt-4 u-row">
       <Btn variant="primary" loading={saving} onclick={save}>{t('conn.form.save')}</Btn>
       <Btn variant="ghost" onclick={() => navigate('/connections')}>{t('conn.form.cancel')}</Btn>
     </div>

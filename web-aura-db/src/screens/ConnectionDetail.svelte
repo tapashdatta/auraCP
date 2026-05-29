@@ -51,22 +51,22 @@
   <section class="section">
     <h2 class="section__title">Connection</h2>
     {#if conn}
-      <table class="data" style="max-width:520px">
+      <table class="data u-max-w-520">
         <tbody>
-          <tr><td style="color:var(--text-dim);width:120px">{t('conn.form.host')}</td><td class="num">{conn.host}{conn.port ? ':' + conn.port : ''}</td></tr>
-          <tr><td style="color:var(--text-dim)">{t('conn.form.database')}</td><td class="num">{conn.database || '—'}</td></tr>
-          <tr><td style="color:var(--text-dim)">{t('conn.form.username')}</td><td class="num">{conn.username || '—'}</td></tr>
+          <tr><td class="u-detail-row-label">{t('conn.form.host')}</td><td class="num">{conn.host}{conn.port ? ':' + conn.port : ''}</td></tr>
+          <tr><td class="u-color-dim">{t('conn.form.database')}</td><td class="num">{conn.database || '—'}</td></tr>
+          <tr><td class="u-color-dim">{t('conn.form.username')}</td><td class="num">{conn.username || '—'}</td></tr>
         </tbody>
       </table>
     {/if}
-    <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">
+    <div class="u-mt-4 u-row u-row--wrap">
       <Btn variant="primary" loading={testing} onclick={testConn}>{t('conn.detail.test')}</Btn>
       <Btn variant="ghost" onclick={() => navigate(`/connections/${id}`)}>{t('conn.detail.reveal')}</Btn>
       <Btn variant="ghost" onclick={() => navigate('/audit')}>{t('conn.detail.audit')}</Btn>
       <Btn variant="danger" onclick={() => confirmOpen = true}>{t('conn.detail.delete')}</Btn>
     </div>
     {#if testResult}
-      <div style="margin-top:8px;font-family:var(--font-mono);font-size:var(--fs-body);color:var(--text-dim)">{testResult}</div>
+      <div class="u-test-result" role="status" aria-live="polite">{testResult}</div>
     {/if}
   </section>
 </div>

@@ -173,6 +173,16 @@
 
   // Total scoring count for header chip.
   const count = $derived(flat.length)
+  // A11Y-6: throttle the SR-only count announcer ~250ms so SR users
+  // don't hear a flood of "N results" during typing.
+  let countAnnounce = $state(0)
+  /** @type {ReturnType<typeof setTimeout>|null} */
+  let _cntTimer = null
+  $effect(() => {
+    const n = flat.length
+    if (_cntTimer) clearTimeout(_cntTimer)
+    _cntTimer = setTimeout(() => { countAnnounce = n }, 250)
+  })
   // Pre-compute a per-item index so we can wire data-cursor / aria-activedescendant.
   // In flat mode (hasQuery) we expose a single synthetic group with no
   // section header so the template loop stays uniform.
@@ -208,16 +218,20 @@
     role="presentation"
     onclick={onBack}
   >
+    <!-- FIX (PR #15.5 A11Y-2 routed): wire aria-describedby so AT users
+         get the kbd hints as a description on the dialog open. -->
     <div
       bind:this={paletteEl}
       class="palette"
       role="dialog"
       aria-modal="true"
       aria-labelledby="palette-title"
+      aria-describedby="palette-desc"
       tabindex="-1"
       onkeydown={onKeydown}
     >
       <h2 id="palette-title" class="palette__sr">Command palette</h2>
+      <span id="palette-desc" class="palette__sr">Use up and down arrows to move between results. Press Enter to select. Press Escape to close.</span>
 
       <div class="palette__inputRow">
         <span class="palette__glyph" aria-hidden="true">
@@ -226,6 +240,8 @@
             <line x1="10.5" y1="10.5" x2="14" y2="14" />
           </svg>
         </span>
+        <!-- FIX (PR #15.5 A11Y-12 / A11Y-14 routed): explicit aria-label
+             + mobile keyboard hints. -->
         <input
           bind:this={inputEl}
           bind:value={query}
@@ -233,11 +249,15 @@
           class="palette__input"
           type="text"
           role="combobox"
+          aria-label="Search commands"
           aria-expanded="true"
           aria-controls="palette-listbox"
           aria-activedescendant={flat[cursor] ? `palette-opt-${flat[cursor].id}` : undefined}
           aria-autocomplete="list"
           autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          inputmode="search"
           spellcheck="false"
           placeholder="Search connections, history, commands…"
         />
@@ -246,7 +266,10 @@
 
       <div class="palette__listWrap" bind:this={listEl}>
         {#if flat.length === 0}
-          <div class="palette__empty">
+          <!-- FIX (PR #15.5 A11Y-15 routed): empty-state must be a
+               live region so SR users hear that the result set went
+               empty after typing. -->
+          <div class="palette__empty" role="status" aria-live="polite">
             <div class="palette__emptyTitle">No matches</div>
             <div class="palette__emptyHint">Try a connection name, table, SQL keyword, or “/” for actions.</div>
           </div>
@@ -263,6 +286,9 @@
               {/if}
               {#each g.items as it (it.id)}
                 {@const chunks = highlight(it.title, it.titlePositions || [])}
+                <!-- FIX (PR #15.5 A11Y-11/D-11 routed): full title in
+                     title= attr so truncated rows can be hovered to
+                     reveal the full string. -->
                 <li
                   id={`palette-opt-${it.id}`}
                   role="option"
@@ -270,6 +296,7 @@
                   class="palette__row"
                   class:palette__row--selected={cursor === it.index}
                   data-cursor={it.index}
+                  title={it.title}
                   onmousemove={() => { cursor = it.index }}
                   onclick={() => onItemClick(it.index)}
                   onkeydown={(e) => { if (e.key === 'Enter') onItemClick(it.index) }}
@@ -301,7 +328,8 @@
         <span class="palette__kbd"><kbd>esc</kbd> close</span>
       </div>
 
-      <div class="palette__sr" aria-live="polite">{count} results</div>
+      <!-- FIX (PR #15.5 A11Y-6 routed): pluralise and throttle. -->
+      <div class="palette__sr" aria-live="polite">{countAnnounce === 1 ? '1 result' : `${countAnnounce} results`}</div>
     </div>
   </div>
 {/if}

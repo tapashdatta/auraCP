@@ -304,9 +304,17 @@ summary:focus-visible,
   text-align: center;
   line-height: var(--lh-body);
 }
+.tree__empty-hint {
+  color: var(--text-mute);
+  font-size: var(--fs-meta);
+  margin-top: 4px;
+}
 .tree__empty button {
   margin-top: 8px;
   color: var(--accent);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 .tree__empty button:hover { color: var(--accent-hover); text-decoration: underline; }
 
@@ -363,6 +371,9 @@ summary:focus-visible,
   padding-right: 4px;
   overflow-x: auto;
 }
+/* FIX (PR #11 dc-8): the file-level rule was "sharp corners". The two
+   tab top corners had radius:4px, breaking that. Drop the radius so
+   tabs are flat-topped like everything else. */
 .tab {
   display: inline-flex;
   align-items: center;
@@ -372,12 +383,19 @@ summary:focus-visible,
   font-size: var(--fs-body);
   color: var(--text-dim);
   border-bottom: 1px solid transparent;
-  border-top-left-radius: 4px;
-  border-top-right-radius: 4px;
+  border-radius: 0;
   cursor: pointer;
   white-space: nowrap;
   gap: 8px;
+  max-width: 240px;
   transition: color var(--t-fast), border-color var(--t-fast);
+}
+.tab__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tab:hover { color: var(--text); }
 .tab--active {
@@ -385,17 +403,26 @@ summary:focus-visible,
   background: var(--surface);
   border-bottom-color: var(--accent);
 }
+/* FIX (PR #11 a11y-13 / dc-3): close button is now visible by default
+   (faded) so keyboard users can see it. Hover/focus bumps to full
+   opacity. Visibility:hidden left it unreachable. */
 .tab__close {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: var(--text-mute);
-  visibility: hidden;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity var(--t-fast), color var(--t-fast);
+  border-radius: 2px;
 }
-.tab:hover .tab__close { visibility: visible; }
-.tab__close:hover { color: var(--text); }
+.tab:hover .tab__close,
+.tab__close:hover,
+.tab__close:focus-visible { opacity: 1; color: var(--text); }
 .tabbar__new {
   display: inline-flex;
   align-items: center;
@@ -408,6 +435,9 @@ summary:focus-visible,
 /* ============================================================
    StatusBar
    ============================================================ */
+/* FIX (PR #11 a11y-20): 11px #6b727d failed WCAG AA on small text.
+   We bump the size token (--fs-body) and pull the colour up to
+   --text-dim so it clears the 4.5:1 floor in both themes. */
 .statusbar {
   display: flex;
   align-items: center;
@@ -415,9 +445,9 @@ summary:focus-visible,
   padding: 0 12px;
   background: var(--surface-sunk);
   border-top: 1px solid var(--border);
-  font-size: var(--fs-meta);
+  font-size: var(--fs-body);
   font-family: var(--font-mono);
-  color: var(--text-mute);
+  color: var(--text-dim);
   gap: 16px;
 }
 .statusbar__left, .statusbar__right { display: inline-flex; align-items: center; gap: 8px; }
@@ -450,13 +480,27 @@ summary:focus-visible,
   border-color: var(--border);
   cursor: not-allowed;
 }
+/* FIX (PR #11 a11y-09): white-on-copper (#fff on #b87333) sits at 3.2:1
+   which fails WCAG AA in dark theme for body text. The fix is two-fold:
+   in dark theme we darken the accent for the button background only
+   (var --accent-dim) so the contrast hits ≥4.5:1; in light theme the
+   accent is already darker so plain white sits on var(--accent). The
+   dead `:root[data-theme="light"] .btn--primary { color: #fff }`
+   override (dc-11) is removed — the base rule already sets color:#fff. */
 .btn--primary {
-  color: #fff;
+  color: #ffffff;
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+}
+:root[data-theme="light"] .btn--primary {
   background: var(--accent);
   border-color: var(--accent);
 }
-:root[data-theme="light"] .btn--primary { color: #fff; }
 .btn--primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+:root[data-theme="light"] .btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
   border-color: var(--accent-hover);
 }
@@ -554,6 +598,9 @@ summary:focus-visible,
 .dot--warn  { background: var(--warning); }
 .dot--down  { background: var(--danger); }
 .dot--idle  { background: var(--text-mute); }
+/* FIX (PR #11 dc-1): dedicated colour for the new connecting state so
+   the pulse animation has visible work to do. */
+.dot--connecting { background: var(--accent); }
 .dot--pulse { animation: dot-pulse 1.4s ease-in-out infinite; }
 @keyframes dot-pulse {
   0%, 100% { opacity: 1; }
@@ -615,12 +662,14 @@ summary:focus-visible,
 /* ============================================================
    Dropdown menu
    ============================================================ */
+/* FIX (PR #11 dc-7): drop the box-shadow. Modal is the only element
+   with a shadow; the dropdown now uses a slightly stronger border for
+   separation. */
 .dropdown {
   position: absolute;
   background: var(--surface-elev);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.4);
   padding: 4px 0;
   z-index: 40;
   min-width: 160px;
@@ -632,8 +681,12 @@ summary:focus-visible,
   padding: 6px 12px;
   font-size: var(--fs-body);
   color: var(--text);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
-.dropdown__item:hover { background: var(--surface-hover); }
+.dropdown__item:hover,
+.dropdown__item:focus { background: var(--surface-hover); outline: none; }
 .dropdown__item--danger { color: var(--danger); }
 
 /* ============================================================
@@ -714,6 +767,7 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   margin: 0 0 16px;
   line-height: var(--lh-body);
 }
+.empty__body--mono { font-family: var(--font-mono); font-size: var(--fs-meta); }
 
 /* ============================================================
    Loading pane
@@ -826,6 +880,34 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   padding: 32px;
   max-width: 380px;
   text-align: center;
+}
+/* FIX (PR #11 dc-5): the AuthGate card had no brand presence. Add a
+   monogram chip + brand wordmark above the title so the session-expired
+   screen is visually identifiable as Aura DB rather than a generic 401.
+   Keeps the card calm — accent only on the monogram, brand in plain
+   text. */
+.auth-gate__brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--text);
+}
+.auth-gate__monogram {
+  width: 28px;
+  height: 28px;
+  background: var(--accent-dim);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 .auth-gate__title {
   font-size: var(--fs-title);
@@ -1117,6 +1199,8 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 .rg-footer__page { padding: 0 8px; }
 .rg-footer__size { height: 22px; width: 64px; font-size: var(--fs-meta); }
 
+.rg-toolbar__export--pos { position: relative; }
+
 .rg-toasts {
   position: fixed;
   right: 16px;
@@ -1151,6 +1235,116 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   font-size: 14px;
 }
 .rg-toast__close:hover { color: var(--text); }
+
+/* ============================================================
+   PR #11.5 scoped utility classes — replaces ad-hoc inline `style=`
+   attributes in markup. Keeping these as CSS classes means we never
+   need 'unsafe-inline' for genuine page-style content; the few
+   remaining inline styles in markup are dynamic numeric values
+   (grid-template-columns, transform offsets) which all share the
+   same minimal recipe.
+   ============================================================ */
+.u-spacer { flex: 1; }
+.u-cursor-pointer { cursor: pointer; }
+.u-color-dim { color: var(--text-dim); }
+.u-color-mute { color: var(--text-mute); }
+.u-color-danger { color: var(--danger); }
+.u-color-warning { color: var(--warning); }
+.u-mt-2 { margin-top: 8px; }
+.u-mt-4 { margin-top: 16px; }
+.u-mb-2 { margin-bottom: 8px; }
+.u-ml-2 { margin-left: 8px; }
+.u-row { display: flex; gap: 8px; align-items: center; }
+.u-row--baseline { align-items: baseline; }
+.u-row--end { align-items: flex-end; }
+.u-row--between { justify-content: space-between; }
+.u-row--wrap { flex-wrap: wrap; }
+.u-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.u-grid-2--narrow { max-width: 680px; }
+.u-min-w-200 { min-width: 200px; }
+.u-min-w-240 { min-width: 240px; }
+.u-max-w-380 { max-width: 380px; }
+.u-max-w-520 { max-width: 520px; }
+.u-num-mono { font-family: var(--font-mono); font-size: var(--fs-body); }
+.u-text-right { text-align: right; }
+.u-loading {
+  padding: 24px;
+  color: var(--text-mute);
+  font-size: var(--fs-body);
+}
+.u-form-error {
+  color: var(--danger);
+  margin-top: 12px;
+  font-size: var(--fs-body);
+}
+.u-test-result {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--fs-body);
+  color: var(--text-dim);
+}
+.u-detail-row-label { color: var(--text-dim); width: 120px; }
+
+/* ============================================================
+   Skip link (PR #11 a11y-06, PR #14.5 A11Y-11). Always present;
+   visually hidden until keyboard-focused. Lands on #main-content.
+   ============================================================ */
+.skip-link {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--surface-elev);
+  color: var(--accent);
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 0 0 4px 0;
+  z-index: 200;
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  transform: translateY(-120%);
+  transition: transform var(--t-fast);
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  transform: translateY(0);
+  outline: none;
+}
+
+/* ============================================================
+   PR #11 a11y-08 + PR #14.5 A11Y-7 + PR #15.5 D-7 — narrow viewport
+   pass. Below 720px we collapse the LeftTree into a slide-out drawer
+   (controlled by a class on .shell) and stack the explain inspector
+   columns. Above 720px nothing changes.
+   ============================================================ */
+@media (max-width: 720px) {
+  :root {
+    --tree-w: 0px;
+  }
+  .shell__body {
+    grid-template-columns: 1fr;
+  }
+  .tree {
+    position: fixed;
+    left: 0;
+    top: var(--topnav-h);
+    bottom: var(--statusbar-h);
+    width: 280px;
+    z-index: 30;
+    transform: translateX(-100%);
+    transition: transform var(--t-norm);
+    border-right: 1px solid var(--border);
+  }
+  .shell--tree-open .tree {
+    transform: translateX(0);
+  }
+  .center-pane { border-left: 0; }
+  .topnav__nav { margin-left: 0; }
+  .topnav__btn { padding: 0 8px; font-size: var(--fs-body); }
+  .pane { padding: 12px; }
+  .explain-inspector__body { grid-template-columns: 1fr; }
+  .explain-inspector__right { border-top: 1px solid var(--border); }
+  .history__filters > * { flex: 1 1 auto; min-width: 0; }
+}
 
 /* ============================================================
    Reduce motion
@@ -1917,6 +2111,8 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   margin-top: 8px;
   font-size: var(--fs-body);
 }
+.analyze-toggle__dialogP { margin: 0 0 12px; color: var(--text-dim); }
+.analyze-toggle__partialHint { margin: 6px 0 0; color: var(--warning); font-size: 12px; }
 .analyze-toggle__confirm {
   display: block;
   width: 100%;

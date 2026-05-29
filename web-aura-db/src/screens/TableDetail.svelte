@@ -37,14 +37,16 @@
 <div class="pane">
   <header class="pane__head">
     <h1 class="pane__title">{t('table.title', { table })}</h1>
-    <span style="flex:1"></span>
+    <span class="u-spacer"></span>
     <Btn variant="primary" onclick={openRows}>{t('rows.title')}</Btn>
   </header>
 
-  <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:16px">
+  <div class="tabledetail__tabs">
     {#each [['columns', t('table.tab.columns')], ['indices', t('table.tab.indices')], ['ddl', t('table.tab.ddl')]] as [k, label] (k)}
       <button
+        type="button"
         class="topnav__btn {activeTab === k ? 'topnav__btn--active' : ''}"
+        aria-pressed={activeTab === k}
         onclick={() => activeTab = k}
       >{label}</button>
     {/each}
@@ -59,9 +61,9 @@
         {#each meta.columns as col (col.name)}
           <tr>
             <td class="num">{col.name}</td>
-            <td class="num" style="color:var(--text-dim)">{col.type}</td>
+            <td class="num u-color-dim">{col.type}</td>
             <td class="num">{col.nullable ? 'yes' : 'no'}</td>
-            <td class="num" style="color:var(--text-mute)">{col.default ?? '—'}</td>
+            <td class="num u-color-mute">{col.default ?? '—'}</td>
           </tr>
         {/each}
       </tbody>
@@ -83,3 +85,12 @@
     <pre class="code">{meta.ddl}</pre>
   {/if}
 </div>
+
+<style>
+  .tabledetail__tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+</style>

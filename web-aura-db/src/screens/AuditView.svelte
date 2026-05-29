@@ -37,8 +37,8 @@
 <div class="pane">
   <header class="pane__head">
     <h1 class="pane__title">{t('audit.title')}</h1>
-    <span style="flex:1"></span>
-    <div style="min-width:240px">
+    <span class="u-spacer"></span>
+    <div class="u-min-w-240">
       <SelectField bind:value={connId} options={options} placeholder="Choose a connection" />
     </div>
   </header>
@@ -53,10 +53,10 @@
       <tbody>
         {#each events as e (e.id)}
           <tr>
-            <td class="num" style="color:var(--text-mute)">{e.at || ''}</td>
+            <td class="num u-color-mute">{e.at || ''}</td>
             <td class="num">{e.actor || ''}</td>
-            <td class="num" style="color:var(--text-dim)">{e.action || ''}</td>
-            <td class="num" style="color:var(--text-mute)">{e.detail || ''}</td>
+            <td class="num u-color-dim">{e.action || ''}</td>
+            <td class="num u-color-mute">{e.detail || ''}</td>
           </tr>
         {/each}
       </tbody>
