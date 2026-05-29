@@ -19,9 +19,10 @@
   // load it so non-/query routes never pay that tax. Vite splits the
   // import into its own chunk; loaded on demand when the user navigates
   // to /connections/:id/query.
-  import HistoryView from './screens/HistoryView.svelte'
   import AuditView from './screens/AuditView.svelte'
   import AccountScreen from './screens/AccountScreen.svelte'
+  // PR #15: command palette + lazy history screen.
+  import CommandPalette from './lib/components/CommandPalette.svelte'
 
   /** @type {any} */
   let SqlEditorComp = $state(null)
@@ -57,6 +58,25 @@
   }
   $effect(() => {
     if (routeState.name === 'explain') ensureExplainInspector()
+  })
+
+  // PR #15: HistoryScreen is lazy-loaded so the filter + table grid don't
+  // ship in the initial bundle. Loaded on first /history navigation.
+  /** @type {any} */
+  let HistoryScreenComp = $state(null)
+  let historyLoading = $state(false)
+  async function ensureHistoryScreen() {
+    if (HistoryScreenComp || historyLoading) return
+    historyLoading = true
+    try {
+      const mod = await import('./screens/HistoryScreen.svelte')
+      HistoryScreenComp = mod.default
+    } finally {
+      historyLoading = false
+    }
+  }
+  $effect(() => {
+    if (routeState.name === 'history') ensureHistoryScreen()
   })
 
   onMount(() => {
@@ -100,7 +120,11 @@
         <div style="padding:24px;color:var(--text-mute,#888)">Loading EXPLAIN inspector…</div>
       {/if}
     {:else if routeState.name === 'history'}
-      <HistoryView />
+      {#if HistoryScreenComp}
+        <HistoryScreenComp />
+      {:else}
+        <div style="padding:24px;color:var(--text-mute,#888)">Loading history…</div>
+      {/if}
     {:else if routeState.name === 'audit'}
       <AuditView />
     {:else if routeState.name === 'account'}
@@ -109,4 +133,5 @@
       <WelcomeScreen />
     {/if}
   </AppShell>
+  <CommandPalette />
 {/if}

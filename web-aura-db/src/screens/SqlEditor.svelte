@@ -36,6 +36,12 @@
   import { splitStatements, getStatementAtCursor } from '../lib/sqlEditor/splitStatements.js'
   import { register as registerExec, complete as completeExec, cancel as cancelExec, cancelAll as cancelAllExec, isExecuting } from '../lib/sqlEditor/execRegistry.svelte.js'
   import { loadSchemas, setEngine as setCacheEngine, invalidate as invalidateSchemaCache } from '../lib/sqlEditor/schemaCache.svelte.js'
+  // PR #15: cross-route handoff from the palette / history screen. Mirror of openExplain.
+  import { consumePending } from '../lib/replay.js'
+  // C1: when the editor is already mounted for the target connection,
+  // onMount won't fire on the next replayInEditor call — watch the
+  // reactive tick bus and consume on each bump.
+  import { editorPending } from '../lib/palette.svelte.js'
 
   const id = $derived(routeState.params.id)
   /** @type {ReturnType<typeof createClassifierStore> | null} */
@@ -106,6 +112,14 @@
   onMount(async () => {
     lastConnId = id
     await initConnection(id)
+    // PR #15: replay handoff from palette / history. Stale or
+    // conn-mismatched payloads are dropped silently inside consumePending.
+    const pending = consumePending(id)
+    if (pending && pending.statement) {
+      // loadIntoEditor calls setDoc which assumes editorRef is mounted;
+      // tick once to let CodeMirrorPane finish its onMount.
+      queueMicrotask(() => { loadIntoEditor(pending.statement) })
+    }
   })
 
   // EXEC-6: connection switch via route change must flush the engine /
@@ -128,6 +142,25 @@
     statusMsg = ''
     lastConnId = cid
     initConnection(cid)
+  })
+
+  // C1: react to palette / history-screen replay handoffs that fire
+  // while this editor is already mounted for the target connection.
+  // onMount only fires once per mount, so a same-conn replay can't be
+  // picked up by the onMount-based consumePending path alone. We track
+  // the bumped tick and ignore the initial value (set at mount via the
+  // onMount path above).
+  let _seenTick = $state(/** @type {number|null} */(null))
+  $effect(() => {
+    const t = editorPending.tick
+    // Skip the first observation — onMount has already drained the slot.
+    if (_seenTick === null) { _seenTick = t; return }
+    if (t === _seenTick) return
+    _seenTick = t
+    const pending = consumePending(id)
+    if (pending && pending.statement) {
+      queueMicrotask(() => { loadIntoEditor(pending.statement) })
+    }
   })
 
   onDestroy(() => {

@@ -1608,6 +1608,210 @@ below.
 
 ---
 
+## Source: PR #15 adversarial review (workflow run wf_c284e2fc-e26)
+
+The 4-lens review of the Command Palette + History sidebar overhaul
+(`web-aura-db/` CommandPalette + palette.svelte.js fuzzy matcher /
+registry / handoff, HistoryScreen role=table grid, StarButton optimistic
+rollback, cross-connection history fanout, sessionStorage replay handoff
+into SqlEditor, Cmd-K / Cmd-Shift-K / `/` actions-only / Cmd-Backspace
+keybindings) produced 41 findings (0 critical, 6 high, 12 medium, 14
+low, 9 nit) across CORRECTNESS, A11Y, DESIGN COHERENCE, and INTEGRATION
+lenses. After dedupe + triage: 4 must-fix items landed in PR #15 itself
+— C1/INT-1 (palette replay handoff: same-tab same-connection replay no
+longer silently drops; `palette.pendingReplay` $state slot watched by
+SqlEditor's $effect so the flagship "click Recent to replay" works when
+SqlEditor is already mounted on the target connection; sessionStorage
+retained only for cross-tab inheritance; `consumePending(id)` also fired
+from the conn-switch $effect so same-tab cross-conn replay is covered),
+C2 (groupBySection score ordering: when `palette.query` is non-empty
+the palette renders `cmds` as a flat score-sorted list so Enter and the
+cursor land on the user's best match instead of the first item in a
+fixed ORDER bucket — section grouping retained only for the empty-query
+browse view), A11Y-1 (palette dialog focus trap: onKeydown now
+intercepts Tab/Shift-Tab and preventDefault keeps focus on the search
+input so keyboard-only and SR users can no longer silently activate
+page-behind topbar/tree controls while the modal visually occludes
+them; matches the existing Esc + focus-restore-on-close plumbing),
+A11Y-3 (HistoryScreen ARIA grid/table: dropped the role=table + bare
+spans + tabindex=0-row hybrid in favor of a native
+`<table><thead><tbody>` with an explicit per-row "Replay" button —
+removes the dual tab-stop problem, fixes the spec-invalid no-role=cell
+markup, and the star button's onkeydown now stopPropagation matches
+its onclick). The remaining 37 findings are deferred below.
+
+### Deferred high findings — PR #15.5
+
+- **A11Y-2** — Dialog has no `aria-describedby`; footer kbd hints are
+  `aria-hidden`; reason: high a11y severity but single-lens (A11Y only)
+  — combobox/listbox core semantics are correct, so AT users navigate
+  but get no instruction text. Either drop `aria-hidden` on the hint
+  row and wire `aria-describedby` to it, or add an SR-only description
+  paragraph. **Target:** PR #11.5 (a11y polish pass).
+
+### Deferred medium findings — PR #15.5
+
+- **C3** — Cmd+Enter (new tab) leaves `editor:pending` set in the
+  source tab; reason: medium-severity edge case in the newTab replay
+  flow — only causes data loss if the user returns to `/query` in the
+  same tab within the 30s TTL. Single-lens CORRECTNESS finding.
+  **Target:** PR #15.5 (clear sessionStorage in the source tab after
+  the newTab handoff resolves).
+- **C4/INT-2** — Cross-connection history fanout silently drops
+  connections beyond cap 25; reason: reinforced across CORRECTNESS and
+  INTEGRATION lenses but medium severity — affects power users with
+  >25 connections only, and the failure is silent data
+  incompleteness (not corruption). Add a UI banner / "showing first
+  25 connections" affordance. **Target:** PR #15.5.
+- **C5** — `Cmd-K` toggles palette while the user types in any input;
+  reason: documented convention from Linear / Raycast; benign today
+  because no current input collides with the chord, but flagged as a
+  forward-compat concern. **Target:** PR #15.5 (scope-aware keymap or
+  accept as documented convention).
+- **A11Y-4** — Star button missing `aria-pressed`; reason: single-lens
+  medium a11y polish — state is still announced via the `aria-label`
+  flip ("Star" ↔ "Starred"), but `aria-pressed` is the canonical
+  toggle pattern. **Target:** PR #11.5 (a11y polish pass).
+- **A11Y-5** — Date-range segmented buttons missing `aria-pressed`;
+  reason: single-lens medium a11y polish — visual selected state is
+  present but not exposed in the AX tree. **Target:** PR #11.5 (a11y
+  polish pass).
+- **A11Y-6** — Result-count `aria-live` is unthrottled and not
+  pluralised; reason: SR verbosity issue ("1 results", spam on every
+  keystroke), not blocking. Throttle the live-region update to
+  ~250ms and pluralise the copy. **Target:** PR #11.5 (a11y polish
+  pass).
+- **A11Y-7** — `Cmd+Shift+K` tree-filter shortcut missing
+  `aria-keyshortcuts` / visible hint; reason: discoverability medium —
+  works for users who know the chord, invisible to everyone else.
+  **Target:** PR #15.5.
+- **A11Y-8** — `/` actions-only mode has no visible or accessible
+  filter indication; reason: mode indicator missing — functionality
+  works (registry filtered to Actions section), but neither the
+  visual chrome nor an `aria-live` region tells the user the palette
+  is in actions-only mode. **Target:** PR #15.5.
+- **A11Y-9** — History row + nested star button create dual tab stops;
+  reason: medium severity but the role=table + native Replay button
+  refactor in A11Y-3 already removes the row-level tab stop; this
+  entry exists as a regression guard for the per-row star control.
+  **Target:** PR #11.5 (a11y polish pass).
+- **INT-4** — Cross-connection fanout surfaces 403 / permission errors
+  as empty data; reason: partial-failure signal missing — a connection
+  the user has lost access to silently drops out of the merged
+  results. Add a per-connection error badge in the palette footer or
+  a toast on first denial. **Target:** PR #15.5.
+- **D-2** — Star icon: filled vs unfilled use the same glyph,
+  color-only differentiation; reason: design polish — would be
+  reinforced by A11Y on the color-only signal lens, but A11Y-4 flagged
+  `aria-pressed` not the glyph variant. Swap to outline vs filled
+  glyph. **Target:** PR #15.5.
+- **D-3** — Hard-coded star + error colors bypass the accent token
+  system; reason: token discipline issue surfaced by the design lens —
+  no functional impact, but drifts from the rest of the SPA's accent
+  palette. **Target:** PR #15.5.
+- **D-4** — Palette has no loading state during `primeHistoryCache`
+  fanout; reason: medium polish — first open of the palette shows a
+  brief empty state before the fanout resolves; subsequent opens use
+  cached data so the issue is open-once. **Target:** PR #15.5.
+- **D-5** — Saved-queries preview shows raw multi-line SQL without
+  normalisation; reason: medium polish — multi-statement saves
+  collapse the palette row into a tall block. One-line `.replace(/
+  \s+/g, ' ').trim()` normaliser. **Target:** PR #15.5.
+
+### Deferred low findings — PR #15.5
+
+- **C6** — Optimistic star rollback matches by `entry.id` collapses
+  undefined IDs; reason: low severity defensive coding — unlikely in
+  practice (the server should always assign an ID before the optimistic
+  flip), but a future code path that calls star() before persistence
+  would alias every undefined-id row together. **Target:** PR #15.5.
+- **C7/D-1** — Connection commands duplicate the engine name in both
+  subtitle and hint; reason: reinforced across CORRECTNESS and DESIGN
+  lenses but visual polish only — not a correctness bug. Pick one
+  position for the engine label. **Target:** PR #15.5.
+- **A11Y-10** — Listbox section headers as non-option siblings of
+  `role=option`; reason: listbox owns-children rule edge case — the
+  ARIA spec requires `role=listbox` children to be `role=option` /
+  `role=group`. Either wrap each section in `role=group` with
+  `aria-label` from the header, or move headers out of the listbox.
+  **Target:** PR #11.5 (a11y polish pass).
+- **A11Y-11/D-11** — Palette row titles truncate without a `title=`
+  attribute; reason: reinforced across A11Y and DESIGN lenses but low
+  severity polish — long connection / history titles ellipsize with
+  no hover-reveal. **Target:** PR #11.5 (a11y polish pass).
+- **A11Y-12** — Palette input lacks an explicit accessible label;
+  reason: combobox inherits its name from the dialog title today,
+  which is marginal AT impact but spec-fragile. Add an explicit
+  `aria-label="Search commands"` to the input. **Target:** PR #11.5
+  (a11y polish pass).
+- **A11Y-13** — History row Enter-to-replay is undocumented for AT;
+  reason: SR discoverability — sighted users see the row hint, SR
+  users have no announcement that Enter replays. **Target:** PR #11.5
+  (a11y polish pass).
+- **INT-6** — Rapid Cmd+Enter opens multiple tabs reading the
+  last-written `sessionStorage`; reason: rapid-fire fanout edge case
+  where N quick newTab handoffs all observe the most recent pending
+  entry rather than their own. Bounded by user input speed. **Target:**
+  PR #15.5.
+- **INT-7** — `loadIntoEditor` clobbers an unsaved buffer with no
+  confirmation; reason: pre-existing pattern in the codebase (the
+  sidebar already does this); PR #15 widens the surface (palette
+  replay now triggers it from more places) but does not introduce the
+  destructive default. Pair with EXEC-10's dirty-check follow-up.
+  **Target:** PR #13.5 (dirty-buffer confirmation overhaul).
+- **INT-8** — `primeHistoryCache` TOCTOU on rapid connection switches;
+  reason: brief stale-data window between switch and cache refill —
+  replay correctness is unaffected because the connId is validated
+  before navigation. **Target:** PR #15.5.
+- **D-6** — Palette selected-row `border-left: 3px` vs tree `2px`;
+  reason: single-lens low polish — selection accent thickness drifts
+  between the two surfaces. **Target:** PR #15.5.
+- **D-7** — HistoryScreen filter row reflows at narrow viewport;
+  reason: responsive polish — date-range buttons + connection select
+  wrap awkwardly below ~720px. Overlaps with the broader narrow-
+  viewport gap. **Target:** PR #11.5 (responsive a11y pass).
+- **D-8** — Palette result-row icon column is oversized for the
+  13-14px glyphs it holds; reason: single-lens low polish — extra
+  horizontal whitespace per row. **Target:** PR #15.5.
+- **D-9** — Date-range control style is ambiguous (between pill and
+  tab); reason: single-lens low design coherence — visual convention
+  doesn't match either pattern fully. **Target:** PR #15.5.
+- **D-10** — Palette doesn't show its own open shortcut (`Cmd+K`) in
+  the footer; reason: low discoverability — every other shortcut
+  appears in the hint row except the one that opened the palette.
+  **Target:** PR #15.5.
+
+### Deferred nit findings — PR #15.5
+
+- **A11Y-14** — Palette input missing `inputmode` / `autocapitalize`
+  for mobile; reason: mobile UX nit — web-aura-db is desktop-targeted
+  today. **Target:** PR #11.5 (mobile a11y pass).
+- **A11Y-15** — Empty-state in the palette uses non-live divs;
+  reason: minor SR consistency nit — the empty state appears
+  synchronously but isn't announced when the query string changes
+  the result count to zero. **Target:** PR #11.5 (a11y polish pass).
+- **INT-9** — CommandPalette is bundled into the main chunk vs the
+  PR notes' claim that it's lazy-loaded; reason: PR description
+  accuracy nit — no runtime impact, but the bundle budget assertion
+  should reflect reality. **Target:** PR #15.5.
+- **D-12** — Empty-state copy doesn't suggest clearing the filter;
+  reason: copy nit — "No results" without an actionable next step.
+  **Target:** PR #15.5.
+- **D-13** — Section header padding asymmetric (10/4); reason:
+  spacing nit. **Target:** PR #15.5.
+- **D-14** — Backdrop blur 8px is GPU-heavy; reason: performance nit —
+  visual cost is similar at 4px on the systems where blur is the
+  expensive operation. **Target:** PR #15.5.
+- **C8** — Refutation: cross-tab `sessionStorage` isolation; reason:
+  explicit refutation entry, no action required. The pending-replay
+  handoff is correctly scoped to the current tab. **Target:** none.
+- **C9** — Refutation: `fuzzy.match` empty-query path; reason:
+  explicit refutation entry, no action required. The matcher
+  correctly returns the full registry (not an empty slice) for an
+  empty query. **Target:** none.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics
