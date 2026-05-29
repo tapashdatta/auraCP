@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -96,11 +97,26 @@ func TestIntegration_MySQL_ReadInsertUpdateDelete(t *testing.T) {
 
 	// Create scratch table.
 	tableName := "aura_rows_it_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// L5: defensive guardrail — never DROP a table that doesn't
+	// match the package's scratch-table prefix. Protects against a
+	// future refactor accidentally swapping `tableName` for a real
+	// table name.
+	if !strings.HasPrefix(tableName, "aura_rows_it_") {
+		t.Fatalf("L5 guardrail: refusing to use scratch tableName %q", tableName)
+	}
 	createSQL := "CREATE TABLE " + tableName + " (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(64) NOT NULL)"
 	if _, err := conn.Exec(ctx, driver.Limits{Timeout: 10 * time.Second}, createSQL); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-	defer conn.Exec(ctx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE "+tableName)
+	// M15: cleanup must use a fresh context — the test's `ctx` may
+	// already be canceled / deadline-exceeded by the time defer runs,
+	// which would leave the scratch table behind to poison the next
+	// run.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(cleanupCtx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE "+tableName)
+	})
 
 	dbName := os.Getenv("DBADMIN_TEST_MYSQL_DB")
 
@@ -175,11 +191,20 @@ func TestIntegration_PG_ReadInsertUpdateDelete(t *testing.T) {
 	defer cancel()
 
 	tableName := "aura_rows_it_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// L5: defensive guardrail.
+	if !strings.HasPrefix(tableName, "aura_rows_it_") {
+		t.Fatalf("L5 guardrail: refusing to use scratch tableName %q", tableName)
+	}
 	createSQL := "CREATE TABLE public." + tableName + " (id SERIAL PRIMARY KEY, name TEXT NOT NULL)"
 	if _, err := conn.Exec(ctx, driver.Limits{Timeout: 10 * time.Second}, createSQL); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-	defer conn.Exec(ctx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE public."+tableName)
+	// M15: fresh ctx for cleanup.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(cleanupCtx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE public."+tableName)
+	})
 
 	// Insert.
 	_, err := op.Insert(ctx, rows.InsertOpts{
@@ -233,11 +258,20 @@ func TestIntegration_PG_NoPK_Refused(t *testing.T) {
 	defer cancel()
 
 	tableName := "aura_rows_nopk_" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// L5: defensive guardrail.
+	if !strings.HasPrefix(tableName, "aura_rows_nopk_") {
+		t.Fatalf("L5 guardrail: refusing to use scratch tableName %q", tableName)
+	}
 	createSQL := "CREATE TABLE public." + tableName + " (id INT, name TEXT)"
 	if _, err := conn.Exec(ctx, driver.Limits{Timeout: 10 * time.Second}, createSQL); err != nil {
 		t.Fatalf("CREATE TABLE: %v", err)
 	}
-	defer conn.Exec(ctx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE public."+tableName)
+	// M15: fresh ctx for cleanup.
+	t.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = conn.Exec(cleanupCtx, driver.Limits{Timeout: 5 * time.Second}, "DROP TABLE public."+tableName)
+	})
 
 	_, err := op.UpdateByPK(ctx, rows.UpdateByPKOpts{
 		Schema: "public", Table: tableName,

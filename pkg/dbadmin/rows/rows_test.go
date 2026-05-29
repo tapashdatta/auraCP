@@ -27,6 +27,11 @@ type stubConn struct {
 	queryErr  error
 	execResp  driver.Result
 	execErr   error
+
+	// nextOverride, when non-nil, replaces the default stubRows.Next
+	// behavior so tests can inject driver.ErrCapped / partial-result
+	// scenarios (used by the H1 / PR #5.5 tests).
+	nextOverride func(idx int) ([]any, error)
 }
 
 type recordedCall struct {
@@ -43,7 +48,7 @@ func (c *stubConn) Query(ctx context.Context, _ driver.Limits, sqlText string, a
 	if c.queryErr != nil {
 		return nil, c.queryErr
 	}
-	return &stubRows{rows: c.queryResp, cols: c.queryCols}, nil
+	return &stubRows{rows: c.queryResp, cols: c.queryCols, override: c.nextOverride}, nil
 }
 
 func (c *stubConn) Exec(ctx context.Context, _ driver.Limits, sqlText string, args ...any) (driver.Result, error) {
@@ -61,13 +66,19 @@ func (c *stubConn) ServerVersion(ctx context.Context) (string, error)    { retur
 func (c *stubConn) Close() error                                         { return nil }
 
 type stubRows struct {
-	rows [][]any
-	cols []driver.ColumnInfo
-	idx  int
+	rows     [][]any
+	cols     []driver.ColumnInfo
+	idx      int
+	override func(idx int) ([]any, error)
 }
 
 func (r *stubRows) Columns() []driver.ColumnInfo { return r.cols }
 func (r *stubRows) Next(ctx context.Context) ([]any, error) {
+	if r.override != nil {
+		row, err := r.override(r.idx)
+		r.idx++
+		return row, err
+	}
 	if r.idx >= len(r.rows) {
 		return nil, driver.ErrEOF
 	}
@@ -155,7 +166,8 @@ func TestRead_BasicMySQL(t *testing.T) {
 		t.Fatalf("expected 1 Query call, got %d", len(c.queryLog))
 	}
 	got := normalize(c.queryLog[0].sql)
-	want := "SELECT `id`, `name` FROM `app`.`users` LIMIT 10"
+	// H1: Read asks the backend for LIMIT+1 so it can detect overflow.
+	want := "SELECT `id`, `name` FROM `app`.`users` LIMIT 11"
 	if got != want {
 		t.Errorf("SQL = %q,\n want %q", got, want)
 	}
@@ -185,7 +197,8 @@ func TestRead_Postgres_FilterSortLimitOffset(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := normalize(c.queryLog[0].sql)
-	want := `SELECT "id", "name" FROM "public"."users" WHERE "name" ILIKE $1 AND "id" > $2 ORDER BY "name" ASC LIMIT 50 OFFSET 100`
+	// H1: LIMIT+1.
+	want := `SELECT "id", "name" FROM "public"."users" WHERE "name" ILIKE $1 AND "id" > $2 ORDER BY "name" ASC LIMIT 51 OFFSET 100`
 	if got != want {
 		t.Errorf("SQL = %q\n want %q", got, want)
 	}
@@ -273,7 +286,8 @@ func TestRead_IsNullAndIsNotNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := normalize(c.queryLog[0].sql)
-	want := "SELECT `x` FROM `app`.`t` WHERE `x` IS NULL AND `x` IS NOT NULL LIMIT 10"
+	// H1: LIMIT+1.
+	want := "SELECT `x` FROM `app`.`t` WHERE `x` IS NULL AND `x` IS NOT NULL LIMIT 11"
 	if got != want {
 		t.Errorf("SQL = %q\n want %q", got, want)
 	}
@@ -299,7 +313,8 @@ func TestRead_InWithSlice(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := normalize(c.queryLog[0].sql)
-	want := `SELECT "id" FROM "public"."t" WHERE "id" IN ($1, $2, $3) LIMIT 10`
+	// H1: LIMIT+1.
+	want := `SELECT "id" FROM "public"."t" WHERE "id" IN ($1, $2, $3) LIMIT 11`
 	if got != want {
 		t.Errorf("SQL = %q\n want %q", got, want)
 	}

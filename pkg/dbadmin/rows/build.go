@@ -2,8 +2,10 @@ package rows
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/auracp/auracp/pkg/dbadmin"
 )
@@ -20,6 +22,13 @@ import (
 // quote character itself. The validator's allowlist guarantees no
 // quote character can appear; this function only needs to add the
 // boundary.
+//
+// L8: the default branch is unreachable in practice because every
+// public entrypoint validates the engine. Returning the bare name
+// rather than panicking keeps a regression from corrupting SQL into
+// a syntactically valid-but-wrong query; the caller will see whatever
+// runtime error the unquoted name triggers (parse error / reserved
+// word collision), which is loud and recoverable.
 func quoteIdent(name string, engine dbadmin.EngineKind) string {
 	switch engine {
 	case dbadmin.EngineMariaDB:
@@ -46,6 +55,19 @@ func placeholder(n int, engine dbadmin.EngineKind) string {
 		return fmt.Sprintf("$%d", n)
 	}
 	return "?"
+}
+
+// L1: opSQL maps simple binary ops to their canonical SQL token.
+// Centralises the table so future engine-specific overrides (e.g.
+// rendering NEQ as `<>` on some legacy DBs) land in one place.
+var opSQL = map[Op]string{
+	OpEq:  "=",
+	OpNeq: "!=",
+	OpLt:  "<",
+	OpLte: "<=",
+	OpGt:  ">",
+	OpGte: ">=",
+	OpLike: "LIKE",
 }
 
 // ─── SELECT ──────────────────────────────────────────────────────────
@@ -103,7 +125,11 @@ func buildSelect(
 	}
 
 	// LIMIT + OFFSET. Both engines accept this form; pgx maps to
-	// the same parse tree.
+	// the same parse tree. Values are operator-supplied INTs validated
+	// up-front (>= 0 + cap); Go's int type cannot encode a `;` or
+	// quote character so inlining is safe — auditors should still
+	// read this branch knowing the upstream validators in rows.go +
+	// BuildSelect run first.
 	b.WriteString(fmt.Sprintf(" LIMIT %d", limit))
 	if offset > 0 {
 		b.WriteString(fmt.Sprintf(" OFFSET %d", offset))
@@ -167,7 +193,7 @@ func buildPredicate(engine dbadmin.EngineKind, p Predicate, idx int) (string, []
 	col := quoteIdent(p.Column, engine)
 	switch p.Op {
 	case OpEq, OpNeq, OpLt, OpLte, OpGt, OpGte, OpLike:
-		return fmt.Sprintf("%s %s %s", col, p.Op, placeholder(idx, engine)),
+		return fmt.Sprintf("%s %s %s", col, opSQL[p.Op], placeholder(idx, engine)),
 			[]any{p.Value}, nil
 
 	case OpILike:
@@ -176,10 +202,13 @@ func buildPredicate(engine dbadmin.EngineKind, p Predicate, idx int) (string, []
 				[]any{p.Value}, nil
 		}
 		// MySQL has no ILIKE; rewrite to LOWER(col) LIKE LOWER(?).
+		// L3: this rewrite is correct for ASCII but locale-dependent
+		// for multibyte. See Op docstring.
 		return fmt.Sprintf("LOWER(%s) LIKE LOWER(%s)", col, placeholder(idx, engine)),
 			[]any{p.Value}, nil
 
 	case OpIsNull:
+		// L9: Value is ignored on IS NULL / IS NOT NULL.
 		return fmt.Sprintf("%s IS NULL", col), nil, nil
 	case OpIsNotNull:
 		return fmt.Sprintf("%s IS NOT NULL", col), nil, nil
@@ -189,15 +218,25 @@ func buildPredicate(engine dbadmin.EngineKind, p Predicate, idx int) (string, []
 		if err != nil {
 			return "", nil, fmt.Errorf("%w: %v", ErrInvalidPredicate, err)
 		}
+		// H5: cap the IN list to keep us safely below Postgres's
+		// 65535-bind-parameter ceiling and MySQL's max_allowed_packet.
+		if len(values) > maxInListSize {
+			return "", nil, fmt.Errorf("%w: IN list has %d entries (max %d)",
+				ErrInvalidPredicate, len(values), maxInListSize)
+		}
 		if len(values) == 0 {
-			// Empty IN list: in SQL this means "match nothing" (IN)
-			// or "match everything" (NOT IN). We emit a literal
-			// FALSE / TRUE clause respectively to keep the bind
-			// parameter list non-empty.
-			if p.Op == OpIn {
-				return "1=0", nil, nil
+			// M3: empty NOT IN previously emitted 1=1, which silently
+			// turns a blocklist filter into "match everything" — a
+			// dangerous footgun if the operator's intent was to
+			// exclude. Reject explicitly; callers can branch upstream
+			// and omit the predicate when the slice is empty.
+			if p.Op == OpNotIn {
+				return "", nil, fmt.Errorf("%w: NOT IN with empty list (would match every row)",
+					ErrInvalidPredicate)
 			}
-			return "1=1", nil, nil
+			// Empty IN: emit literal FALSE. The bind list is empty by
+			// design; this still keeps the WHERE arity stable.
+			return "1=0", nil, nil
 		}
 		// Build (?, ?, ?) or ($1, $2, $3).
 		ph := make([]string, len(values))
@@ -213,21 +252,71 @@ func buildPredicate(engine dbadmin.EngineKind, p Predicate, idx int) (string, []
 	return "", nil, fmt.Errorf("%w: unknown op %q", ErrInvalidPredicate, p.Op)
 }
 
-// flattenInValue accepts []any, []string, []int, []int64, etc., and
-// returns []any for placeholder binding.
+// flattenInValue accepts a slice of one of the supported element types
+// and returns []any for placeholder binding. Returns an error for nil,
+// non-slice, nested slice (L2), or NaN/Inf inside []float64/[]float32/
+// []any (M4).
+//
+// Supported element types (M5):
+//
+//	[]any, []string, []bool,
+//	[]int, []int8, []int16, []int32, []int64,
+//	[]uint, []uint8 (== []byte, NOT supported — ambiguous, rejected),
+//	[]uint16, []uint32, []uint64,
+//	[]float32, []float64,
+//	[]time.Time
+//
+// []byte is intentionally rejected: it is the wire shape of a single
+// blob value, not an IN list — accepting it would silently turn one
+// blob into N single-byte predicates.
 func flattenInValue(v any) ([]any, error) {
 	switch x := v.(type) {
 	case nil:
 		return nil, fmt.Errorf("IN value is nil")
+
 	case []any:
-		return x, nil
+		out := make([]any, len(x))
+		for i, el := range x {
+			if err := rejectNonScalar(el); err != nil {
+				return nil, err
+			}
+			out[i] = el
+		}
+		return out, nil
+
 	case []string:
 		out := make([]any, len(x))
 		for i, s := range x {
 			out[i] = s
 		}
 		return out, nil
+
+	case []bool:
+		out := make([]any, len(x))
+		for i, b := range x {
+			out[i] = b
+		}
+		return out, nil
+
 	case []int:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+	case []int8:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+	case []int16:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+	case []int32:
 		out := make([]any, len(x))
 		for i, n := range x {
 			out[i] = n
@@ -239,15 +328,90 @@ func flattenInValue(v any) ([]any, error) {
 			out[i] = n
 		}
 		return out, nil
-	case []float64:
+
+	case []uint:
 		out := make([]any, len(x))
 		for i, n := range x {
 			out[i] = n
 		}
 		return out, nil
+	case []uint16:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+	case []uint32:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+	case []uint64:
+		out := make([]any, len(x))
+		for i, n := range x {
+			out[i] = n
+		}
+		return out, nil
+
+	case []float32:
+		out := make([]any, len(x))
+		for i, n := range x {
+			if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
+				return nil, fmt.Errorf("IN value contains non-finite float32 at index %d", i)
+			}
+			out[i] = n
+		}
+		return out, nil
+	case []float64:
+		out := make([]any, len(x))
+		for i, n := range x {
+			if math.IsNaN(n) || math.IsInf(n, 0) {
+				return nil, fmt.Errorf("IN value contains non-finite float64 at index %d", i)
+			}
+			out[i] = n
+		}
+		return out, nil
+
+	case []time.Time:
+		out := make([]any, len(x))
+		for i, t := range x {
+			out[i] = t
+		}
+		return out, nil
+
+	case []byte:
+		// Explicit reject (L2 / M5 corner case). []byte is the wire
+		// shape of a single blob value, not an IN list of bytes.
+		return nil, fmt.Errorf("IN value of type []byte is ambiguous; pass [][]byte or wrap in []any")
+
 	default:
 		return nil, fmt.Errorf("IN value must be a slice, got %T", v)
 	}
+}
+
+// rejectNonScalar inspects one element of a []any IN list and returns
+// an error if it's a nested slice (L2) or a non-finite float (M4).
+// Other types are accepted on the assumption the driver can bind them.
+func rejectNonScalar(el any) error {
+	switch x := el.(type) {
+	case nil:
+		return nil
+	case []any, []string, []bool,
+		[]int, []int8, []int16, []int32, []int64,
+		[]uint, []uint16, []uint32, []uint64,
+		[]float32, []float64, []time.Time:
+		return fmt.Errorf("IN value element is a nested slice (%T); flatten before passing", el)
+	case float32:
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return fmt.Errorf("IN value element is non-finite float32")
+		}
+	case float64:
+		if math.IsNaN(x) || math.IsInf(x, 0) {
+			return fmt.Errorf("IN value element is non-finite float64")
+		}
+	}
+	return nil
 }
 
 // ─── UPDATE ──────────────────────────────────────────────────────────
@@ -410,4 +574,24 @@ func buildInsert(
 	}
 	b.WriteString(")")
 	return b.String(), args, nil
+}
+
+// buildInsertReturning is the Postgres-only variant of buildInsert that
+// appends `RETURNING <pk>` so the driver path can populate LastInsertID
+// (H6). The pgx driver does NOT support LastInsertId() — the Postgres
+// protocol doesn't even have an out-of-band "last id" channel — so
+// without RETURNING the panel UI gets LastInsertID=0 and can't refresh
+// the just-inserted row by PK. We call this only when the schema
+// reader confirms exactly one PK column.
+func buildInsertReturning(
+	engine dbadmin.EngineKind,
+	schemaName, table string,
+	values map[string]any,
+	pkCol string,
+) (string, []any, error) {
+	q, args, err := buildInsert(engine, schemaName, table, values)
+	if err != nil {
+		return "", nil, err
+	}
+	return q + " RETURNING " + quoteIdent(pkCol, engine), args, nil
 }
