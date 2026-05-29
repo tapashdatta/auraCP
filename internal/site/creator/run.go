@@ -186,7 +186,7 @@ func SmokeProbe(domain string) error {
 		if err != nil {
 			return err
 		}
-		req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.59")
+		req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.60")
 		resp, err := client.Do(req)
 		if err != nil {
 			// Retryable transients: EOF (catch-all 444 mid-reload),

@@ -962,15 +962,16 @@
         </div>
       {/if}
       {#if site.type === 'php' || site.type === 'wordpress'}
-        <!-- v0.2.47: per-site PHP version switcher. Backend moves the FPM
-             pool file from the old version's pool.d/ to the new one and
-             reloads both fpm services so the unix socket re-binds cleanly. -->
-        <div class="section"><div class="section-h"><div><h3>PHP runtime</h3>
-          <p>Pin this site to a specific PHP version. Install + remove versions in <b>Settings → PHP Versions</b>.</p></div></div>
+        <!-- v0.2.59: per-site PHP version + ini values merged into one
+             card. Both write to the same pool config and reload the
+             same php<ver>-fpm service, so splitting them was overhead. -->
+        <div class="section"><div class="section-h"><div><h3>PHP</h3>
+          <p>Version + per-site ini values · current: PHP {site.phpVersion || '—'}</p></div>
+          {#if phpValuesFlash}<span class="saved-flash">✓ Saved</span>{/if}
+        </div>
           <div class="section-b">
-            <div class="kv"><span class="k">Current</span><span class="v">PHP {site.phpVersion || '—'}</span></div>
             {#if phpRuntimesSite.length === 0}
-              <div class="hint" style="margin-left:0;margin-top:6px">No PHP-FPM versions are installed on this host. Install one from <button type="button" class="linkish" onclick={() => go('instance')}>Settings → PHP Versions</button>.</div>
+              <div class="hint" style="margin-left:0">No PHP-FPM versions installed. Install one from <button type="button" class="linkish" onclick={() => go('instance')}>Settings → PHP Versions</button>.</div>
             {:else}
               <div class="two">
                 <div class="field"><label>
@@ -981,72 +982,61 @@
                     {/each}
                   </select>
                 </label></div>
+                <div class="field"><label>
+                  <span class="label-text">memory_limit <span class="hint">e.g. 256M, 1G</span></span>
+                  <input class="input mono" bind:value={phpValues.memory_limit} placeholder={phpValueDefaults.memory_limit}>
+                </label></div>
               </div>
-              <button class="btn btn-primary" onclick={savePHPVersion} disabled={busy || !phpPick || phpPick === site.phpVersion}>
-                {busy ? 'Switching…' : 'Apply & reload PHP-FPM'}
-              </button>
-              <p class="hint" style="margin:6px 0 0">Briefly drops the old version's socket while the new pool binds — typically &lt; 100 ms. PHP-side settings (memory_limit, etc.) carry over from the panel-managed pool config.</p>
+              <div class="two">
+                <div class="field"><label>
+                  <span class="label-text">max_execution_time <span class="hint">seconds</span></span>
+                  <input class="input mono" bind:value={phpValues.max_execution_time} placeholder={phpValueDefaults.max_execution_time}>
+                </label></div>
+                <div class="field"><label>
+                  <span class="label-text">max_input_time <span class="hint">seconds; -1 = use max_execution_time</span></span>
+                  <input class="input mono" bind:value={phpValues.max_input_time} placeholder={phpValueDefaults.max_input_time}>
+                </label></div>
+              </div>
+              <div class="two">
+                <div class="field"><label>
+                  <span class="label-text">post_max_size <span class="hint">total POST body</span></span>
+                  <input class="input mono" bind:value={phpValues.post_max_size} placeholder={phpValueDefaults.post_max_size}>
+                </label></div>
+                <div class="field"><label>
+                  <span class="label-text">upload_max_filesize <span class="hint">per file</span></span>
+                  <input class="input mono" bind:value={phpValues.upload_max_filesize} placeholder={phpValueDefaults.upload_max_filesize}>
+                </label></div>
+              </div>
+              <div class="two">
+                <div class="field"><label>
+                  <span class="label-text">max_input_vars <span class="hint">count</span></span>
+                  <input class="input mono" bind:value={phpValues.max_input_vars} placeholder={phpValueDefaults.max_input_vars}>
+                </label></div>
+                <div class="field"><label>
+                  <span class="label-text">date.timezone <span class="hint">IANA zone</span></span>
+                  <input class="input mono" bind:value={phpValues['date.timezone']} placeholder={phpValueDefaults['date.timezone']}>
+                </label></div>
+              </div>
+              <div class="two">
+                <div class="field"><label>
+                  <span class="label-text">display_errors <span class="hint">production: Off</span></span>
+                  <select class="select ui" bind:value={phpValues.display_errors}>
+                    <option value="">default (Off)</option>
+                    <option value="Off">Off</option>
+                    <option value="On">On</option>
+                  </select>
+                </label></div>
+                <div class="field"></div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+                <button class="btn btn-primary" onclick={savePHPValues} disabled={phpValuesBusy}>
+                  {phpValuesBusy ? 'Reloading…' : 'Apply values'}
+                </button>
+                <button class="btn btn-ghost" onclick={savePHPVersion} disabled={busy || !phpPick || phpPick === site.phpVersion}>
+                  {busy ? 'Switching…' : 'Switch version'}
+                </button>
+              </div>
             {/if}
-          </div>
-        </div>
-
-        <!-- v0.2.57: per-site PHP runtime values. Operator-requested 8-field
-             form; defaults shown as placeholder ghosts so blanks are
-             self-explanatory. Save → php_settings table → phpruntime.WritePool
-             reloads php<ver>-fpm. Two-column grid on wide screens, stacks on
-             narrow. -->
-        <div class="section"><div class="section-h"><div><h3>PHP runtime values</h3>
-          <p>Per-site overrides for <span class="mono">memory_limit</span>, execution + input timeouts, upload caps, timezone, and error display. Leave any field blank to fall back to the package default.</p></div>
-          {#if phpValuesFlash}<span class="saved-flash">✓ Saved</span>{/if}
-        </div>
-          <div class="section-b">
-            <div class="two">
-              <div class="field"><label>
-                <span class="label-text">memory_limit <span class="hint">e.g. 256M, 512M, 1G</span></span>
-                <input class="input mono" bind:value={phpValues.memory_limit} placeholder={phpValueDefaults.memory_limit}>
-              </label></div>
-              <div class="field"><label>
-                <span class="label-text">max_execution_time <span class="hint">seconds</span></span>
-                <input class="input mono" bind:value={phpValues.max_execution_time} placeholder={phpValueDefaults.max_execution_time}>
-              </label></div>
-            </div>
-            <div class="two">
-              <div class="field"><label>
-                <span class="label-text">max_input_time <span class="hint">seconds; -1 = use max_execution_time</span></span>
-                <input class="input mono" bind:value={phpValues.max_input_time} placeholder={phpValueDefaults.max_input_time}>
-              </label></div>
-              <div class="field"><label>
-                <span class="label-text">max_input_vars <span class="hint">count</span></span>
-                <input class="input mono" bind:value={phpValues.max_input_vars} placeholder={phpValueDefaults.max_input_vars}>
-              </label></div>
-            </div>
-            <div class="two">
-              <div class="field"><label>
-                <span class="label-text">post_max_size <span class="hint">total POST body</span></span>
-                <input class="input mono" bind:value={phpValues.post_max_size} placeholder={phpValueDefaults.post_max_size}>
-              </label></div>
-              <div class="field"><label>
-                <span class="label-text">upload_max_filesize <span class="hint">per file</span></span>
-                <input class="input mono" bind:value={phpValues.upload_max_filesize} placeholder={phpValueDefaults.upload_max_filesize}>
-              </label></div>
-            </div>
-            <div class="two">
-              <div class="field"><label>
-                <span class="label-text">date.timezone <span class="hint">IANA zone, e.g. Europe/London</span></span>
-                <input class="input mono" bind:value={phpValues['date.timezone']} placeholder={phpValueDefaults['date.timezone']}>
-              </label></div>
-              <div class="field"><label>
-                <span class="label-text">display_errors <span class="hint">On / Off — production: Off</span></span>
-                <select class="select ui" bind:value={phpValues.display_errors}>
-                  <option value="">default (Off)</option>
-                  <option value="Off">Off</option>
-                  <option value="On">On</option>
-                </select>
-              </label></div>
-            </div>
-            <button class="btn btn-primary" onclick={savePHPValues} disabled={phpValuesBusy}>
-              {phpValuesBusy ? 'Reloading FPM…' : 'Apply & reload PHP-FPM'}
-            </button>
           </div>
         </div>
       {/if}
