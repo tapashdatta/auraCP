@@ -257,6 +257,67 @@ correctness blockers:
 
 ---
 
+## Source: PR #5 adversarial review (workflow run wf_6e1fdb99-665)
+
+The 4-lens review of the row operations layer (`pkg/dbadmin/rows/`)
+produced 41 findings (0 critical, 7 high, 13 medium, 16 low, 5 nit).
+Seven items landed as must-fix in PR #5 itself; the rest are deferred
+to PR #5.5 (engine-parity & limits hardening) and tracked below.
+
+### Deferred high findings — PR #5.5
+
+- **H1** — Read swallows ErrCapped when Limit == MaxRows. Workaround:
+  use Limit < MaxRows. **Fix in PR #5.5:** request LIMIT+1 from the
+  backend so cap fires only on true overflow, OR treat ErrCapped as a
+  clean stop with a CappedResult{Rows, Capped: true}.
+- **H2** — Count skips identifier validation that Read enforces.
+  **Fix in PR #5.5:** introduce dedicated CountOpts{Schema, Table,
+  Filter} so unused ReadOpts fields cannot be passed.
+- **H5** — Unbounded IN/NOT IN list size. Postgres caps at 65535 bind
+  params. **Fix in PR #5.5:** add maxInListSize ~1000 in flattenInValue.
+- **H6** — Postgres Insert returns LastInsertID=0 (no RETURNING).
+  **Fix in PR #5.5:** rewrite buildInsert for Postgres to add
+  RETURNING <pk> and route via Query.
+- **H8** — OpLike case-sensitivity diverges across engines without doc
+  warning. **Fix in PR #5.5:** document on Op constants + doc.go.
+
+### Deferred medium findings — PR #5.5
+
+- **M1** — Schema-cache staleness on empty Columns + post-ALTER scenarios.
+- **M3** — Empty NOT IN emits 1=1 (matches everything); silently turns
+  blocklist filters into full exposure.
+- **M4** — flattenInValue accepts NaN/Inf in []float64.
+- **M5** — flattenInValue missing []int32/[]uint64/[]time.Time/[]bool cases.
+- **M6** — assertPKMatch doesn't reject nil PK values.
+- **M7** — UpdateByPK allows mutating PK columns.
+- **M8** — Read doesn't assert column-count alignment with the schema reader.
+- **M9** — Count is unbounded; no estimate fallback, no cap, no TTL cache.
+- **M10** — No per-value size cap on Set/Values.
+- **M11** — Operator borrows driver.Conn with no ownership doc.
+- **M14** — Predicate.Value any doesn't enumerate accepted Go types
+  for JSON deserialization.
+- **M15** — Integration-test cleanup uses test's own ctx; cleanup may
+  run against poisoned context.
+
+### Deferred low + nit findings — PR #5.5
+
+- **L1** — opSQL lookup map.
+- **L2** — flattenInValue nested-slice rejection.
+- **L3** — OpILike MySQL collation rewrite warning.
+- **L5** — integration-test scratch-table guardrails.
+- **L6** — LIMIT/OFFSET bound-parameter alternative.
+- **L7** — New() negative-Limits rejection.
+- **L8** — quoteIdent unknown-engine default.
+- **L9** — Predicate.Value ignored for IsNull.
+- **L10** — empty IN error vs silent 1=0.
+- **L11** — deep OFFSET cap.
+- **L12** — Columns=nil vs []string{} doc.
+- **L13** — cross-package ErrInvalidIdentifier alias.
+- **L14** — composite-PK WHERE-order regression test.
+- **N1** — Op typed-string compile guard.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics
