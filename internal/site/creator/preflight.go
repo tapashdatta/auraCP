@@ -119,9 +119,20 @@ func Preflight(spec *Spec, deps *Deps) error {
 		}
 		// Block accidental loopback proxies — a reverseproxy to
 		// 127.0.0.1:<panel-port> would bypass auth.
+		//
+		// v0.2.58: refined message. The "use a node/python site type"
+		// suggestion confused operators who legitimately want to front
+		// a separate local backend (Adminer, Grafana, a Docker
+		// container on 127.0.0.1:3000, etc.). The block is still right
+		// for the auth-bypass class — the OS firewall + the panel's
+		// own bind-to-loopback design make a loopback reverse-proxy
+		// nearly always a misconfiguration — but the message now
+		// names the actual fix: bind the backend to the host's LAN/
+		// public address and proxy there, or run it as a managed
+		// node/python site so auracp owns its port allocator.
 		host := u.Hostname()
 		if host == "127.0.0.1" || host == "localhost" || strings.HasPrefix(host, "127.") {
-			return fmt.Errorf("upstream: loopback addresses are blocked for safety (use a node/python site type if you need to expose a local service)")
+			return fmt.Errorf("upstream: loopback addresses (%s) are blocked. A reverse proxy to 127.0.0.1:* would bypass the panel's auth boundary. Options: (a) bind your backend to a non-loopback interface and proxy there; (b) create a node/python site so auracp manages the port allocator; (c) for a private backend on this host, edit the vhost directly under Vhost → freeform once the site exists", host)
 		}
 	case "nodejs":
 		if spec.StartFile == "" {

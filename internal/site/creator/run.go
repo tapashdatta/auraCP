@@ -164,7 +164,7 @@ func SmokeProbe(domain string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.57")
+	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.58")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("probe request: %w", err)

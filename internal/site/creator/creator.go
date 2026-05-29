@@ -186,10 +186,7 @@ func (c *Creator) CreateNginxVhost(ctx context.Context) error {
 	// with `nginx: [emerg] open() "/home/<user>/logs/access.log"
 	// failed (2: No such file or directory)`. The vhost has
 	// `access_log /home/<user>/logs/access.log;` and nginx -t tries to
-	// open the parent dir. osuser.Create does create the dir at user-
-	// creation time, but if anything (orphan user from a previous
-	// failed create, manual filesystem tinkering) leaves it missing,
-	// CreateNginxVhost now self-heals before validation runs.
+	// open the parent dir.
 	if err := os.MkdirAll(paths.LogDir(c.Spec.User), 0o750); err != nil {
 		c.logStep("CreateNginxVhost", t, err)
 		return err
@@ -199,6 +196,20 @@ func (c *Creator) CreateNginxVhost(ctx context.Context) error {
 	// files as the master process (root) for write, so this chown is
 	// for the BACKEND log lines, not nginx access/error.
 	_, _ = c.R.Run(ctx, "chown", c.Spec.User+":"+c.Spec.User, paths.LogDir(c.Spec.User))
+
+	// v0.2.58: the v0.2.57 fix only covered the CURRENT site's log dir
+	// — but `nginx -t` validates EVERY enabled vhost. A single orphan
+	// vhost left behind by a prior failed create (whose user got
+	// deleted by the v0.2.55 rollback, taking /home/<u>/logs/ with it)
+	// poisons every subsequent create with the exact same emerg, no
+	// matter what user/domain the new site uses. Self-heal first:
+	//   - PruneDeadVhosts removes vhost files whose site user is gone
+	//     from /etc/passwd (true orphans — there's no one for them)
+	//   - EnsureLogDirsForEnabledVhosts mkdir's any /home/<u>/logs
+	//     referenced by a SURVIVING vhost. Lets nginx -t pass even if
+	//     a manual `rm -rf` touched a live site's log dir.
+	PruneDeadVhosts()
+	EnsureLogDirsForEnabledVhosts(ctx, c.R)
 	dst := paths.NginxSiteFile(c.Spec.Domain)
 	link := paths.NginxSiteLink(c.Spec.Domain)
 	tmp := dst + ".new"
@@ -220,16 +231,32 @@ func (c *Creator) CreateNginxVhost(ctx context.Context) error {
 		c.logStep("CreateNginxVhost", t, err)
 		return err
 	}
-	if _, err := c.R.Run(ctx, "nginx", "-t"); err != nil {
-		// Rollback.
-		_ = os.Remove(link)
-		if prev != "" {
-			_ = os.Symlink(prev, link)
+	// v0.2.58: heal-on-retry. If `nginx -t` complains about a missing
+	// log file (operator-reported failure mode across all six site
+	// types in v0.2.57), the up-front heal-pass missed it — typically
+	// because a freeform Vhost-tab edit uses a non-template log path.
+	// One retry: mkdir every log dir referenced by any vhost on disk,
+	// then re-run nginx -t. If THAT still fails, the error is real.
+	testErr := func() error {
+		_, e := c.R.Run(ctx, "nginx", "-t")
+		return e
+	}
+	if err := testErr(); err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "/logs/access.log") || strings.Contains(msg, "/logs/error.log") {
+			EnsureLogDirsForEnabledVhosts(ctx, c.R)
+			err = testErr()
 		}
-		_ = os.Remove(tmp)
-		err = fmt.Errorf("nginx config invalid: %w", err)
-		c.logStep("CreateNginxVhost", t, err)
-		return err
+		if err != nil {
+			_ = os.Remove(link)
+			if prev != "" {
+				_ = os.Symlink(prev, link)
+			}
+			_ = os.Remove(tmp)
+			err = fmt.Errorf("nginx config invalid: %w", err)
+			c.logStep("CreateNginxVhost", t, err)
+			return err
+		}
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		c.logStep("CreateNginxVhost", t, err)

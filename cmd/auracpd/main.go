@@ -22,6 +22,7 @@ import (
 	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/phpruntime"
 	"github.com/auracp/auracp/internal/secret"
+	"github.com/auracp/auracp/internal/site/creator"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/internal/system"
 	"github.com/auracp/auracp/internal/updater"
@@ -102,6 +103,23 @@ func main() {
 	node.Reconcile()
 	php := phpruntime.New(runner, st)
 	php.Reconcile()
+
+	// v0.2.58: self-heal nginx state on boot. Two-step:
+	//   1. PruneDeadVhosts removes vhost files whose site user no
+	//      longer exists in /etc/passwd. Catches partial-cleanup state
+	//      from pre-v0.2.55 (rollback wasn't yet on the create path),
+	//      and from operator-reported "deleted site, vhost lingered"
+	//      bugs that v0.2.51 already mostly closed but the on-disk
+	//      heal here guarantees nginx -t can't be poisoned by a leak.
+	//   2. EnsureLogDirsForEnabledVhosts mkdir's any /home/<u>/logs
+	//      directory a SURVIVING vhost references that's somehow gone
+	//      from disk (manual rm, snapshot-restore artifacts, etc.).
+	// Both are cheap (filesystem walk + a few mkdir's at worst) and
+	// idempotent — nothing to do on a clean panel. The payoff: every
+	// future site-create's nginx -t passes regardless of how the
+	// system arrived at its current state.
+	creator.PruneDeadVhosts()
+	creator.EnsureLogDirsForEnabledVhosts(context.Background(), runner)
 
 	// Self-update checker. The Manager owns a 1h cache; a goroutine refreshes
 	// every 12h so the UI never blocks on api.github.com. Honours the version
