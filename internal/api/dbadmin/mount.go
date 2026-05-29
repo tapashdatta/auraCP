@@ -77,7 +77,10 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 		stepUp.stop()
 		return nil, nil, err
 	}
-	auditImpl, err := newPanelAudit(cfg.AuditPath, signingKey, st, nil)
+	// PR #10.5 / FIX-INT-9: pass the shared logger so audit warn lines
+	// land in the same slog handler the rest of the panel emits to,
+	// pre-stamped with comp=dbadmin for easy filtering.
+	auditImpl, err := newPanelAudit(cfg.AuditPath, signingKey, st, SharedLogger())
 	if err != nil {
 		stepUp.stop()
 		return nil, nil, err
@@ -109,7 +112,33 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 		CSRFCookieName: PanelCSRFCookieName,
 		CSRFHeaderName: PanelCSRFHeaderName,
 	})
-	mux.Handle("/api/dbadmin/", http.StripPrefix("/api/dbadmin", handler))
+	// FIX-INT-9: wrap with the request-id middleware so every request
+	// flowing into /api/dbadmin/* gets a correlation id available to
+	// downstream slog lines AND the panel audit mirror.
+	mux.Handle("/api/dbadmin/", WithRequestIDMiddleware(
+		http.StripPrefix("/api/dbadmin", handler)))
+
+	// PR #10.5 / OPS-04 (reassigned from PR #9.5): probe endpoints.
+	// /healthz answers "is the process up" (always 200 once Mount
+	// returns); /readyz answers "is the engine ready to serve" — the
+	// audit chain is open, the engine has not yet started shutting
+	// down, and the panel store responds to a ping. We install these
+	// at the /api/dbadmin/ namespace's siblings (not the panel root)
+	// so an external load balancer can probe the dbadmin surface
+	// independently of the panel SPA's catch-all handler. Both are
+	// JSON to match the rest of the API surface; both are public (no
+	// session cookie required) because they are used by orchestrators
+	// (systemd, k8s, uptime monitors) that have no panel identity.
+	mux.HandleFunc("/api/dbadmin/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	})
+	mux.Handle("/api/dbadmin/readyz", &readyzHandler{
+		engine: engine,
+		audit:  auditImpl,
+		store:  st,
+	})
 
 	timeout := cfg.ShutdownTimeout
 	if timeout <= 0 {
@@ -123,13 +152,92 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 	}, nil
 }
 
+// readyzHandler answers /api/dbadmin/readyz. Ready means: (1) the
+// engine is not shutting down, (2) the audit chain sink is open
+// (non-nil), and (3) the panel SQLite store responds to a Ping().
+//
+// PR #10.5 / OPS-04: previously there was no readiness probe at all,
+// which meant a load balancer would route traffic to a daemon whose
+// engine was mid-shutdown or whose audit chain had failed to open —
+// both states the panel would otherwise have silently degraded.
+type readyzHandler struct {
+	engine *dbadmin.Engine
+	audit  *panelAudit
+	store  *store.Store
+}
+
+func (h *readyzHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	// Engine state — refuse readiness if Shutdown has started.
+	if h.engine == nil || h.engine.IsShuttingDown() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"shutting-down","engine":false}`))
+		return
+	}
+	// Audit chain — required for ANY mutating action; if the sink
+	// closed (disk full, etc.) we are not ready to accept writes.
+	if h.audit == nil || h.audit.chain == nil || h.audit.closed.Load() {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"status":"audit-down","audit":false}`))
+		return
+	}
+	// Store ping — required for connection lookups and audit_log
+	// mirror writes. Bound by a short context to keep the probe cheap.
+	if h.store != nil && h.store.DB != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := h.store.DB.PingContext(ctx); err != nil {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"status":"store-down","store":false}`))
+			return
+		}
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ready","engine":true,"audit":true,"store":true}`))
+}
+
 // mountCloser bundles the three things Mount creates that need to be
 // stopped on graceful shutdown.
+//
+// PR #10.5 / FIX-PD-SEC-04: the closer also exposes InvalidateSession
+// so the panel logout handler can drop any step-up flags bound to the
+// session it just deleted. Without this hook a logged-out operator's
+// step-up grants survive until either the in-memory TTL expires
+// (default 5 minutes) or the reaper loop ticks.
 type mountCloser struct {
 	audit           *panelAudit
 	stepUp          *stepUpStore
 	engine          *dbadmin.Engine
 	shutdownTimeout time.Duration
+}
+
+// InvalidateSession drops every in-memory step-up flag bound to the
+// given panel session token. Panel callers invoke this from POST
+// /api/auth/logout immediately after deleting the session row.
+func (c *mountCloser) InvalidateSession(sessionToken string) {
+	if c == nil || c.stepUp == nil {
+		return
+	}
+	c.stepUp.InvalidateSession(sessionToken)
+}
+
+// SessionInvalidator is the narrow capability the panel logout handler
+// needs from the dbadmin adapter. Both mountCloser and any test
+// double satisfy it.
+type SessionInvalidator interface {
+	InvalidateSession(sessionToken string)
+}
+
+// LogoutHookFor returns a func(sessionToken string) that the panel's
+// SetLogoutHook accepts. Convenience wrapper around the io.Closer the
+// caller already holds — avoids forcing every caller to type-assert the
+// io.Closer back to *mountCloser.
+func LogoutHookFor(c io.Closer) func(string) {
+	mc, ok := c.(SessionInvalidator)
+	if !ok {
+		return func(string) {}
+	}
+	return mc.InvalidateSession
 }
 
 // Close stops the step-up reaper, flushes the audit chain, and signals

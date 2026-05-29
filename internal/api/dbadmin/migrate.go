@@ -49,6 +49,21 @@ var migrations = []string{
 		PRIMARY KEY (user_id, connection_id)
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_aura_db_grants_user ON aura_db_grants(user_id)`,
+	// PR #10.5 / FIX-INT-6: panel_user delete must cascade into
+	// aura_db_grants so orphan grant rows do not survive a user
+	// deletion. A declarative FK to panel_users(id) is awkward here
+	// because aura_db_grants.user_id is TEXT (the panel writes the
+	// user_id as a string for cross-engine consistency) while
+	// panel_users.id is INTEGER; SQLite's strict FK enforcement
+	// requires matching declared affinity. We solve it with a trigger
+	// that runs on every DELETE FROM panel_users — same semantic
+	// effect (orphan grants deleted with the user), no schema
+	// gymnastics. Idempotent: CREATE TRIGGER IF NOT EXISTS.
+	`CREATE TRIGGER IF NOT EXISTS trg_aura_db_grants_cascade_panel_user
+		AFTER DELETE ON panel_users
+		BEGIN
+			DELETE FROM aura_db_grants WHERE user_id = CAST(OLD.id AS TEXT);
+		END`,
 }
 
 // RunMigrations applies the Aura DB schema additions to the panel's

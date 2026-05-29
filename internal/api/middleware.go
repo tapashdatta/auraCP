@@ -3,6 +3,7 @@ package api
 import (
 	"log"
 	"net/http"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -32,8 +33,18 @@ func Secure(next http.Handler) http.Handler {
 		// /api/dbadmin/* runs its own CSRF gate (__Host-aura_csrf) inside
 		// the dbadmin engine's middleware chain. Skip the panel's
 		// double-submit check there so the two policies don't both fire.
-		if isUnsafe(r) && strings.HasPrefix(r.URL.Path, "/api/") &&
-			!strings.HasPrefix(r.URL.Path, "/api/dbadmin/") && !csrfOK(r) {
+		//
+		// PR #10.5 / FIX-C6: normalize the path BEFORE prefix matching.
+		// Pre-#10.5 a request to /api/dbadmin/../auth/login bypassed
+		// the panel CSRF gate because the raw r.URL.Path still matched
+		// the /api/dbadmin/ prefix, and net/http's ServeMux later
+		// 307-redirected the cleaned path back to /api/auth/login —
+		// at which point the (now-mutating) request had skipped both
+		// CSRF gates. path.Clean collapses .. segments so the prefix
+		// check uses the same path the mux would.
+		cleanPath := path.Clean(r.URL.Path)
+		if isUnsafe(r) && strings.HasPrefix(cleanPath, "/api/") &&
+			!strings.HasPrefix(cleanPath, "/api/dbadmin/") && !csrfOK(r) {
 			// Explicit reason in the log so an operator can tell a CSRF reject
 			// (our side) apart from a CDN reject (no log line at all).
 			log.Printf("[api] CSRF reject %s %s ip=%s", r.Method, r.URL.Path, clientIP(r))

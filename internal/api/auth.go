@@ -190,9 +190,21 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/auth/logout
+//
+// PR #10.5 / FIX-PD-SEC-04: after deleting the session row we fire the
+// LogoutHook (wired at startup by cmd/auracpd to the dbadmin adapter's
+// stepUpStore) so any in-memory step-up flags bound to this session
+// token are dropped immediately. Without that hook the flags survived
+// until either the in-memory TTL expired (default 5 minutes) or the
+// reaper ticked, which meant a logged-out operator's session token —
+// if leaked — could still authorize step-up-required actions for that
+// window.
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		_ = s.store.DeleteSession(c.Value)
+		if s.logoutHook != nil {
+			s.logoutHook(c.Value)
+		}
 	}
 	clearSessionCookie(w, r)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

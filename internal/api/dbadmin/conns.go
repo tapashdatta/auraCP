@@ -8,12 +8,28 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/pkg/dbadmin"
 )
+
+// CredsAAD is the additional-authenticated-data label bound to every
+// encrypted aura_db_connections.creds_enc blob. Sharing the panel KEK
+// with other encrypted-at-rest tables (Cloudflare token, site DB
+// passwords) is fine ONLY so long as a ciphertext minted under one
+// label cannot be replayed against another. The AAD enforces that.
+//
+// PR #10.5 / FIX-PD-SEC-03: previously credBlob ciphertext was produced
+// via box.Encrypt — same KEK as panel db.go's password encryption. If
+// an attacker could write arbitrary bytes into aura_db_connections.creds_enc
+// by replaying a value scraped from databases.password_enc, the dbadmin
+// adapter would happily decrypt the stolen password and surface it to
+// any RoleOwner on that connection. Binding the AAD to the table+column
+// stops that cross-table replay.
+const CredsAAD = "dbadmin:creds:v1"
 
 // panelConns implements dbadmin.ConnectionStore against the panel's
 // SQLite + secret.Box. Connections + grants live in aura_db_* tables
@@ -38,21 +54,30 @@ type credBlob struct {
 // RolesFor returns the user's per-connection role map. ROLE_ADMIN gets
 // an implicit RoleOwner on every connection without needing a row in
 // aura_db_grants.
+//
+// PR #10.5 / FIX-INT-14 (also addresses SDK-6 duplicate): ROLE_ADMIN
+// previously ran allIDs() — a full SELECT id FROM aura_db_connections
+// scan — on every request just to mint per-id RoleOwner entries that
+// HasPermission would have short-circuited anyway. With N connections
+// and M admin requests/s the cost was N*M scans per second. We now
+// return nil for admins; HasPermission's ROLE_ADMIN branch (auth.go)
+// is the authoritative short-circuit and never consults the map.
+//
+// FIX-C3: non-admin rows where role = RoleNone (a defensive grant left
+// behind by a buggy revoke) used to leak into the result map and could
+// match against HasPermission's `have, ok := u.Roles[cid]` check.
+// Filter them out at the SQL boundary so the in-memory map only
+// contains actionable grants.
 func (c *panelConns) RolesFor(ctx context.Context, panelUserID int64, panelRole string) (map[dbadmin.ConnectionID]dbadmin.Role, error) {
 	if panelRole == "ROLE_ADMIN" {
-		ids, err := c.allIDs(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out := make(map[dbadmin.ConnectionID]dbadmin.Role, len(ids))
-		for _, id := range ids {
-			out[id] = dbadmin.RoleOwner
-		}
-		return out, nil
+		// FIX-INT-14: nil map is fine — HasPermission's admin branch
+		// is the authoritative gate; List's admin SQL branch returns
+		// everything; nothing else reads u.Roles for an admin user.
+		return nil, nil
 	}
 	rows, err := c.st.DB.QueryContext(ctx,
-		`SELECT connection_id, role FROM aura_db_grants WHERE user_id = ?`,
-		strconv.FormatInt(panelUserID, 10))
+		`SELECT connection_id, role FROM aura_db_grants WHERE user_id = ? AND role > ?`,
+		strconv.FormatInt(panelUserID, 10), int(dbadmin.RoleNone))
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +161,13 @@ func (c *panelConns) Get(ctx context.Context, id dbadmin.ConnectionID) (dbadmin.
 
 // Credentials returns decrypted credentials. Returns dbadmin.ErrNotFound
 // if the connection does not exist.
+//
+// PR #10.5 / FIX-PD-SEC-03: decryption attempts the AAD-bound path
+// first (CredsAAD); on failure, falls back to the legacy box.Decrypt
+// for ciphertext written by pre-PR-#10.5 builds. The fallback path
+// rewrites the row in-place under the new AAD so subsequent reads take
+// the fast path and any same-KEK replay attack is closed once the
+// connection has been touched once.
 func (c *panelConns) Credentials(ctx context.Context, id dbadmin.ConnectionID) (dbadmin.Credentials, error) {
 	var enc string
 	err := c.st.DB.QueryRowContext(ctx,
@@ -146,9 +178,24 @@ func (c *panelConns) Credentials(ctx context.Context, id dbadmin.ConnectionID) (
 	if err != nil {
 		return dbadmin.Credentials{}, err
 	}
-	plain, err := c.box.Decrypt(enc)
-	if err != nil {
-		return dbadmin.Credentials{}, err
+	plain, derr := c.box.DecryptAAD(enc, CredsAAD)
+	if derr != nil {
+		// Legacy ciphertext (pre-PR-#10.5): fall back to the AAD-less
+		// path. We don't surface the AAD error to the caller — a
+		// connection was written before AAD existed; decrypting it
+		// successfully is the expected migration path. On success,
+		// re-encrypt under AAD and write back so the next read hits
+		// the fast path.
+		legacyPlain, legacyErr := c.box.Decrypt(enc)
+		if legacyErr != nil {
+			return dbadmin.Credentials{}, legacyErr
+		}
+		plain = legacyPlain
+		if reEnc, rerr := c.box.EncryptAAD(plain, CredsAAD); rerr == nil {
+			_, _ = c.st.DB.ExecContext(ctx,
+				`UPDATE aura_db_connections SET creds_enc = ? WHERE id = ? AND creds_enc = ?`,
+				reEnc, string(id), enc)
+		}
 	}
 	var blob credBlob
 	if err := json.Unmarshal([]byte(plain), &blob); err != nil {
@@ -177,7 +224,10 @@ func (c *panelConns) Save(ctx context.Context, conn dbadmin.Connection, creds db
 	if err != nil {
 		return "", err
 	}
-	enc, err := c.box.Encrypt(string(plain))
+	// FIX-PD-SEC-03: bind ciphertext to a "dbadmin:creds:v1" label so
+	// it cannot be silently cross-decrypted as panel-DB-password
+	// material (and vice versa) under a same-KEK attack.
+	enc, err := c.box.EncryptAAD(string(plain), CredsAAD)
 	if err != nil {
 		return "", err
 	}
@@ -221,7 +271,13 @@ func (c *panelConns) Save(ctx context.Context, conn dbadmin.Connection, creds db
 			conn.Database, conn.Username, enc, tags, b2i(conn.UseSSL), conn.SSLMode,
 			sshJSON, origin, conn.Owner, now, now,
 		); err != nil {
-			return "", err
+			// FIX-C7: SQLite returns "UNIQUE constraint failed:
+			// aura_db_connections.name" on duplicate name. Surfacing
+			// the raw string makes the engine map it to 500 (unknown
+			// error) when the right answer is 409 (conflict). Map it
+			// to the typed sentinel so the SPA can show "a connection
+			// named X already exists" instead of "internal error".
+			return "", mapSaveErr(err)
 		}
 		// Auto-grant RoleOwner to the creator (non-empty Owner). The
 		// engine sets Owner from User.ID before invoking Save.
@@ -245,7 +301,7 @@ func (c *panelConns) Save(ctx context.Context, conn dbadmin.Connection, creds db
 			conn.Database, conn.Username, enc, tags, b2i(conn.UseSSL), conn.SSLMode,
 			sshJSON, origin, conn.Owner, now, string(conn.ID))
 		if err != nil {
-			return "", err
+			return "", mapSaveErr(err)
 		}
 		if n, _ := res.RowsAffected(); n == 0 {
 			return "", dbadmin.ErrNotFound
@@ -260,8 +316,27 @@ func (c *panelConns) Save(ctx context.Context, conn dbadmin.Connection, creds db
 }
 
 // Delete cascades grants via the ON DELETE CASCADE constraint.
+//
+// PR #10.5 / FIX-SDK-4: previously the connection row + cascaded grant
+// rows + (in some SQLite builds) the FK-driven panel_user grant FK
+// were all relying on SQLite's implicit per-statement transaction.
+// That worked, but a future addition (e.g. tombstoning the conn into a
+// soft-delete table, or emitting an audit row at delete time) would
+// have silently split the operation across two implicit txs. Wrap the
+// whole delete in an explicit BEGIN/COMMIT so future extensions
+// inherit atomicity by default.
 func (c *panelConns) Delete(ctx context.Context, id dbadmin.ConnectionID) error {
-	res, err := c.st.DB.ExecContext(ctx, `DELETE FROM aura_db_connections WHERE id = ?`, string(id))
+	tx, err := c.st.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	res, err := tx.ExecContext(ctx, `DELETE FROM aura_db_connections WHERE id = ?`, string(id))
 	if err != nil {
 		return err
 	}
@@ -269,7 +344,27 @@ func (c *panelConns) Delete(ctx context.Context, id dbadmin.ConnectionID) error 
 	if n == 0 {
 		return dbadmin.ErrNotFound
 	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	committed = true
 	return nil
+}
+
+// mapSaveErr translates raw SQLite error strings into the typed sentinels
+// the engine knows how to convert into HTTP status codes. SQLite emits
+// the constraint message verbatim ("UNIQUE constraint failed:
+// aura_db_connections.name"); without this mapping the engine treats
+// it as opaque internal error → HTTP 500. PR #10.5 / FIX-C7.
+func mapSaveErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "UNIQUE constraint failed") {
+		return dbadmin.ErrConflict
+	}
+	return err
 }
 
 // Grant inserts or updates an explicit per-connection role grant. Used by

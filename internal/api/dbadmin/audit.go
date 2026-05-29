@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -91,12 +92,20 @@ type panelAudit struct {
 // mirrorEvent carries the fields panelAudit.drainMirror needs to write a
 // row into the panel audit_log table. We snapshot the data at enqueue
 // time so the drain goroutine never touches the original Event.
+//
+// FIX-PR105 / C5: reqID is the engine-emitted correlation ID propagated
+// from the request goroutine; we capture it at Record time so the panel
+// audit_log line shares the same request ID as the slog line emitted by
+// the request middleware (see slog.go). Without this, an operator
+// grepping the journal for a request-id finds the slog line but not the
+// audit_log row, and has to manually correlate by user+timestamp.
 type mirrorEvent struct {
 	actor  string
 	action string
 	target string
 	detail string
 	id     string
+	reqID  string
 }
 
 const (
@@ -156,15 +165,40 @@ func (a *panelAudit) Record(ctx context.Context, e dbadmin.Event) {
 	if actor == "" {
 		actor = "system"
 	}
+	// FIX-PR105 / C2: previously the detail field was hand-rolled with
+	// fmt.Sprintf("%q"), which uses Go-string-literal quoting (Unicode
+	// escapes, embedded \x00 → \x00, etc.) — NOT JSON-string quoting.
+	// Any audit event whose Error or other text field contained a
+	// non-ASCII byte produced an audit_log row that wasn't valid JSON,
+	// and the panel's /api/audit endpoint then served broken rows that
+	// the SPA refused to parse. Marshal a proper struct so encoding/json
+	// owns the escaping.
+	detailJSON, err := json.Marshal(struct {
+		EventID  string `json:"event_id"`
+		Role     string `json:"role"`
+		Rows     int64  `json:"rows"`
+		DurMS    int64  `json:"dur_ms"`
+		Err      string `json:"err,omitempty"`
+	}{
+		EventID: e.EventID,
+		Role:    e.UserRoleAtTime.String(),
+		Rows:    e.ResultRows,
+		DurMS:   e.DurationMS,
+		Err:     e.Error,
+	})
+	if err != nil {
+		// json.Marshal of plain string/int can only fail on a programming
+		// bug; fall back to a stable empty-object so the audit_log row
+		// stays valid JSON regardless.
+		detailJSON = []byte("{}")
+	}
 	me := mirrorEvent{
 		actor:  actor,
 		action: "dbadmin." + string(e.Action),
 		target: e.Target.String(),
-		detail: fmt.Sprintf(
-			`{"event_id":%q,"role":%q,"rows":%d,"dur_ms":%d,"err":%q}`,
-			e.EventID, e.UserRoleAtTime.String(), e.ResultRows, e.DurationMS, e.Error,
-		),
-		id: e.EventID,
+		detail: string(detailJSON),
+		id:     e.EventID,
+		reqID:  RequestIDFromContext(ctx),
 	}
 	select {
 	case a.mirror <- me:
@@ -184,6 +218,11 @@ func (a *panelAudit) Drops() int64 { return a.drops.Load() }
 
 // drainMirror pulls queued events into the panel audit_log table. One
 // goroutine, owned by panelAudit. Exits on quit channel close.
+//
+// FIX-PR105 / C5: warn logs now carry the request-id captured at enqueue
+// time (mirrorEvent.reqID) so a "panel audit mirror failed" line can be
+// joined to the HTTP request that produced the event without a manual
+// timestamp dance.
 func (a *panelAudit) drainMirror() {
 	defer a.wg.Done()
 	for {
@@ -191,7 +230,7 @@ func (a *panelAudit) drainMirror() {
 		case me := <-a.mirror:
 			if err := a.store.AddAudit(me.actor, me.action, me.target, me.detail); err != nil {
 				a.log.Warn("dbadmin: panel audit mirror failed",
-					"err", err, "event_id", me.id)
+					"err", err, "event_id", me.id, "req_id", me.reqID)
 			}
 		case <-a.quit:
 			// Drain pending events with a deadline.
@@ -204,7 +243,7 @@ func (a *panelAudit) drainMirror() {
 					}
 					if err := a.store.AddAudit(me.actor, me.action, me.target, me.detail); err != nil {
 						a.log.Warn("dbadmin: panel audit mirror failed on drain",
-							"err", err, "event_id", me.id)
+							"err", err, "event_id", me.id, "req_id", me.reqID)
 					}
 				default:
 					return
@@ -269,6 +308,18 @@ func (a *panelAudit) Close() error {
 // 0700 (root-only). The file is base64-encoded so it round-trips
 // through ops tooling that may not handle binary cleanly; the actual
 // HMAC input is the decoded raw bytes.
+//
+// PR #10.5 / FIX-C4: if the on-disk file is present but corrupted
+// (wrong size, broken base64, world-readable, etc.) we now REFUSE TO
+// START rather than silently minting a fresh key and breaking the
+// existing audit chain. Silent regeneration was the original behavior
+// pre-PR-#10.5: a stray `echo > aura-db-audit.key` from an ops script
+// would invalidate every prior chain entry on the next reboot with no
+// boot-log signal, and the operator had no way to notice until a
+// forensics request months later. Now the daemon logs a loud error and
+// fails Mount(); ops must triage (restore the key from backup, or
+// explicitly delete the file and the chain log together to start
+// fresh).
 func loadOrCreateSigningKey(st *store.Store) ([]byte, error) {
 	path := currentSigningKeyPath()
 
@@ -300,6 +351,13 @@ func loadOrCreateSigningKey(st *store.Store) ([]byte, error) {
 	if raw, err := readSigningKeyFile(path); err == nil {
 		return raw, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
+		// FIX-C4: corrupted on-disk key is a refuse-on-boot condition.
+		// Surfacing the wrapped error here means Mount() returns it,
+		// auracpd's log.Fatalf prints it, and systemd captures the
+		// "dbadmin: read audit signing key … : …" line so the operator
+		// sees exactly what's wrong.
+		slog.Default().Error("dbadmin: refusing to start with corrupted audit signing key",
+			"path", path, "err", err)
 		return nil, fmt.Errorf("dbadmin: read audit signing key %q: %w", path, err)
 	}
 

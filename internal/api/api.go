@@ -41,7 +41,26 @@ type Server struct {
 	secret       *secret.Box
 	runner       *system.Runner
 	panelBackend string
+	// PR #10.5 / FIX-PD-SEC-04: optional hook called from POST
+	// /api/auth/logout AFTER the session row is deleted. Used by
+	// cmd/auracpd to invalidate dbadmin step-up flags bound to the
+	// session token. Nil-safe: the logout handler skips it when unset.
+	logoutHook func(sessionToken string)
 }
+
+// SetLogoutHook registers a function to be invoked from POST
+// /api/auth/logout immediately after the session row is deleted. The
+// hook receives the session token that was logged out and can run any
+// per-session cleanup (typically dropping in-memory step-up flags
+// keyed by the same token). Wired at startup; not safe to call after
+// the server is serving requests.
+func (s *Server) SetLogoutHook(fn func(sessionToken string)) {
+	s.logoutHook = fn
+}
+
+// LogoutHook returns the currently-installed logout hook (nil if unset).
+// Used by integration tests to verify wiring.
+func (s *Server) LogoutHook() func(sessionToken string) { return s.logoutHook }
 
 // Deps bundles the managers the API needs.
 type Deps struct {
@@ -59,8 +78,12 @@ type Deps struct {
 	PanelBackend string
 }
 
-// Register wires the API routes onto mux.
-func Register(mux *http.ServeMux, s *store.Store, d Deps) {
+// Register wires the API routes onto mux and returns the Server so
+// callers (cmd/auracpd) can install post-construction hooks (e.g.
+// SetLogoutHook). The returned value was previously discarded; existing
+// callers that ignore the return value continue to work unchanged
+// (Go's standard call-result-discard rules).
+func Register(mux *http.ServeMux, s *store.Store, d Deps) *Server {
 	srv := &Server{store: s, dbs: d.DBs, cron: d.Cron, backups: d.Backups,
 		web: d.Web, osu: d.OS, node: d.Node, php: d.PHP, acme: d.ACME, updater: d.Updater,
 		secret: d.Secret, runner: d.Runner, panelBackend: d.PanelBackend}
@@ -172,6 +195,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) {
 	// off an apt install via the JSON API.
 	mux.Handle("GET /api/instance/update", srv.requirePerm("settings", "read", srv.instanceUpdateStatus))
 	mux.Handle("POST /api/instance/update", srv.requirePerm("settings", "update", srv.instanceUpdateApply))
+	return srv
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

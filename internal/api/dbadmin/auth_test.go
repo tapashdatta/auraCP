@@ -189,3 +189,21 @@ func TestAdapter_HasPermission_NonAdminDefaultDeny(t *testing.T) {
 		t.Fatal("ActionConnList should always be allowed; conns.List filters")
 	}
 }
+
+// TestAdapter_VerifyStepUp_UnavailableWhenNoMFA is the PR #10.5 /
+// FIX-SDK-1 regression test: a logged-in user without TOTP enrolled
+// must receive ErrStepUpUnavailable, not ErrUnauthenticated, when they
+// hit a step-up flow. Without this distinction the SPA dead-ends the
+// operator in a relogin loop they cannot escape.
+func TestAdapter_VerifyStepUp_UnavailableWhenNoMFA(t *testing.T) {
+	h := newHarness(t)
+	tok, _ := h.seedUser("ROLE_ADMIN", "noMfa@example.com") // no MFA enrolled
+
+	r := reqWithSession(tok)
+	r.Method = "POST"
+	r.Body = nil // VerifyStepUp short-circuits on missing MFA before body parsing
+	_, _, err := h.auth.VerifyStepUp(r)
+	if err != dbadmin.ErrStepUpUnavailable {
+		t.Fatalf("VerifyStepUp(no-mfa) = %v, want ErrStepUpUnavailable", err)
+	}
+}

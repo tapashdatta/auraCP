@@ -9,12 +9,23 @@ import (
 
 // stepUpKey identifies a single step-up window. Keyed on the panel
 // session token (so logout revokes step-up flags implicitly via session
-// deletion) and the action — we key by action rather than an action
-// class because pkg/dbadmin.Action does not expose a public Class()
-// method. Each step-up grant covers exactly one action.
+// deletion + the explicit InvalidateSession hook below), the
+// dbadmin.ActionClass (so one approval covers sibling actions in the
+// class), and the connection id (so a step-up for connection A does
+// not authorize a destructive action on connection B).
+//
+// PR #10.5:
+//   - FIX-SDK-3: previously keyed on raw dbadmin.Action; now on
+//     ActionClass (one approval per class instead of per action).
+//   - FIX-INT-12: previously did not include connection id; now does,
+//     so a per-connection class flag is per-connection.
+//   - FIX-PD-SEC-04: stale step-up flags used to survive panel logout
+//     until the TTL expired or the reaper ran. InvalidateSession
+//     surgically deletes every entry for a logged-out session.
 type stepUpKey struct {
 	session string
-	action  dbadmin.Action
+	class   dbadmin.ActionClass
+	connID  string
 }
 
 // stepUpStore is the in-memory step-up flag store. Single-process; if HA
@@ -37,33 +48,57 @@ func newStepUpStore() *stepUpStore {
 	return s
 }
 
-// set records a step-up flag with the given TTL. Replacing an existing
-// flag is allowed (the operator just re-stepped-up).
-func (s *stepUpStore) set(session string, action dbadmin.Action, ttl time.Duration) {
-	if session == "" || action == "" {
+// setClass records a step-up flag with the given TTL keyed by
+// (session, action class, connection id). class == ActionClassNone
+// is treated as a no-op since by definition no step-up is required.
+func (s *stepUpStore) setClass(session string, class dbadmin.ActionClass, connID string, ttl time.Duration) {
+	if session == "" || class == dbadmin.ActionClassNone {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[stepUpKey{session: session, action: action}] = time.Now().Add(ttl)
+	s.entries[stepUpKey{session: session, class: class, connID: connID}] = time.Now().Add(ttl)
 }
 
-// has reports whether a non-expired step-up flag exists.
-func (s *stepUpStore) has(session string, action dbadmin.Action) bool {
-	if session == "" || action == "" {
+// hasClass reports whether a non-expired step-up flag exists for the
+// (session, class, connection id) tuple.
+func (s *stepUpStore) hasClass(session string, class dbadmin.ActionClass, connID string) bool {
+	if session == "" || class == dbadmin.ActionClassNone {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	exp, ok := s.entries[stepUpKey{session: session, action: action}]
+	k := stepUpKey{session: session, class: class, connID: connID}
+	exp, ok := s.entries[k]
 	if !ok {
 		return false
 	}
 	if time.Now().After(exp) {
-		delete(s.entries, stepUpKey{session: session, action: action})
+		delete(s.entries, k)
 		return false
 	}
 	return true
+}
+
+// InvalidateSession drops every step-up flag bound to the given panel
+// session token. Wired into the panel's POST /api/auth/logout path
+// (FIX-PD-SEC-04). Without it, a logout-then-relogin operator could
+// briefly inherit step-up windows from a previous session because the
+// session token is per-login.
+//
+// Exported so the panel api package can call it without reaching into
+// package internals.
+func (s *stepUpStore) InvalidateSession(session string) {
+	if session == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for k := range s.entries {
+		if k.session == session {
+			delete(s.entries, k)
+		}
+	}
 }
 
 // stop terminates the reaper goroutine. Safe to call multiple times.

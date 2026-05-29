@@ -25,6 +25,29 @@ type Config struct {
 	// QueryResultBytesMiB → dbadmin.QueryConfig.ResultBytesDefault.
 	QueryResultBytesMiB int
 
+	// QueryTimeoutMaxSec → dbadmin.QueryConfig.TimeoutMax. The
+	// per-query hard ceiling — operators may dial Default below this,
+	// but never above. Zero falls back to dbadmin.DefaultConfig's max
+	// (10 minutes; see pkg/dbadmin/config.go).
+	//
+	// PR #10.5 / FIX-INT-4: previously the panel only surfaced Default
+	// fields; the Max fields lived in dbadmin.DefaultConfig() and were
+	// invisible to operators. A deploy that needs a lower hard ceiling
+	// (e.g. 60s on a shared-tenant host where one wedged query starves
+	// everyone) had no way to set one without code patches. Now all
+	// three ceilings are wireable from the panel's settings table.
+	QueryTimeoutMaxSec int
+
+	// QueryResultRowsMax → dbadmin.QueryConfig.ResultRowsMax. Hard
+	// ceiling on result row count; protects panel memory from a
+	// SELECT * on a billion-row table.
+	QueryResultRowsMax int
+
+	// QueryResultBytesMaxMiB → dbadmin.QueryConfig.ResultBytesMax.
+	// Hard ceiling on result byte count; protects panel memory from a
+	// SELECT that returns a few rows containing very large BLOBs.
+	QueryResultBytesMaxMiB int
+
 	// AuditSampleReads → dbadmin.AuditConfig.SampleReadQueries.
 	AuditSampleReads float64
 
@@ -74,6 +97,24 @@ func LoadFromStore(st *store.Store) Config {
 			c.QueryResultBytesMiB = n
 		}
 	}
+	// PR #10.5 / FIX-INT-4: hard-ceiling settings (Max). Same naming
+	// convention as the Default keys above (snake_case mirroring the
+	// engine field names).
+	if v, ok := st.GetSetting("aura_db_query_timeout_max_sec"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.QueryTimeoutMaxSec = n
+		}
+	}
+	if v, ok := st.GetSetting("aura_db_query_result_rows_max"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.QueryResultRowsMax = n
+		}
+	}
+	if v, ok := st.GetSetting("aura_db_query_result_bytes_max_mib"); ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.QueryResultBytesMaxMiB = n
+		}
+	}
 	if v, ok := st.GetSetting("aura_db_audit_sample_reads"); ok {
 		if f, err := strconv.ParseFloat(v, 64); err == nil {
 			c.AuditSampleReads = f
@@ -103,6 +144,16 @@ func (c Config) ToEngine() dbadmin.Config {
 	}
 	if c.QueryResultBytesMiB > 0 {
 		out.Query.ResultBytesDefault = int64(c.QueryResultBytesMiB) * 1024 * 1024
+	}
+	// FIX-INT-4: hard ceilings.
+	if c.QueryTimeoutMaxSec > 0 {
+		out.Query.TimeoutMax = time.Duration(c.QueryTimeoutMaxSec) * time.Second
+	}
+	if c.QueryResultRowsMax > 0 {
+		out.Query.ResultRowsMax = c.QueryResultRowsMax
+	}
+	if c.QueryResultBytesMaxMiB > 0 {
+		out.Query.ResultBytesMax = int64(c.QueryResultBytesMaxMiB) * 1024 * 1024
 	}
 	if c.AuditSampleReads > 0 {
 		out.Audit.SampleReadQueries = c.AuditSampleReads

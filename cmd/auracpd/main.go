@@ -202,7 +202,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	dbs := db.New(runner, st, sec)
-	api.Register(mux, st, api.Deps{
+	apiSrv := api.Register(mux, st, api.Deps{
 		// v0.2.52: site.Manager.New is gone — every site-lifecycle
 		// operation runs through internal/site/creator. cmd/auracpd's
 		// job is to construct the leaf managers (db, php, node, acme,
@@ -241,6 +241,13 @@ func main() {
 		<-rootCtx.Done()
 		_ = dbaEngine.Shutdown(context.Background())
 	}()
+	// PR #10.5 / FIX-PD-SEC-04: wire panel logout into the dbadmin
+	// step-up store so logging out drops every step-up flag held by
+	// the session token, instead of letting them ride the 5-minute
+	// in-memory TTL. The hook is installed AFTER api.Register has
+	// already wired the logout handler so the order of construction
+	// is irrelevant; the handler reads s.logoutHook on every request.
+	apiSrv.SetLogoutHook(dbadminintegration.LogoutHookFor(dbaCloser))
 
 	// PR #11: Aura DB Svelte SPA shell. Sibling Vite build embedded under
 	// /dbadmin/. Mounted BEFORE the panel "/" catch-all so requests with

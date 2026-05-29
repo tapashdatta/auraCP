@@ -1133,6 +1133,66 @@ The remaining 25 findings are deferred below.
 - **SDK-7** — `panelConns.Grant` exposed but not routed by engine.
   **Reason:** duplicate of INT-13; nit. **Target:** PR #10.5.
 
+### PR #10.5 resolution status
+
+All deferred mediums + lows above (except those marked as routed
+elsewhere) landed in PR #10.5 alongside the OPS-04 readiness probes
+reassigned from PR #9.5. Specifically:
+
+**Mediums resolved:** PD-SEC-03 (AEAD with `dbadmin:creds:v1` AAD via
+`secret.Box.EncryptAAD`/`DecryptAAD` with legacy-ciphertext
+auto-migration on first read), PD-SEC-04 (panel logout invokes the new
+`dbadmin.mountCloser.InvalidateSession` hook via
+`api.Server.SetLogoutHook`), INT-4 (panel `Config` now surfaces
+`QueryTimeoutMaxSec` / `QueryResultRowsMax` / `QueryResultBytesMaxMiB`
+from the settings table), INT-5 (already resolved in PR #17 via Adminer
+removal), INT-6 (`CREATE TRIGGER trg_aura_db_grants_cascade_panel_user`
+in `migrate.go` cascades `panel_users` deletes into `aura_db_grants`),
+INT-9 (new `WithRequestIDMiddleware` + `SharedLogger` in `slog.go`;
+`X-Request-Id` response header on every `/api/dbadmin/*` request;
+`RequestIDFromContext` for handler use), SDK-1 (new
+`dbadmin.ErrStepUpUnavailable` sentinel; `auth.VerifyStepUp` returns
+it on missing-TOTP enrollment).
+
+**Lows resolved:** PD-SEC-06 (HasPermission narrowed: ROLE_ADMIN
+authorization no longer implies step-up bypass; orthogonal gate
+preserved), C2 (`audit.go` uses `json.Marshal` for the panel mirror
+detail field — exotic bytes no longer break audit_log JSON), C3
+(`RolesFor` now filters `role > RoleNone` at the SQL boundary), C4
+(`loadOrCreateSigningKey` refuses to start on a corrupted on-disk
+key — logs the error via `slog.Default().Error` and returns the
+wrapped error from `Mount()`), C5 (`mirrorEvent.reqID` captured at
+enqueue time; warn logs join the same request-ID stream), C6
+(`middleware.Secure` now normalizes via `path.Clean` before the
+`/api/dbadmin/` prefix check — `/api/dbadmin/../auth/login` no longer
+bypasses the panel CSRF gate), C7 (`mapSaveErr` translates SQLite
+UNIQUE-constraint to `dbadmin.ErrConflict`), INT-12 (stepUpKey now
+includes connectionID — per-connection scoping), INT-14 / SDK-6
+(`RolesFor(ROLE_ADMIN)` short-circuits to `nil`; HasPermission's admin
+branch is the authoritative gate, List uses the admin SQL branch),
+SDK-3 (new `Action.Class()` in `pkg/dbadmin/types.go`; stepup store
+keyed by `ActionClass` so one approval authorizes sibling actions in
+the class), SDK-4 (`panelConns.Delete` runs under an explicit
+`BeginTx`/`Commit`).
+
+**Deferred to future PRs:** PD-SEC-05 (deprecated `ResolveCurrentUser`
+is already unexported; no public surface to remove), PD-SEC-07 (defense-
+in-depth filter on Get/Credentials — current upstream gate is
+authoritative and adding a redundant filter risks divergence; revisit
+if a host bypass scenario surfaces), INT-7 (backup decrypt-on-restore
+UX needs the `aura-db backup`/`restore` CLI surface, not the adapter),
+INT-13 / SDK-7 (`panelConns.Grant` routing belongs in PR #11's panel UI
+work), SDK-5 (`ErrForbidden`→403 on global actions remains intentional
+per SECURITY.md §10.3 — global actions have no existence-leak
+concern).
+
+**OPS-04 (reassigned from PR #9.5):** `GET /api/dbadmin/healthz` —
+always-200 liveness probe (process is up). `GET /api/dbadmin/readyz` —
+503 when the engine is shutting down, the audit chain has closed, or
+the panel SQLite store fails a `PingContext`. Both endpoints are
+public (no session cookie required) so external orchestrators
+(systemd, k8s, uptime monitors) can probe without panel identity.
+
 ---
 
 ## Source: PR #11 adversarial review (workflow run wf_e02a04bb-606)

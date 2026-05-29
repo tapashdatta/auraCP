@@ -21,6 +21,22 @@ var (
 	// action class so the frontend can initiate the right MFA flow.
 	ErrStepUpRequired = errors.New("dbadmin: step-up required")
 
+	// ErrStepUpUnavailable indicates the user holds a valid session
+	// but cannot complete step-up because no second factor is enrolled
+	// on their account. Distinct from ErrUnauthenticated (which the
+	// client treats as "log in again") because the right UX here is to
+	// route the operator to the MFA enrollment flow, NOT to a re-login
+	// loop they cannot escape.
+	//
+	// PR #10.5 / FIX-SDK-1: previously VerifyStepUp folded both cases
+	// into ErrUnauthenticated. Without this distinction the panel SPA
+	// rendered "session expired, please log in again" for a user whose
+	// session was perfectly valid but who had simply never enrolled
+	// TOTP — a dead-end loop. The engine maps this sentinel to HTTP
+	// 412 (Precondition Failed) with code "step-up-unavailable" so the
+	// SPA can prompt for enrollment.
+	ErrStepUpUnavailable = errors.New("dbadmin: step-up unavailable (no second factor enrolled)")
+
 	// ErrForbidden indicates the user is authenticated but lacks the
 	// role / permission for this action. The engine maps it to HTTP
 	// 404 (NOT 403) for connection-scoped actions, to avoid leaking
@@ -89,4 +105,9 @@ const (
 	CodeResultCapped     = "result-capped"
 	CodeInternal         = "internal-error"
 	CodeUnavailable      = "unavailable"
+	// CodeStepUpUnavailable signals "user has a valid session but no
+	// second factor is enrolled". The SPA should route the operator
+	// to /settings → MFA setup instead of looping them back through
+	// login. See ErrStepUpUnavailable.
+	CodeStepUpUnavailable = "step-up-unavailable"
 )

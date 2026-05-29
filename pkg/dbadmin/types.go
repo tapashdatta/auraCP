@@ -144,6 +144,68 @@ func (a Action) MinRole() Role {
 	}
 }
 
+// ActionClass groups Actions that share a step-up identity. A step-up
+// flag minted for one Action authorizes any sibling Action in the same
+// class for the lifetime of the flag. Without this grouping, a single
+// step-up prompt would only authorize one tightly-scoped Action — so
+// approving a single DDL statement would force a fresh TOTP prompt on
+// the next DDL statement in the same workstation session, which is both
+// hostile to operators and trains them to spam-approve prompts.
+//
+// PR #10.5 / FIX-SDK-3: stepUpStore is now keyed by class (+ session +
+// connectionID for connection-scoped classes) rather than raw Action.
+type ActionClass string
+
+const (
+	// ActionClassNone is the zero class for actions that do not require
+	// step-up (the default). Keying by this class never authorizes
+	// anything; HasSteppedUp short-circuits on it.
+	ActionClassNone ActionClass = ""
+
+	// ActionClassConnAdmin covers per-connection administrative
+	// actions: viewing the stored password, updating connection
+	// metadata, deleting a connection, managing grants. One step-up
+	// authorizes any of these for the same connection.
+	ActionClassConnAdmin ActionClass = "conn-admin"
+
+	// ActionClassDDL covers data-definition statements (CREATE/ALTER/
+	// DROP/TRUNCATE). One step-up authorizes any DDL statement on the
+	// same connection within the step-up TTL.
+	ActionClassDDL ActionClass = "ddl"
+
+	// ActionClassDangerous covers unparameterized DELETE/UPDATE,
+	// mass-mutation, and other unbounded write actions.
+	ActionClassDangerous ActionClass = "dangerous"
+
+	// ActionClassRestore covers backup restore, which mutates the
+	// target connection's state catastrophically.
+	ActionClassRestore ActionClass = "restore"
+
+	// ActionClassAuditAdmin covers audit-configuration changes
+	// (panel-global, not per-connection).
+	ActionClassAuditAdmin ActionClass = "audit-admin"
+)
+
+// Class returns the step-up class for an Action. Actions in the same
+// class share step-up flags. Returns ActionClassNone for actions that
+// do not require step-up.
+func (a Action) Class() ActionClass {
+	switch a {
+	case ActionConnPwdView, ActionConnUpdate, ActionConnDelete, ActionConnGrantMgmt:
+		return ActionClassConnAdmin
+	case ActionQueryDDL:
+		return ActionClassDDL
+	case ActionQueryDangerous:
+		return ActionClassDangerous
+	case ActionRestore:
+		return ActionClassRestore
+	case ActionAuditConfig:
+		return ActionClassAuditAdmin
+	default:
+		return ActionClassNone
+	}
+}
+
 // RequiresStepUp returns whether the default policy mandates a fresh MFA
 // verification at the moment the action is performed. Hosts MAY require
 // step-up for additional actions; they MUST NOT skip step-up for actions
