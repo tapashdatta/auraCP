@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { splitStatements, getStatementAtCursor } from './splitStatements.js'
+import { splitStatements, getStatementAtCursor, isCommentOnly } from './splitStatements.js'
 
 describe('splitStatements', () => {
   it('returns empty for empty / whitespace input', () => {
@@ -53,6 +53,49 @@ describe('splitStatements', () => {
     const s = splitStatements("DO $$ BEGIN PERFORM 'a;b'; END $$; SELECT 1")
     expect(s.length).toBe(2)
     expect(s[1].trimmedText).toBe('SELECT 1')
+  })
+
+  // SEC-3 (PR #13.5): a comment-only "statement" (e.g. `-- foo;` on a
+  // line by itself, or a stray /* */ block) used to slip through the
+  // splitter and surface as a phantom empty result tab in the UI.
+  it('SEC-3: line-comment-only statements are filtered out', () => {
+    expect(splitStatements('-- foo bar')).toEqual([])
+    expect(splitStatements('-- foo;')).toEqual([])
+    expect(splitStatements('-- foo;\n-- bar;')).toEqual([])
+  })
+
+  it('SEC-3: block-comment-only statements are filtered out', () => {
+    expect(splitStatements('/* foo */;')).toEqual([])
+    expect(splitStatements('/* foo */ /* bar */')).toEqual([])
+  })
+
+  it('SEC-3: comment-then-statement keeps the statement', () => {
+    const s = splitStatements('-- pre-comment\nSELECT 1')
+    expect(s.length).toBe(1)
+    expect(s[0].trimmedText).toMatch(/SELECT 1/)
+  })
+
+  it('SEC-3: statement-then-comment keeps the statement only', () => {
+    const s = splitStatements('SELECT 1; -- trailing comment')
+    expect(s.length).toBe(1)
+    expect(s[0].trimmedText).toBe('SELECT 1')
+  })
+})
+
+describe('isCommentOnly', () => {
+  it('classifies empty / whitespace-only strings as comment-only', () => {
+    expect(isCommentOnly('')).toBe(true)
+    expect(isCommentOnly('   \n\t  ')).toBe(true)
+  })
+  it('classifies comment-only strings', () => {
+    expect(isCommentOnly('-- foo')).toBe(true)
+    expect(isCommentOnly('/* foo */')).toBe(true)
+    expect(isCommentOnly('-- a\n-- b')).toBe(true)
+    expect(isCommentOnly('/* a */\n-- b')).toBe(true)
+  })
+  it('rejects mixed comment+code strings', () => {
+    expect(isCommentOnly('-- foo\nSELECT 1')).toBe(false)
+    expect(isCommentOnly('SELECT 1 /* foo */')).toBe(false)
   })
 })
 

@@ -17,8 +17,34 @@
  */
 
 /**
+ * SEC-3: a statement consisting ONLY of comments + whitespace must NOT
+ * be submitted as an exec frame — server replies with an empty result
+ * tab, which surfaces as a confusing "phantom" tab in the UI. Strip
+ * line comments (`-- … \n`) and block comments (`/* … *​/`) and check
+ * whether anything substantive remains. Quoted strings cannot appear
+ * in a comment-only statement (the splitter has already escaped past
+ * them in the outer state machine), so this lightweight strip is safe
+ * here even though it would NOT be safe as the splitter itself.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isCommentOnly(text) {
+  if (!text) return true
+  // Drop block comments first (non-greedy, multi-line).
+  let s = text.replace(/\/\*[\s\S]*?\*\//g, '')
+  // Drop line comments to end of line.
+  s = s.replace(/--[^\n]*/g, '')
+  return s.trim().length === 0
+}
+
+/**
  * Split a SQL document into top-level statements terminated by `;`.
  * Returns an empty array when the input is whitespace/comments only.
+ *
+ * SEC-3: statements whose trimmed body is comment-only are filtered
+ * out so the user doesn't get a phantom empty result tab from a
+ * `-- foo;` line.
  *
  * @param {string} sql
  * @returns {Statement[]}
@@ -99,7 +125,8 @@ export function splitStatements(sql) {
     if (ch === ';') {
       const text = sql.slice(stmtStart, i)
       const trimmed = text.trim()
-      if (trimmed.length > 0) {
+      // SEC-3: skip comment-only statements (e.g. `-- foo;`).
+      if (trimmed.length > 0 && !isCommentOnly(trimmed)) {
         out.push({ start: stmtStart, end: i, text, trimmedText: trimmed })
       }
       i++
@@ -111,7 +138,7 @@ export function splitStatements(sql) {
   // Trailing statement without ; terminator.
   const tail = sql.slice(stmtStart, n)
   const trimmedTail = tail.trim()
-  if (trimmedTail.length > 0) {
+  if (trimmedTail.length > 0 && !isCommentOnly(trimmedTail)) {
     out.push({ start: stmtStart, end: n, text: tail, trimmedText: trimmedTail })
   }
   return out

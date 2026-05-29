@@ -20,6 +20,18 @@ import { api } from '../api.js'
 
 const WAIT_MS = 250
 
+// SEC-2 / classifier-griefing: cap the number of /classify round-trips
+// per rolling minute regardless of debounce. The server route is
+// authenticated but otherwise open to any session and writes an audit
+// row per call; a tight client-side ceiling stops a runaway editor
+// loop (or a confused tab) from filling the audit log even before the
+// server-side audit-drop lands. 60/min is far above human typing
+// cadence (debounce already collapses bursts to ~4/sec at peak typing,
+// and on settle drops to 1/edit-burst); 60 leaves comfortable room for
+// rapid load-into-editor sessions while choking obvious flooding.
+const RATE_WINDOW_MS = 60_000
+const RATE_LIMIT = 60
+
 /**
  * Create a debounced classifier. The returned object exposes:
  *   - `state`: a $state object with .loading, .parsed, .error fields
@@ -51,8 +63,35 @@ export function createClassifierStore(opts) {
   let pendingSql = ''
   /** @type {number} */
   let seq = 0
+  /** @type {number[]} */
+  const rateHits = []
+
+  // SEC-2: returns true when this call slot is allowed under the
+  // rolling-minute ceiling. Expired entries are dropped lazily.
+  function allowRateSlot() {
+    const now = Date.now()
+    while (rateHits.length && rateHits[0] < now - RATE_WINDOW_MS) {
+      rateHits.shift()
+    }
+    if (rateHits.length >= RATE_LIMIT) return false
+    rateHits.push(now)
+    return true
+  }
 
   async function run(sql) {
+    // SEC-2 / classifier-griefing: skip the round-trip if we just
+    // classified the exact same string. Pure UX-cache — the canonical
+    // server-side re-classify still runs at exec time inside
+    // handleQuery, so this can never widen the gate.
+    if (sql === state.lastSql && state.parsed && !state.error) {
+      return
+    }
+    if (!allowRateSlot()) {
+      // Silent drop — the chip just stays on the previous class until
+      // the limiter window opens. Surfacing a toast here would itself
+      // become a griefing channel (a noisy editor would burst toasts).
+      return
+    }
     const mySeq = ++seq
     state.loading = true
     state.error = null
@@ -95,6 +134,15 @@ export function createClassifierStore(opts) {
     },
     flush() {
       if (timer != null) { clearTimeout(timer); timer = null }
+      // INT-8: flush is called by execCurrent before resolving klass so
+      // the tab label matches the classifier truth. Run synchronously
+      // (returns the promise so the caller can await).
+      if (!pendingSql || pendingSql.trim() === '') {
+        state.parsed = { class: 'read', statements: [], forbidden: [] }
+        state.lastSql = pendingSql || ''
+        state.loading = false
+        return Promise.resolve()
+      }
       return run(pendingSql)
     },
     cancel() {
@@ -110,6 +158,9 @@ export function createClassifierStore(opts) {
       state.parsed = null
       state.error = null
       state.lastSql = ''
+      // SEC-2: rolling window is per-store; reset clears it so a
+      // connection switch starts with a fresh budget.
+      rateHits.length = 0
     },
   }
 }

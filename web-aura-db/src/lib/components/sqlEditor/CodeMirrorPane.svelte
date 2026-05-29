@@ -47,11 +47,15 @@
 
   /**
    * Replace the doc atomically (caller drives via bind:this).
+   * Pass `{ preserveCursor: 'semantic' }` from Format so the caret
+   * lands on the same token (EXEC-12), not the same byte offset.
+   *
    * @param {string} next
+   * @param {{preserveCursor?: 'byte'|'semantic'}} [opts]
    */
-  export function setDoc(next) {
+  export function setDoc(next, opts) {
     if (!view) return
-    replaceDoc(view, next)
+    replaceDoc(view, next, opts)
   }
 
   /** Return the current doc string. */

@@ -1671,6 +1671,87 @@ tightened with a separate `sqlEditor-*` chunk assertion). The remaining
   server-side classifier and driver handle no-op gracefully. UX
   papercut: empty result tab opens for nothing. **Target:** PR #13.5.
 
+### Resolved in PR #13.5
+
+Frontend-only follow-up landed in PR #13.5 (no version bump). Scope:
+all deferred items above NOT retargeted to PR #11.5 (a11y/font polish).
+Resolutions:
+
+- **EXEC-8** — Mid-stream error preserves already-collected rows (status
+  line keeps showing "executing…" partial state; the error path no
+  longer wipes the row buffer — partial rows remain in
+  `activeTab.rows`, consistent with the cancel path).
+- **EXEC-9** — `window.prompt` swapped for `SaveQueryModal.svelte`
+  (focus-trapped, supports name + description + tags + duplicate
+  detection with a "Replace" affordance).
+- **EXEC-10** — `loadIntoEditor` is now dirty-checked: a non-empty
+  divergent buffer routes through a `ConfirmDialog` ("Replace editor
+  buffer?") before clobber. Replay path (`_loadIntoEditorRaw`) is
+  internal and also dirty-checked at the call site.
+- **EXEC-11** — `runOne` collapses success + error paths through a
+  single `finalize()` callback so the history sidebar refreshes on
+  BOTH outcomes (previously the error branch skipped refresh).
+- **EXEC-12** — `replaceDoc(view, next, { preserveCursor: 'semantic' })`
+  added; Format calls it so the caret lands on the same non-whitespace
+  token after reformat instead of being byte-clamped.
+- **EXEC-13** — Empty-doc Save no longer silently no-ops: a warning
+  toast fires ("Nothing to save — editor is empty") and the error
+  live region echoes it.
+- **a11y-01** — CM6 contenteditable now carries `aria-label`,
+  `aria-multiline`, `role=textbox`, and `aria-keyshortcuts` via
+  `EditorView.contentAttributes.of(...)`.
+- **a11y-03** — Cancel button advertises `aria-keyshortcuts="Meta+Period"`
+  and renders the ⌘. kbd hint.
+- **a11y-06** — `ErrorPanel` now sets `role=alert` + `aria-live=assertive`
+  AND pushes each new (code+message) tuple through `pushToast` so AT
+  users get an interrupt regardless of focus location.
+- **a11y-07** — Sidebar accordions (History, Saved) wrap their `<h3>`
+  text in a `<button aria-expanded aria-controls>` and toggle the
+  panel body. Caret glyph reflects state.
+- **a11y-08** — Saved-query items expose a visible `×` button + a
+  `Delete`/`Backspace` keyboard shortcut on the row that opens a
+  `ConfirmDialog` and calls `api.deleteSaved`.
+- **a11y-10** — Save flow now lives in `SaveQueryModal.svelte` (reuses
+  the `<Modal>` focus-trap component). Only the Modal-pattern-reuse
+  half of a11y-10 lands here; the broader Btn/Modal a11y polish stays
+  with PR #11.5.
+- **a11y-13 (palette half)** — `ClassifierChip` renders a 🔒 lock glyph
+  + an SR-only "lock " token in front of the FORBIDDEN label so the
+  colour collision with DANGEROUS no longer reduces both to "red
+  pill". Both pills also carry distinct `title` tooltips.
+- **a11y-14 (split half)** — Status + error live regions split into
+  two DOM nodes: polite `role=status` for transient progress, and
+  assertive `role=alert` for errors. Errors no longer race status
+  updates in the same live region.
+- **INT-3** — Bundle ceilings tightened: main ≤ 95 KB gz
+  (was 110 KB), editor chunk ≤ 175 KB gz (was 200 KB). Empirical
+  landing at PR #13.5 is 56.96 KB gz / 149.80 KB gz, ~6-15% headroom.
+- **INT-5** — Saved sidebar shows a "Session-only — not persisted
+  across panel restarts" caption above the list; `SaveQueryModal`
+  echoes the caveat next to the action.
+- **INT-6** — Format button hover/focus preloads
+  `../lib/sqlEditor/sqlFormatter.js`; first click no longer pays the
+  ~76 KB gz fetch latency.
+- **INT-7** — Decision: KEEP `@codemirror/search`. The ~12-15 KB gz
+  buys Ctrl+F find-in-buffer which is table-stakes in SQL workbenches
+  and is now advertised via the editor's `aria-keyshortcuts`. The
+  cost is absorbed by the tightened editor chunk ceiling.
+- **INT-8** — `await classifier?.flush?.()` is called at the head of
+  both `execCurrent` and `execAll` so the per-tab `klass` label and
+  the forbidden gate are classifier-truth instead of a stale
+  `'unknown'` from the 250ms debounce.
+- **SEC-2 (frontend-side)** — `createClassifierStore.run()` now
+  dedupes identical SQL against `state.lastSql` (UX-cache — the
+  canonical server re-classify still runs at exec time, so the gate
+  cannot widen) and applies a 60-call rolling-minute rate ceiling per
+  store. A runaway editor loop can no longer flood `/sql/classify`.
+  The corresponding server-side audit-event drop is a panel handler
+  change (`auracpd`), not web-aura-db; tracked separately.
+- **SEC-3** — `splitStatements` now filters comment-only statements
+  via a new `isCommentOnly(text)` helper (strips `--` / `/* */`
+  spans and checks for residual non-whitespace). `-- foo;` no longer
+  spawns a phantom empty result tab.
+
 ---
 
 ## Source: PR #14 adversarial review (workflow run wf_a73c150e-d26)

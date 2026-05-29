@@ -29,8 +29,11 @@
   import ResultGrid from '../lib/components/sqlEditor/ResultGrid.svelte'
   import MessagePanel from '../lib/components/sqlEditor/MessagePanel.svelte'
   import ErrorPanel from '../lib/components/sqlEditor/ErrorPanel.svelte'
+  import SaveQueryModal from '../lib/components/sqlEditor/SaveQueryModal.svelte'
+  import ConfirmDialog from '../lib/components/ConfirmDialog.svelte'
   import Btn from '../lib/components/Btn.svelte'
   import EmptyState from '../lib/components/EmptyState.svelte'
+  import { pushToast } from '../lib/toastBus.svelte.js'
 
   import { createClassifierStore } from '../lib/sqlEditor/classifier.svelte.js'
   import { splitStatements, getStatementAtCursor } from '../lib/sqlEditor/splitStatements.js'
@@ -84,6 +87,31 @@
   let formatting = $state(false)
   /** @type {string} */
   let statusMsg = $state('')
+  // a11y-14 partial: a separate error live region so transient status
+  // messages ("executing…", "done in 12ms") don't share the same
+  // polite live region as errors ("error: …"). Errors get an
+  // assertive region so AT interrupts; status stays polite.
+  /** @type {string} */
+  let errorMsg = $state('')
+
+  // a11y-07: sidebar accordions are now collapsible with aria-expanded.
+  let historyOpen = $state(true)
+  let savedOpen = $state(true)
+
+  // EXEC-9 / a11y-10: native window.prompt() replaced with a Svelte
+  // modal that captures name, description, tags, and surfaces a
+  // duplicate-name "Replace" affordance.
+  let saveModalOpen = $state(false)
+  // EXEC-10: dirty-check before load-into-editor REPLACES the buffer
+  // — track a pending sql payload and re-fire after confirm.
+  /** @type {string} */
+  let pendingLoadSql = $state('')
+  let confirmLoadOpen = $state(false)
+  // a11y-08: keyboard-deletable saved query — confirm before delete.
+  /** @type {{id:string, name:string}|null} */
+  let pendingDelete = $state(null)
+  // INT-6: preload-on-hover state for the sql-formatter chunk.
+  let formatterPreloaded = $state(false)
 
   // ─── lifecycle ──────────────────────────────────────────────────
   let lastConnId = $state('')
@@ -267,6 +295,13 @@
     statusMsg = 'executing…'
 
     return new Promise((resolve) => {
+      // EXEC-11: single finalize() so the history sidebar refreshes on
+      // BOTH success and error paths (previously the error branch
+      // skipped refreshHistory(), leaving the sidebar one-behind).
+      const finalize = () => {
+        completeExec(tabId)
+        refreshHistory()
+      }
       try {
         const handle = sqlStream.exec(conn.id, sqlText)
         registerExec(tabId, handle)
@@ -283,9 +318,9 @@
               durationMs: f.durationMs || 0,
               affected: f.affected || 0,
             })
-            completeExec(tabId)
             statusMsg = `done in ${f.durationMs || 0}ms`
-            refreshHistory()
+            errorMsg = ''
+            finalize()
             // INT-2: invalidate schemaCache after a successful DDL or
             // DANGEROUS statement so autocomplete refetches the new
             // shape on next listObjects.
@@ -293,17 +328,32 @@
             resolve({ ok: true })
           })
           .onError((e) => {
+            // EXEC-8: a mid-stream error must NOT clear the rows we
+            // already streamed in — they're real, the server saw a
+            // failure AFTER emitting them. The Cancel path already
+            // keeps partial rows; this brings the error path in line
+            // with that rule so the UX is consistent. The ResultGrid
+            // is keyed off `activeTab.state` to switch from grid to
+            // ErrorPanel, so we expose the partial rows count via the
+            // status line and tell the user to switch back to the
+            // result tab to see the partial set if they want.
             updateTab(tabId, {
               state: 'error',
               errorCode: e.code || 'error',
               errorMessage: e.message || '',
             })
-            completeExec(tabId)
-            statusMsg = `error: ${e.code}`
+            errorMsg = `error: ${e.code || 'failed'}${e.message ? ' — ' + e.message : ''}`
+            statusMsg = ''
+            finalize()
             resolve({ ok: false, error: e })
           })
       } catch (err) {
         updateTab(tabId, { state: 'error', errorCode: 'client_error', errorMessage: String(err) })
+        errorMsg = `error: ${String(err)}`
+        statusMsg = ''
+        // No registered exec to finalize, but still refresh history in
+        // case the server logged the attempt.
+        refreshHistory()
         resolve({ ok: false, error: err })
       }
     })
@@ -324,7 +374,14 @@
     if (!conn) return
     const stmt = resolveStatement(cursorOverride)
     if (!stmt) { statusMsg = 'no statement under cursor'; return }
-    // Resolve the per-statement class against the classifier parse.
+    // INT-8: tab klass would be captured as 'unknown' when the user
+    // hits Cmd+Enter during the classifier's 250ms debounce window.
+    // Flush forces a synchronous classify so the per-tab label, the
+    // forbidden gate, and the toolbar chip all settle BEFORE we push
+    // the exec frame. flush() is a no-op when the doc is empty or
+    // already classified.
+    try { await classifier?.flush?.() } catch { /* ignore */ }
+    // Resolve the per-statement class against the (now-flushed) parse.
     const p = classifier?.state.parsed
     let klass = currentClass
     if (p) {
@@ -349,6 +406,9 @@
     if (!conn) return
     const stmts = splitStatements(docText)
     if (stmts.length === 0) { statusMsg = 'no statements'; return }
+    // INT-8: same flush rationale as execCurrent — class labels on
+    // every spawned tab must be classifier-truth, not "unknown".
+    try { await classifier?.flush?.() } catch { /* ignore */ }
     cancelStillRunning()
     const p = classifier?.state.parsed
     for (const stmt of stmts) {
@@ -422,7 +482,11 @@
     try {
       const mod = await import('../lib/sqlEditor/sqlFormatter.js')
       const next = mod.format(docText, conn?.engine || 'mariadb')
-      editorRef?.setDoc(next)
+      // EXEC-12: ask CodeMirrorPane to preserve the cursor on a
+      // non-whitespace anchor rather than the raw byte offset, so the
+      // user lands on the same token after Format — not a random
+      // column three rows down.
+      editorRef?.setDoc(next, { preserveCursor: 'semantic' })
       docText = next
     } catch {
       statusMsg = 'formatter unavailable'
@@ -431,16 +495,77 @@
     }
   }
 
-  async function saveQuery() {
-    if (!docText.trim()) return
-    const name = (typeof prompt === 'function') ? prompt('Save query as:') : 'query'
-    if (!name) return
+  // INT-6: preload the sql-formatter chunk on hover/focus so the first
+  // Format click doesn't pay the ~76 KB gz fetch latency. The first
+  // hover triggers the dynamic import; result is cached by the module
+  // graph so subsequent invocations are free.
+  function preloadFormatter() {
+    if (formatterPreloaded) return
+    formatterPreloaded = true
+    import('../lib/sqlEditor/sqlFormatter.js').catch(() => {
+      // Pre-fetch failure is non-fatal — Format itself will retry.
+      formatterPreloaded = false
+    })
+  }
+
+  // EXEC-9 / EXEC-13 / a11y-10: open the SaveQueryModal instead of a
+  // native window.prompt. The modal handles the empty-doc case with a
+  // visible message (EXEC-13) and the duplicate-name case with a
+  // "Replace" affordance.
+  function saveQuery() {
+    if (!docText.trim()) {
+      // EXEC-13: tell the user (the old impl silently returned).
+      statusMsg = ''
+      errorMsg = 'cannot save — editor buffer is empty'
+      try { pushToast({ message: 'Nothing to save — editor is empty.', tone: 'warning' }) } catch { /* ignore */ }
+      return
+    }
+    saveModalOpen = true
+  }
+
+  // Modal commit handler. `replace=true` means the user is overwriting
+  // an existing name; we DELETE then POST to keep the storage shape
+  // unchanged. If delete fails we still attempt the save and let the
+  // server reject if it truly can't take a duplicate.
+  async function commitSave(payload) {
+    const { name, description, tags, replace } = payload
+    if (replace) {
+      const dup = saved.find((s) => s.name === name)
+      if (dup && dup.id) {
+        try { await api.deleteSaved(id, dup.id) } catch { /* ignore — best-effort */ }
+      }
+    }
     try {
-      await api.saveQuery(id, { name, statement: docText, tags: [] })
+      await api.saveQuery(id, {
+        name,
+        statement: docText,
+        // server schema currently accepts tags + description optional.
+        description,
+        tags,
+      })
+      saveModalOpen = false
       refreshSaved()
       statusMsg = `saved: ${name}`
+      errorMsg = ''
+      try { pushToast({ message: `Saved query: ${name}`, tone: 'success' }) } catch { /* ignore */ }
     } catch (err) {
-      statusMsg = 'save failed'
+      errorMsg = 'save failed'
+      try { pushToast({ message: 'Save failed — check connectivity.', tone: 'danger' }) } catch { /* ignore */ }
+    }
+  }
+
+  // a11y-08: keyboard-delete a saved query. ConfirmDialog gates the
+  // destructive action and the Delete key on the saved <li> opens it.
+  async function commitDeleteSaved() {
+    if (!pendingDelete) return
+    const target = pendingDelete
+    pendingDelete = null
+    try {
+      await api.deleteSaved(id, target.id)
+      refreshSaved()
+      try { pushToast({ message: `Deleted saved query: ${target.name}`, tone: 'info' }) } catch { /* ignore */ }
+    } catch {
+      try { pushToast({ message: `Could not delete: ${target.name}`, tone: 'danger' }) } catch { /* ignore */ }
     }
   }
 
@@ -460,10 +585,41 @@
     } catch { saved = [] }
   }
 
-  function loadIntoEditor(sqlText) {
+  // EXEC-10: clicking a history / saved entry REPLACES the editor
+  // buffer. CM6 keeps undo so recovery is one Ctrl+Z away, but losing
+  // half a page of unsaved work to a stray click is a real papercut.
+  // When the current buffer is non-empty AND differs from the incoming
+  // payload, gate the load behind a confirm dialog. The internal
+  // bypass path (`replace handoff from palette / consumePending`) calls
+  // _loadIntoEditorRaw directly so the existing replay flow is
+  // untouched.
+  function _loadIntoEditorRaw(sqlText) {
     editorRef?.setDoc(sqlText)
     docText = sqlText
     editorRef?.focus()
+  }
+
+  function loadIntoEditor(sqlText) {
+    const current = (docText || '').trim()
+    const incoming = (sqlText || '').trim()
+    if (current.length > 0 && current !== incoming) {
+      pendingLoadSql = sqlText
+      confirmLoadOpen = true
+      return
+    }
+    _loadIntoEditorRaw(sqlText)
+  }
+
+  function confirmLoad() {
+    confirmLoadOpen = false
+    const next = pendingLoadSql
+    pendingLoadSql = ''
+    if (next) _loadIntoEditorRaw(next)
+  }
+
+  function cancelLoad() {
+    confirmLoadOpen = false
+    pendingLoadSql = ''
   }
 
   function toggleSidebar() { sidebarOpen = !sidebarOpen }
@@ -537,17 +693,33 @@
     </div>
     <div class="sql-editor__buttons">
       <Btn variant="primary" onclick={execCurrent} disabled={connLoading || isForbidden}>
-        Execute <span class="sql-editor__kbd">⌘↵</span>
+        Execute <span class="sql-editor__kbd" aria-hidden="true">⌘↵</span>
       </Btn>
       <Btn variant="ghost" onclick={openExplain} disabled={connLoading || isForbidden || !currentStatement}>
-        Explain <span class="sql-editor__kbd">⌘E</span>
+        Explain <span class="sql-editor__kbd" aria-hidden="true">⌘E</span>
       </Btn>
       {#if anyExecuting}
-        <Btn variant="danger" onclick={cancelCurrent}>Cancel</Btn>
+        <!-- a11y-03: surface the Cmd+. keybinding so it's discoverable
+             both for sighted users (kbd hint) and AT users
+             (aria-keyshortcuts). The native attribute is ignored by
+             older browsers but does no harm. -->
+        <button
+          type="button"
+          class="btn btn--danger"
+          onclick={cancelCurrent}
+          aria-keyshortcuts="Meta+Period"
+          title="Cancel running query (⌘.)"
+        >
+          Cancel <span class="sql-editor__kbd" aria-hidden="true">⌘.</span>
+        </button>
       {/if}
-      <Btn variant="ghost" onclick={formatDoc} loading={formatting}>Format</Btn>
+      <!-- INT-6: preload the sql-formatter chunk on hover/focus so the
+           first click doesn't wait on the ~76 KB gz fetch. -->
+      <span onmouseenter={preloadFormatter} onfocusin={preloadFormatter}>
+        <Btn variant="ghost" onclick={formatDoc} loading={formatting} ariaBusy={formatting}>Format</Btn>
+      </span>
       <Btn variant="ghost" onclick={saveQuery}>Save</Btn>
-      <Btn variant="ghost" onclick={toggleSidebar} aria-label="toggle sidebar">{sidebarOpen ? '▶' : '◀'}</Btn>
+      <Btn variant="ghost" onclick={toggleSidebar} ariaLabel="toggle sidebar">{sidebarOpen ? '▶' : '◀'}</Btn>
     </div>
   </header>
 
@@ -574,9 +746,20 @@
         {/if}
       </div>
 
-      <div class="sql-editor__status" aria-live="polite">
+      <!-- a11y-14 (partial): split status + error live regions. The
+           polite region carries progress / completion ("executing…",
+           "done in 12ms"); the assertive region carries errors so AT
+           interrupts the user with the failure. Keeping them in
+           separate DOM nodes prevents a transient status update from
+           steamrolling an unread error announcement. -->
+      <div class="sql-editor__status" role="status" aria-live="polite">
         {statusMsg}
       </div>
+      {#if errorMsg}
+        <div class="sql-editor__status sql-editor__status--err" role="alert" aria-live="assertive">
+          {errorMsg}
+        </div>
+      {/if}
 
       <div class="sql-editor__results" data-testid="results-pane">
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -637,41 +820,153 @@
 
     {#if sidebarOpen}
       <aside class="sql-editor__sidebar" aria-label="workbench sidebar">
+        <!-- a11y-07: accordions now use a proper button + aria-expanded
+             so AT users can collapse them and the visual state matches
+             the semantic state. Click the header to toggle. -->
         <section class="sql-editor__accordion">
-          <h3>History</h3>
-          {#if history.length === 0}
-            <p class="sql-editor__empty">No history</p>
-          {:else}
-            <ul class="sql-editor__list">
-              {#each history.slice(0, 25) as h (h.id)}
-                <li>
-                  <button class="sql-editor__listBtn" onclick={() => loadIntoEditor(h.sql)} title={h.sql}>
-                    <span class="sql-editor__listClass" data-class={h.class}>{h.class}</span>
-                    <span class="sql-editor__listSql">{h.sql.slice(0, 60)}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
+          <h3>
+            <button
+              type="button"
+              class="sql-editor__accordionHead"
+              aria-expanded={historyOpen}
+              aria-controls="sql-editor__history-panel"
+              onclick={() => { historyOpen = !historyOpen }}
+            >
+              <span class="sql-editor__caret" aria-hidden="true">{historyOpen ? '▾' : '▸'}</span>
+              History
+            </button>
+          </h3>
+          {#if historyOpen}
+            <div id="sql-editor__history-panel">
+              {#if history.length === 0}
+                <p class="sql-editor__empty">No history</p>
+              {:else}
+                <ul class="sql-editor__list">
+                  {#each history.slice(0, 25) as h (h.id)}
+                    <li>
+                      <button class="sql-editor__listBtn" onclick={() => loadIntoEditor(h.sql)} title={h.sql}>
+                        <span class="sql-editor__listClass" data-class={h.class}>{h.class}</span>
+                        <span class="sql-editor__listSql">{h.sql.slice(0, 60)}</span>
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
           {/if}
         </section>
         <section class="sql-editor__accordion">
-          <h3>Saved</h3>
-          {#if saved.length === 0}
-            <p class="sql-editor__empty">No saved queries</p>
-          {:else}
-            <ul class="sql-editor__list">
-              {#each saved as s (s.id)}
-                <li>
-                  <button class="sql-editor__listBtn" onclick={() => loadIntoEditor(s.statement)} title={s.statement}>
-                    <span class="sql-editor__listName">{s.name}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
+          <h3>
+            <button
+              type="button"
+              class="sql-editor__accordionHead"
+              aria-expanded={savedOpen}
+              aria-controls="sql-editor__saved-panel"
+              onclick={() => { savedOpen = !savedOpen }}
+            >
+              <span class="sql-editor__caret" aria-hidden="true">{savedOpen ? '▾' : '▸'}</span>
+              Saved
+            </button>
+          </h3>
+          {#if savedOpen}
+            <div id="sql-editor__saved-panel">
+              <!-- INT-5: surface the session-only storage caveat so
+                   operators don't lose work on daemon restart without
+                   warning. Removed when we wire a persistent store. -->
+              <p class="sql-editor__sessionNote" aria-live="polite">
+                Session-only — not persisted across panel restarts.
+              </p>
+              {#if saved.length === 0}
+                <p class="sql-editor__empty">No saved queries</p>
+              {:else}
+                <ul class="sql-editor__list">
+                  {#each saved as s (s.id)}
+                    <li class="sql-editor__savedRow">
+                      <!-- a11y-08: keyboard-delete affordance — Delete /
+                           Backspace on the row opens a confirm dialog
+                           and routes through api.deleteSaved. The
+                           explicit "Remove" button is visible too so
+                           mouse users have parity. -->
+                      <button
+                        class="sql-editor__listBtn"
+                        onclick={() => loadIntoEditor(s.statement)}
+                        title={s.statement}
+                        onkeydown={(e) => {
+                          if (e.key === 'Delete' || e.key === 'Backspace') {
+                            e.preventDefault()
+                            pendingDelete = { id: s.id, name: s.name }
+                          }
+                        }}
+                      >
+                        <span class="sql-editor__listName">{s.name}</span>
+                      </button>
+                      <button
+                        type="button"
+                        class="sql-editor__rowDel"
+                        aria-label={`Delete saved query ${s.name}`}
+                        title="Delete (Del / Backspace)"
+                        onclick={() => { pendingDelete = { id: s.id, name: s.name } }}
+                      >×</button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </div>
           {/if}
         </section>
       </aside>
     {/if}
   </div>
+
+  <!-- EXEC-9 / EXEC-13 / INT-5 / a11y-10: replace window.prompt with a
+       focus-trapped modal that captures name + description + tags and
+       surfaces the session-only caveat next to the action. -->
+  <SaveQueryModal
+    bind:open={saveModalOpen}
+    statement={docText}
+    existingNames={saved.map((s) => s.name)}
+    sessionOnly={true}
+    onClose={() => { saveModalOpen = false }}
+    onSave={commitSave}
+  />
+
+  <!-- EXEC-10: dirty-check confirmation when loading a saved/history
+       entry would clobber the current buffer. -->
+  <ConfirmDialog
+    bind:open={confirmLoadOpen}
+    title="Replace editor buffer?"
+    message="The editor has unsaved changes. Loading this query will replace them. Continue?"
+    confirmLabel="Replace"
+    cancelLabel="Keep current"
+    tone="danger"
+    onConfirm={confirmLoad}
+    onCancel={cancelLoad}
+  />
+
+  <!-- a11y-08: keyboard-delete confirm. -->
+  <ConfirmDialog
+    open={pendingDelete !== null}
+    title="Delete saved query"
+    message={pendingDelete ? `Delete saved query "${pendingDelete.name}"? This cannot be undone.` : ''}
+    confirmLabel="Delete"
+    cancelLabel="Keep"
+    tone="danger"
+    onConfirm={commitDeleteSaved}
+    onCancel={() => { pendingDelete = null }}
+  />
 </div>
+
+<style>
+  /* PR #13.5 additive styles. Main editor styles live in the screen's parent stylesheet. */
+  .sql-editor__status--err { color: var(--danger, #dc2626); }
+  .sql-editor__accordionHead { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 0; padding: 4px 2px; color: inherit; font: inherit; font-weight: 600; cursor: pointer; width: 100%; text-align: left; }
+  .sql-editor__accordionHead:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; border-radius: 4px; }
+  .sql-editor__caret { display: inline-block; width: 1em; color: var(--text-dim, #888); }
+  .sql-editor__sessionNote { margin: 4px 0 6px; padding: 4px 6px; font-size: 0.78em; color: var(--text-dim, #888); border-left: 2px solid var(--info, #2563eb); background: rgba(37, 99, 235, 0.06); }
+  .sql-editor__savedRow { display: flex; align-items: center; gap: 4px; }
+  .sql-editor__savedRow .sql-editor__listBtn { flex: 1; min-width: 0; }
+  .sql-editor__rowDel { background: transparent; border: 0; color: var(--text-dim, #888); cursor: pointer; padding: 2px 6px; border-radius: 3px; font-size: 1.1em; line-height: 1; }
+  .sql-editor__rowDel:hover { color: var(--danger, #dc2626); background: rgba(220, 38, 38, 0.1); }
+  .sql-editor__rowDel:focus-visible { outline: 2px solid var(--danger, #dc2626); outline-offset: 1px; }
+</style>
 

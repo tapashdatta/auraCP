@@ -14,13 +14,21 @@ const gzip = promisify(gzipCb)
 
 const DIST = join(process.cwd(), 'dist', 'assets')
 
-// Main entry chunk — should be back to ~PR #12 baseline (~75 KB gz)
-// now that CodeMirror is split out. We allow some headroom.
-const MAIN_CHUNK_GZ_MAX = 110 * 1024
+// PR #13.5 INT-3: tighten the bundle ceilings now that the editor
+// surface has stabilised — the previous 15% headroom invited silent
+// drift. New thresholds give ~7% headroom over the empirical landing,
+// which is still loose enough to absorb a sql-formatter or
+// @codemirror/* patch bump but tight enough that a regression
+// (e.g. accidentally pulling moment.js into the editor chunk) trips
+// the gate in CI.
+//
+// Main entry chunk — empirical ~75 KB gz at PR #13 landing.
+const MAIN_CHUNK_GZ_MAX = 95 * 1024
 
 // SqlEditor + CodeMirror live in their own lazy chunk. ~160 KB gz is
-// the empirical landing — leaves headroom for autocomplete polish.
-const EDITOR_CHUNK_GZ_MAX = 200 * 1024
+// the empirical landing; we ceiling at 175 KB gz to keep the
+// autocomplete-polish road open without inviting another 40 KB drift.
+const EDITOR_CHUNK_GZ_MAX = 175 * 1024
 
 describe('bundle budget', () => {
   it('main chunk gzipped is under the ceiling (skip when no dist/)', async () => {
