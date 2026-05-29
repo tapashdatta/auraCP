@@ -52,37 +52,55 @@ func RunCreate(ctx context.Context, spec *Spec, deps *Deps) error {
 	if err := Preflight(spec, deps); err != nil {
 		return err
 	}
+
+	// v0.2.55: rollback on per-type Run() OR SmokeProbe failure. Pre-v0.2.55
+	// any failure here left a half-created site on disk — vhost in
+	// sites-available, FPM pool in pool.d, Linux user in /etc/passwd —
+	// but NO store.Site row (the API handler persists that only AFTER
+	// RunCreate returns nil). That meant a subsequent Delete couldn't
+	// find the orphan to clean up, and the next Create attempt for the
+	// same domain hit a Preflight conflict on the orphan vhost.
+	//
+	// rollback() calls RunDelete on the spec we just half-created, which
+	// is tolerant of missing artifacts (os.Remove is best-effort). Even
+	// if the operator NEVER tried this domain before, a no-op RunDelete
+	// is cheap (~50ms).
+	rollback := func(cause error) error {
+		_ = RunDelete(ctx, &DeleteSpec{Domain: spec.Domain, User: spec.User}, deps)
+		return cause
+	}
+
 	switch spec.Type {
 	case "php", "wordpress":
 		c := NewPhp(spec, deps.R, deps.Php)
 		if err := c.Run(ctx); err != nil {
-			return err
+			return rollback(err)
 		}
 	case "nodejs":
 		c := NewNodejs(spec, deps.R, deps.Rt, deps.Node, deps.Store)
 		if err := c.Run(ctx); err != nil {
-			return err
+			return rollback(err)
 		}
 	case "python":
 		c := NewPython(spec, deps.R, deps.Rt, deps.Store)
 		if err := c.Run(ctx); err != nil {
-			return err
+			return rollback(err)
 		}
 	case "static":
 		c := NewStatic(spec, deps.R)
 		if err := c.Run(ctx); err != nil {
-			return err
+			return rollback(err)
 		}
 	case "reverseproxy":
 		c := NewReverseProxy(spec, deps.R)
 		if err := c.Run(ctx); err != nil {
-			return err
+			return rollback(err)
 		}
 	default:
 		return fmt.Errorf("creator.RunCreate: unknown site type %q", spec.Type)
 	}
 	if err := SmokeProbe(spec.Domain); err != nil {
-		return fmt.Errorf("smoke probe failed: %w — vhost+pool written, but the site doesn't respond. See journalctl -u auracpd | grep %s", err, spec.Domain)
+		return rollback(fmt.Errorf("smoke probe failed: %w — half-created state has been rolled back. See journalctl -u auracpd | grep %s", err, spec.Domain))
 	}
 	return nil
 }

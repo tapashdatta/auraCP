@@ -379,7 +379,11 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .site-meta .m .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--txt-3);font-weight:600}
 .site-meta .m .v{font-family:var(--fs-mono);font-size:13px;color:var(--txt)}
 .site-meta .sep{width:1px;background:var(--line)}
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;scrollbar-width:none}
+/* v0.2.55: explicit flex-wrap:nowrap + overflow-y:hidden so the tab
+   strip never grows to a second row, regardless of viewport width.
+   Without overflow-y:hidden the browser fell back to vertical scroll
+   when content marginally overflowed vertically (operator-reported). */
+.tabs{display:flex;flex-wrap:nowrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global
    reset; visual styling sits on .tab itself. */

@@ -40,7 +40,7 @@ and leaves the server's resources for the sites it hosts.
   **TOTP 2FA**, CSRF, security headers, login rate-limiting, and **granular per-resource CRUD RBAC**.
 - **Backups** (local + rclone remotes), **audit log**, live **instance metrics** & service status.
 - **Light + dark** enterprise UI; runs on **Debian/Ubuntu**, **x86-64 & ARM64**.
-- **Single transactional site pipeline** (`AURACP_USE_NEW_CREATOR=1`, v0.2.54 opt-in) — every
+- **Single transactional site pipeline** (`AURACP_USE_NEW_CREATOR=1`, v0.2.55 opt-in) — every
   site artifact (vhost, FPM pool, cert, chown target) derives from one in-memory record in one
   ordered pass with a post-create smoke probe. Vhost ↔ pool user drift is structurally impossible.
   See [docs/CLOUDPANEL-STUDY.md](docs/CLOUDPANEL-STUDY.md).
@@ -69,7 +69,7 @@ clone needed — the `.deb` bundles the installer and exposes it as the `auracp-
 # 1) download the package for your arch (plain curl — repo is public)
 ARCH=$(dpkg --print-architecture)        # → amd64 or arm64
 curl -fL -o auracp.deb \
-  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.54/auracp_0.2.54_${ARCH}.deb"
+  "https://github.com/tapashdatta/auraCP/releases/download/v0.2.55/auracp_0.2.55_${ARCH}.deb"
 
 # 2) install the panel
 sudo dpkg -i ./auracp.deb
@@ -82,7 +82,7 @@ sudo auracp-install
 
 ```bash
 ARCH=$(dpkg --print-architecture) && \
-curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.54/auracp_0.2.54_${ARCH}.deb" && \
+curl -fL -o /tmp/auracp.deb "https://github.com/tapashdatta/auraCP/releases/download/v0.2.55/auracp_0.2.55_${ARCH}.deb" && \
 sudo dpkg -i /tmp/auracp.deb && \
 sudo auracp-install --yes --db=both --node=yes --php=yes --panel-domain=panel.example.com
 ```
@@ -123,5 +123,5 @@ Requires Go ≥ 1.23 and Node 24 (dev only — the shipped binary needs neither)
 - [docs/PLAN.md](docs/PLAN.md) — milestones & status
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — dev setup & conventions
 - [docs/TESTING.md](docs/TESTING.md) — Debian/Ubuntu VM validation checklist
-- [docs/CLOUDPANEL-STUDY.md](docs/CLOUDPANEL-STUDY.md) — derivation of the v0.2.54 single-pipeline architecture
-- [docs/V0.2.54-VALIDATION.md](docs/V0.2.54-VALIDATION.md) — checklist for the opt-in pipeline rollout
+- [docs/CLOUDPANEL-STUDY.md](docs/CLOUDPANEL-STUDY.md) — derivation of the v0.2.55 single-pipeline architecture
+- [docs/V0.2.55-VALIDATION.md](docs/V0.2.55-VALIDATION.md) — checklist for the opt-in pipeline rollout
