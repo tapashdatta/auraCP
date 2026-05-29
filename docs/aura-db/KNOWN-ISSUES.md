@@ -534,6 +534,158 @@ of rows. Fix in PR #7.5:
 
 ---
 
+## Source: PR #8 adversarial review (workflow run wf_d3fe5294-f67)
+
+The 4-lens review of the HTTP wire surface (`pkg/dbadmin/httpapi/`,
+23 files, ~3,930 LOC) produced 52 raw findings (1 critical, 15 high,
+20 medium, 13 low, 2 nit). After dedupe + triage: 7 must-fix items
+were promoted and landed in PR #8 itself — WebSocket CSWSH defense
+(real same-origin check + CSRF handshake gate), audit emission on
+every authn/CSRF/rate-limit denial, WS audit emission on every deny
+branch, WS error frames routed through `mapErr()` to strip driver
+detail, `request_id` snake_case in the error envelope, kebab-case
+error code constants matching `pkg/dbadmin/errors.go`, and `errors.Is`
+for driver sentinels in `handleQuery`. The remaining 39 findings are
+deferred below.
+
+### Deferred high findings — PR #8.5
+
+#### DEF-1 — Step-up `/verify` shares the generic mutating rate-limit bucket
+
+The step-up verification endpoint is bucketed against the same
+10 req/s burst-20 limiter as every other mutating route. SECURITY.md
+§4.4 specifies a stricter step-up rate-limit (10 per 15 minutes per
+user with progressive lockout); the current limiter doesn't model
+windows that long. Fix in PR #8.5: dedicated `rateClassStepUp` with
+a sliding 15-minute counter + per-IP secondary lock.
+
+#### DEF-2 — `handleQuery` / `handleExplain` call `Conns().Get` before `authorize`
+
+The lookup happens before the authorization check, so a 404 for an
+existing connection the user doesn't have access to differs in
+timing from a 404 for a non-existent connection. Enables connection
+enumeration via timing side-channel. Fix in PR #8.5: gate
+`Conns().Get` behind `HasPermission` (or return the same 404 with
+constant-time padding).
+
+#### DEF-22 — WS stream ignores operator-configured Limits
+
+`handleSQLStream` uses hardcoded 30-min timeout, 10M-row cap, 1 GiB
+byte cap regardless of `Config.Query.TimeoutMax / ResultRowsMax /
+ResultBytesMax`. Per SECURITY.md §14 operators must be able to tune
+these. Fix in PR #8.5: route through `Config()` like the REST
+handlers.
+
+#### DEF-23 — WS write loop ignores `writeFrame` errors
+
+`flush()` and the row pump call `_ = writeFrame(...)` and discard
+the error. A slow client that stops reading causes the server-side
+`writeFrame` to block until `wsWriteWait` elapses, then the next
+iteration blocks again — the loop never exits even though the
+client is gone. Fix in PR #8.5: propagate writeFrame errors, break
+the row pump on EOF / closed-pipe.
+
+#### DEF-24 — WS handler never sends pings; long queries die at the 60s read deadline
+
+`SetPongHandler` resets the read deadline on inbound pongs, but
+nothing initiates pings from the server. A query that takes longer
+than `wsPongWait` (60s) without producing rows triggers the read
+deadline and tears down the connection mid-stream. Fix in PR #8.5:
+ticker goroutine that sends ping frames every 30s for the lifetime
+of the stream.
+
+### Deferred medium findings — PR #8.5
+
+- **DEF-3** — `recoverer` audit `Record` echoes raw `panic` value;
+  possible credential/SQL residue in audit log. Fix: format with
+  `%T` only, log full panic + stack server-side.
+- **DEF-4** — `handleRevealPassword` returns plaintext in JSON body
+  rather than the signed one-time URL pattern SDK §7.3 mandates.
+  Fix: mint a short-TTL signed URL and return that.
+- **DEF-5** — `creds.Zero()` is a no-op for the captured local `pw`
+  string due to Go string interning. Fix: hold as `[]byte` from
+  retrieval through emission.
+- **DEF-6** — Post-upgrade per-message CSRF / handshake token not
+  implemented (the subprotocol-token claim added in PR #8 only
+  validates the initial handshake). Fix: revalidate token on every
+  inbound open frame.
+- **DEF-12** — Audit emission happens AFTER response is written;
+  a crash between Write and Record loses the audit. Fix: record
+  THEN write.
+- **DEF-13** — `/sql/stream` has no rate limit AND no per-user
+  concurrent-stream cap. Fix: bucket WS upgrades + cap N concurrent.
+- **DEF-14** — `SetWriteDeadline` called outside `mu` in
+  `writeWSError` vs `writeFrame`. Fix: take the lock or use a
+  channel-serialized writer.
+- **DEF-15** — `/history` pagination accepts negative `limit`/`offset`
+  silently. Fix: validate at decode time.
+- **DEF-16** — `handlePatchHistory` applies Star and Tag as two
+  non-atomic store calls. Fix: a single Patch op on the store.
+- **DEF-25** — `AuditSink.Record` is called synchronously inline;
+  a slow sink stalls every request. Fix: bounded async queue with
+  drop-policy.
+- **DEF-26** — Saved-queries store is unbounded per (user, conn).
+  Fix: cap at 256 per user, evict LRU on overflow.
+- **DEF-27** — REST `/query` materializes the entire result in
+  memory before writing. Fix: stream JSON array via encoder.
+- **DEF-28** — Filter / sort / columns slices from URL query are
+  unbounded. Fix: cap at 32 each.
+- **DEF-29** — `/history` `limit`/`offset` have no upper cap;
+  `SearchHistory` `q` length uncapped. Fix: clamp to MaxListLimit.
+- **DEF-30** — Export stub accepts arbitrary JSON without exporter
+  machinery caps. Fix: real exporter (PR #16) gates this.
+- **DEF-33** — SDK §7 documents WS `/connections/{id}/slow-log/stream`
+  which is missing; PR #8 ships an undocumented `/sql/stream`. Fix:
+  reconcile SDK.md to match implementation, or rename the route.
+- **DEF-34** — Five routes ship without SDK §7 entries: rows insert,
+  history search/patch/delete, saved-queries delete. Fix: update SDK.
+- **DEF-35** — `httpapi` exports `New`, `Options`, and 33 `Code*`
+  constants; the constants leak the implementation as public API.
+  Fix: lowercase the constants OR document the wire form in SDK and
+  remove the Go re-exports.
+- **DEF-36** — Test coverage for §7 routes is partial (~25% by
+  the synthesis count). Fix: round out per-route happy-path +
+  error-envelope assertions.
+
+### Deferred low / nit findings — PR #8.5
+
+- **DEF-7** — Rate limiter never evicts buckets — unbounded memory
+  growth keyed by user ID. Fix: LRU eviction at 10K entries.
+- **DEF-8** — Reclassify guard in `handleQuery` is byte-identical
+  reclassify; the SHA-256 computed is discarded. Fix: drop the
+  compute, or use the hash for audit correlation.
+- **DEF-9** — `/import` endpoint authorizes but returns 200 with
+  no work done. Fix: implement or return `not-implemented`.
+- **DEF-10** — Export endpoint returns stub `SignedURL` pointing
+  at an unregistered route. Fix: implement in PR #16.
+- **DEF-11** — Catch-all 404 handler runs `authn` but emits no
+  audit. Fix: emit denial event on every 404 that ran auth.
+- **DEF-17** — Connection-creation validation doesn't name the
+  missing field. Fix: include field name in error message.
+- **DEF-18** — `parseFilter` doesn't JSON-decode the value as the
+  comment promises. Fix: decode or update the comment.
+- **DEF-19** — WS query/exec failure emits error frame but no
+  Close control frame. Fix: WriteControl after writeWSError.
+- **DEF-20** — `writeError` after successful `WriteHeader` causes
+  a "superfluous WriteHeader" log line. Fix: guard with a
+  written-flag on the response writer.
+- **DEF-21** — Rate-limit key namespace can collide if user IDs
+  begin with `r:` or `w:`. Fix: namespace separator that user IDs
+  can't contain.
+- **DEF-31** — `/import` uses `ParseMultipartForm` without
+  `RemoveAll` — tmp file accrual on error paths. Fix: deferred
+  cleanup.
+- **DEF-32** — No per-user concurrent-query cap; burst 100 reads
+  vs `PoolSizePerConn=4`. Fix: per-user semaphore.
+- **DEF-37** — WS frame schema not specified in SDK.md but ships
+  on a stable URL. Fix: document the frame shapes.
+- **DEF-38** — `connectionInput` accepts TLS certs + `PoolSize`
+  fields that are silently discarded. Fix: error on unknown.
+- **DEF-39** — `connectionDTO` omits SDK fields `owner` and
+  `origin`. Fix: add to the DTO.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

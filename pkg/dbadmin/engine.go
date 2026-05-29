@@ -8,6 +8,18 @@ import (
 	"sync/atomic"
 )
 
+// engineHandlerFactory is the package-private indirection that the
+// httpapi subpackage installs via WireHandler. It avoids an import cycle
+// between pkg/dbadmin and pkg/dbadmin/httpapi.
+var engineHandlerFactory func(*Engine) http.Handler
+
+// WireHandler is called by package httpapi at init-time to register its
+// router factory. The engine then returns that factory's result from
+// Handler(). Hosts MUST NOT call this directly.
+func WireHandler(fn func(*Engine) http.Handler) {
+	engineHandlerFactory = fn
+}
+
 // Options carries everything New() needs to construct an Engine. Auth,
 // Conns, and Audit are required. Config is optional; the zero value is
 // replaced by DefaultConfig().
@@ -80,31 +92,50 @@ func (e *Engine) Config() Config {
 	return e.config
 }
 
+// AuthSurface exposes the Auth implementation to subpackages
+// (httpapi). Not for host use.
+func (e *Engine) AuthSurface() Auth { return e.auth }
+
+// Conns exposes the ConnectionStore implementation to subpackages.
+// Not for host use.
+func (e *Engine) Conns() ConnectionStore { return e.conns }
+
+// Audit exposes the AuditSink implementation to subpackages.
+// Not for host use.
+func (e *Engine) Audit() AuditSink { return e.audit }
+
+// IsShuttingDown reports whether Shutdown has been called.
+func (e *Engine) IsShuttingDown() bool { return e.shut.Load() }
+
+// TrackInflight increments the in-flight counter and returns a release
+// function. Used by the httpapi middleware to participate in graceful
+// shutdown. Not for host use.
+func (e *Engine) TrackInflight() func() {
+	e.inflight.Add(1)
+	return e.inflight.Done
+}
+
 // Handler returns the http.Handler that mounts the engine's REST + WebSocket
 // surface. Hosts mount it at any path; the engine's URLs are relative to
 // the mount point.
 //
-// PR #1: this returns a minimal handler that:
-//   - Returns 503 if the engine is shutting down.
-//   - Authenticates via e.auth.Authenticate.
-//   - Returns 401 with the standard error envelope on auth failure.
-//   - Returns 501 with a "not implemented" body for every other path
-//     (until PR #8 wires the real routes).
-//
-// The full route table per SDK.md §7 lands in PR #8.
+// PR #8: the router is composed by the httpapi subpackage, which registers
+// its factory via WireHandler() at package init. The fallback (when
+// httpapi is not linked, e.g. tiny smoke binaries) is the previous PR #1
+// minimal handler — authn + 501 — so the package remains importable
+// stand-alone.
 func (e *Engine) Handler() http.Handler {
+	if engineHandlerFactory != nil {
+		return engineHandlerFactory(e)
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if e.shut.Load() {
 			writeError(w, http.StatusServiceUnavailable, CodeUnavailable,
 				"engine shutting down")
 			return
 		}
-
 		e.inflight.Add(1)
 		defer e.inflight.Done()
-
-		// Authenticate every request. SDK.md §3.1: this is called
-		// exactly once per request, before any other Auth method.
 		_, err := e.auth.Authenticate(r)
 		if err != nil {
 			if errors.Is(err, ErrUnauthenticated) {
@@ -112,15 +143,10 @@ func (e *Engine) Handler() http.Handler {
 					CodeUnauthenticated, "authentication required")
 				return
 			}
-			// I/O / system failure during authentication.
 			writeError(w, http.StatusInternalServerError,
 				CodeInternal, "authentication failed")
 			return
 		}
-
-		// Real routes land in PR #8. For now: every authenticated
-		// request gets a 501 with the request path echoed back so
-		// the integration tests can verify auth ran before routing.
 		writeError(w, http.StatusNotImplemented, "not-implemented",
 			"route not yet implemented: "+r.Method+" "+r.URL.Path)
 	})
