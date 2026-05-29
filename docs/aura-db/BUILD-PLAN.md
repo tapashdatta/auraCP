@@ -618,7 +618,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 4.5 | Schema reader follow-up                | deferred |              |
 | 5   | Row operations                         | ✓ done   | 4921bdb      |
 | 5.5 | Row ops engine-parity + limits         | deferred |              |
-| 6   | EXPLAIN normalization                  | next     |              |
+| 6   | EXPLAIN normalization                  | ✓ done   | 0411605      |
+| 6.5 | EXPLAIN polish + rollup fixes          | deferred |              |
 | 7   | Query history                          | pending  |              |
 | 8   | HTTP handler                           | pending  |              |
 | 9   | Standalone implementations + cmd       | pending  |              |
