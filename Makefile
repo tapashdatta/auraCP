@@ -3,18 +3,29 @@ VERSION ?= 0.2.62
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
 
-.PHONY: all ui daemon cli build dist deb clean test vet fmt run
+.PHONY: all ui ui-dbadmin daemon cli build dist deb clean test vet fmt run
 
 all: build
 
-## ui: build the Svelte SPA and embed it into the daemon package
-ui:
+## ui: build BOTH the panel SPA and the Aura DB SPA and embed them.
+ui: ui-dbadmin
 	cd web && npm install && npm run build
 	rm -rf internal/webui/dist
 	cp -R web/dist internal/webui/dist
 
-## build: native build of daemon + CLI (requires ui already embedded)
-build:
+## ui-dbadmin: build the Aura DB Svelte SPA and embed it for /dbadmin/.
+ui-dbadmin:
+	cd web-aura-db && npm install && npm run build
+	rm -rf internal/dbadmin/webui/dist
+	mkdir -p internal/dbadmin/webui/dist
+	cp -R web-aura-db/dist/. internal/dbadmin/webui/dist/
+
+## build: native build of daemon + CLI.
+## FIX-8 (PR #11): depends on ui-dbadmin so a fresh clone produces a
+## working binary. Without this dependency, `go:embed internal/dbadmin/
+## webui/dist/*` resolves to an empty directory and the daemon serves
+## the embed-not-built sentinel for every /dbadmin/* request.
+build: ui-dbadmin
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/auracpd ./cmd/auracpd
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/auracp  ./cmd/auracp
 

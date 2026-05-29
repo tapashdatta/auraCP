@@ -939,6 +939,198 @@ The remaining 25 findings are deferred below.
 
 ---
 
+## Source: PR #11 adversarial review (workflow run wf_e02a04bb-606)
+
+The 4-lens review of the Aura DB shell SPA (`web-aura-db/` + supporting
+panel touch-points) produced 55 findings (1 critical, 8 high, 18 medium,
+17 low, 11 nit). After dedupe + triage: 13 must-fix items were promoted
+and landed in PR #11 itself — WS subprotocol now carries
+`aura.csrf.<token>` so the panel's PR #8 CSWSH gate accepts browser
+upgrades (WS-CSRF-MISSING-SUBPROTOCOL); WS reconnect loop hard-capped
+with `document.visibilityState` gating + terminal `stream_unavailable`
+emission (WS-RECONNECT-STORM, WS-EXEC-WHILE-FAILED);
+`encodeURIComponent` applied to every dynamic path segment at the
+`api.js` boundary (CONN-ID-PATH-TRAVERSAL); global
+`:focus-visible` ring + targeted overrides for `.btn`/`.tab`/`.tree-row`
+/`.dropdown__item`/`.toggle`/`.input`/`.select` (a11y-01); LeftTree
+downgraded to `role=listbox`/`option` so AT no longer expects the
+unimplemented tree contract (a11y-02); Modal focus-trap, focus-restore,
+Escape-to-close, and initial-focus management (a11y-03); StatusBar
+center + right wrapped in `role=status aria-live=polite`, error
+transitions promoted to `aria-live=assertive` (a11y-04); nginx WS
+upgrade regex corrected to `^/api/dbadmin(/.*)?/sql/stream$` with
+positive `regexp.MatchString` test (INT-1); panel `/login?next=`
+contract implemented via `aura_post_login` cookie with `/dbadmin/`
+allowlist (INT-2); Sign Out replaced with POST `/api/auth/logout`
+honoring `X-CSRF-Token` (INT-3); `make build` now depends on
+`ui-dbadmin` and `webui_test.go` asserts a non-empty embedded
+`index.html` (INT-4). The remaining 42 findings are deferred below;
+note that **CSP-STYLE-UNSAFE-INLINE** was reclassified to deferred per
+the synthesis-lens recommendation (no XSS sinks exist today, so the
+amplifier is latent), pending the inline-style migration tracked in
+**dc-9** which it pairs with.
+
+### Deferred medium findings — PR #11.5
+
+- **CSP-STYLE-UNSAFE-INLINE** — Panel-wide CSP allows `'unsafe-inline'`
+  for `style-src`, which Aura DB inherits. **Reason:** triage rule would
+  promote any CSP issue, but the synthesis lens kept it deferred: the
+  SPA has zero XSS sinks today (per ERROR-RENDER-SAFE-TODAY), so the
+  amplifier is latent. The real work is the dc-9 inline-style migration;
+  dropping `'unsafe-inline'` is a one-line follow-up once that lands.
+  **Target:** PR #11.5 (converges with dc-9).
+- **a11y-05** — Tab strip declares `role=tablist` but tabs navigate
+  routes rather than tabpanels. **Reason:** non-boundary medium —
+  semantic mismatch but not a keyboard trap. **Target:** PR #11.5
+  (drop the role or implement the WAI-ARIA tabs contract end-to-end).
+- **a11y-06** — No skip link and no `<main>` landmark. **Reason:**
+  non-boundary medium; tedious for keyboard users but not a full
+  lockout. **Target:** PR #11.5.
+- **a11y-07** — Document title is static "Aura DB" on every route.
+  **Reason:** non-boundary medium; orientation issue only. **Target:**
+  PR #11.5 (per-route `<svelte:head><title>` block).
+- **a11y-08** — Layout breaks below ~720px — no mobile / narrow-viewport
+  handling. **Reason:** non-boundary medium; web-aura-db is a desktop
+  panel tool by product positioning. **Target:** PR #11.5 (or accept
+  as a documented constraint).
+- **a11y-09** — Primary button white-on-copper fails WCAG AA contrast
+  in dark theme. **Reason:** non-boundary medium contrast issue;
+  legible if borderline. **Target:** PR #11.5 (a11y polish pass).
+- **a11y-10** — Errors flash as plain text with no toast, no
+  `role=alert`, no dismissal. **Reason:** partially overlaps with the
+  a11y-04 must-fix (`aria-live` regions now cover transient state),
+  but the toast pattern itself is a follow-up. **Target:** PR #11.5
+  or PR #12 (notification system).
+- **a11y-11** — Several screens swallow fetch errors silently;
+  `ErrorBoundary` exists but isn't wired. **Reason:** non-boundary
+  medium UX gap, not a full lockout. **Target:** PR #11.5 (wire the
+  boundary at the route layer).
+- **a11y-12** — Long connection names break layout — no `title=`
+  tooltip or truncation strategy. **Reason:** non-boundary medium;
+  layout still functional. **Target:** PR #11.5 or PR #12 (connection
+  list redesign).
+- **a11y-13** — Tab close button invisible until row hover.
+  **Reason:** reinforced by dc-3, but `Cmd-W` shortcut exists as
+  keyboard fallback so it's a non-blocking hardship rather than a
+  lockout. **Target:** PR #11.5 (or PR #13 when tabs evolve with the
+  query editor).
+- **a11y-14** — DropdownMenu does not handle Escape, ArrowUp/Down, or
+  first-item focus on open. **Reason:** non-boundary medium; menu
+  still openable/clickable. **Target:** PR #11.5 (WAI-ARIA menu
+  pattern).
+- **dc-1** — `StatusDot` has no `connecting` state; the pulse
+  animation is dead CSS. **Reason:** design-coherence medium; per
+  triage rule we defer non-boundary mediums. **Target:** PR #11.5.
+- **dc-2** — `EngineGlyph` collides MySQL / MSSQL on the initial
+  letter "M". **Reason:** design-coherence medium. **Target:**
+  PR #11.5 (or PR #14 when MSSQL driver lands and the glyph set
+  expands).
+- **dc-3** — Tab close button hidden by `visibility: hidden` until
+  hover (design-coherence view of a11y-13). **Reason:** design-
+  coherence medium reinforcing the a11y deferral above. **Target:**
+  PR #11.5 (fix converges with a11y-13).
+
+### Deferred low findings — PR #11.5
+
+- **FONTS-NO-SRI-THIRD-PARTY** — Google Fonts loaded cross-origin
+  without an SRI integrity attribute. **Reason:** low severity,
+  requires a CDN-compromise scenario; aligns with **dc-13**
+  (self-host fonts) rather than a shippability blocker. **Target:**
+  PR #11.5 (fix converges with dc-13).
+- **OPEN-REDIRECT-NEXT-PARAM** — `AuthGate` builds `/login?next=`
+  from `location.hash` without validating the prefix. **Reason:**
+  no SPA-side bug today (the panel `/login` handler hardening
+  landed in INT-2's allowlist); flagged as a reminder if the redirect
+  contract is ever moved client-side. **Target:** PR #11.5 (or close
+  as already-mitigated server-side).
+- **CSP-HEADER-NOT-IN-SPA-HTML** — Aura DB `index.html` declares no
+  `<meta http-equiv="Content-Security-Policy">`. **Reason:** defense-
+  in-depth gap; the panel's response-header CSP is the canonical
+  source today, so a missing meta only matters under a future
+  regression. **Target:** PR #11.5.
+- **a11y-15** — Initial render shows a FOUC. **Reason:** low-severity
+  perf / polish issue. **Target:** PR #11.5 (preload critical CSS or
+  defer the SPA mount until styles applied).
+- **a11y-16** — Toggle uses `aria-pressed` but should use
+  `role=switch`. **Reason:** semantic nit, readable as-is. **Target:**
+  PR #11.5.
+- **a11y-17** — Connection list table rows clickable but not keyboard-
+  activatable. **Reason:** low; once a11y-02's listbox downgrade lands
+  in LeftTree, the tree provides an alternative path. **Target:**
+  PR #11.5 (or PR #12 when the connection list is redesigned).
+- **a11y-18** — Tree filter input has no associated `<label>` and no
+  `aria-label`. **Reason:** low-severity labelling issue. **Target:**
+  PR #11.5.
+- **a11y-19** — TopNav nav buttons advertise no active state to
+  assistive tech. **Reason:** one-line `aria-current="page"` fix.
+  **Target:** PR #11.5.
+- **a11y-20** — StatusBar font at 11px with `#6b727d` fails WCAG AA
+  for small text. **Reason:** low contrast issue on tertiary text.
+  **Target:** PR #11.5 (token bump or weight bump).
+- **a11y-21** — Resize handle is mouse-only; no keyboard adjustment.
+  **Reason:** latent — `ResizeHandle` is not yet mounted (per dc-4).
+  **Target:** PR #11.5 (fix when wiring; pairs with dc-4) or PR #13
+  if the editor pane lands the handle first.
+- **dc-4** — `ResizeHandle` component exists but is never mounted.
+  **Reason:** design-coherence low; defer. **Target:** PR #11.5 (or
+  PR #13 when the query-editor pane wants resizable panels).
+- **dc-5** — `AuthGate` has no brand presence. **Reason:** design-
+  coherence low. **Target:** PR #11.5.
+- **dc-6** — Brand-string drift: `AuraDB` vs `Aura DB`. **Reason:**
+  design-coherence low. **Target:** PR #11.5.
+- **dc-7** — Shadow discipline broken: `.dropdown` has a `box-shadow`
+  against the in-file no-shadow rule. **Reason:** design-coherence
+  low. **Target:** PR #11.5.
+- **dc-8** — Sharp-corner rule violated by `.tab` top corners.
+  **Reason:** design-coherence low. **Target:** PR #11.5.
+- **dc-9** — Inline `style=` attributes scatter the muted-body recipe
+  across components. **Reason:** design-coherence low. **Target:**
+  PR #11.5 (migration converges with CSP-STYLE-UNSAFE-INLINE).
+- **dc-13** — Fonts loaded over the network only; no local fallback.
+  **Reason:** design-coherence low; pairs with FONTS-NO-SRI-THIRD-PARTY.
+  **Target:** PR #11.5.
+- **INT-5** — `AuthGate` `hasCookie` heuristic is a no-op (the panel
+  mints CSRF on every response, so the cookie is always present).
+  **Reason:** non-boundary low; the functional auth boundary still
+  works via `api.js`'s 401 handler. **Target:** PR #11.5 (drop the
+  heuristic or replace with a real probe).
+
+### Deferred nit findings — PR #11.5
+
+- **CSRF-COOKIE-REGEX-OK** — Positive confirmation: the CSRF cookie
+  regex in `api.js` is correctly anchored. **Reason:** no change
+  required. **Target:** none (kept as a positive entry for audit
+  parity).
+- **STORAGE-NO-SECRETS** — Positive confirmation: `localStorage` /
+  `sessionStorage` contain only UI state (theme, last-route, etc.).
+  **Reason:** no change required. **Target:** none.
+- **ERROR-RENDER-SAFE-TODAY** — Positive confirmation: error messages
+  are rendered as Svelte text interpolation; no `@html` / `innerHTML`
+  anywhere in the SPA. **Reason:** no change required; underpins the
+  CSP-STYLE-UNSAFE-INLINE deferral above. **Target:** none.
+- **a11y-22** — Tree filter placeholder should read "Search
+  connections". **Reason:** copy nit. **Target:** PR #11.5.
+- **a11y-23** — `EmptyState` heading level fixed at `h3` — breaks the
+  heading hierarchy on pages where it appears at top level.
+  **Reason:** minor heading-order nit. **Target:** PR #11.5 (accept a
+  `level` prop).
+- **dc-10** — Welcome subtitle is mild marketing copy. **Reason:**
+  design-coherence nit. **Target:** PR #11.5.
+- **dc-11** — Light-theme `.btn--primary` dead override. **Reason:**
+  design-coherence nit. **Target:** PR #11.5.
+- **dc-12** — Raw `#fff` hex literal inside `EngineGlyph` SVG instead
+  of a token. **Reason:** design-coherence nit. **Target:** PR #11.5.
+- **dc-14** — Tabular-nums `.num` class doing double duty as a
+  mono-cell helper. **Reason:** design-coherence nit. **Target:**
+  PR #11.5.
+- **INT-6** — Missing `.gitignore` entries for `web-aura-db` build
+  artifacts. **Reason:** contributor-footgun nit. **Target:** PR #11.5.
+- **INT-7** — `ui-dbadmin` Makefile target wipes `dist/.gitkeep` on
+  every build. **Reason:** tiny stylistic loose-end alongside the
+  INT-4 must-fix. **Target:** PR #11.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

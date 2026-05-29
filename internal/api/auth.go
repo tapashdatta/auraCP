@@ -3,12 +3,50 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/auracp/auracp/internal/auth"
 	"github.com/auracp/auracp/internal/perm"
 	"github.com/auracp/auracp/internal/store"
 )
+
+// safeNextPath returns next when it is a safe in-app redirect target, or
+// "/" otherwise. FIX-6 (PR #11): the panel login flow accepts a ?next=
+// query param so that an Aura DB 401 → /login?next=/dbadmin/ round-trip
+// can drop the operator back where they were. Without validation, an
+// attacker could construct /login?next=//evil.com/ or /login?next=/\evil
+// and turn the panel into an open redirector.
+//
+// Allow rules:
+//   - next must start with exactly one "/"
+//   - next must NOT start with "//" or "/\" (protocol-relative)
+//   - next must NOT contain a ":" before the first "/" (avoid javascript:
+//     and other URL schemes)
+//   - empty/missing next → "/"
+func safeNextPath(next string) string {
+	if next == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(next, "/") {
+		return "/"
+	}
+	if strings.HasPrefix(next, "//") || strings.HasPrefix(next, "/\\") {
+		return "/"
+	}
+	// Reject scheme-style ":" appearing before any "/" (defence in depth —
+	// the leading "/" check already covers most cases, but URLs like
+	// "/javascript:foo" would slip past). Look at chars BEFORE the next
+	// "/" we encounter past index 0.
+	if i := strings.IndexByte(next[1:], '/'); i >= 0 {
+		if strings.ContainsAny(next[1:1+i], ":") {
+			return "/"
+		}
+	} else if strings.ContainsAny(next[1:], ":") {
+		return "/"
+	}
+	return next
+}
 
 const (
 	sessionCookie = "auracp_session"

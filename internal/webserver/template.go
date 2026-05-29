@@ -66,7 +66,7 @@ server {
     # catch-all "location /" so nginx picks this regex first via the
     # longest-prefix-after-regex rule (regex locations win over the
     # prefix-match "location /").
-    location ~ ^/api/dbadmin/.*/sql/stream$ {
+    location ~ ^/api/dbadmin(/[^/]+)*/sql/stream$ {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;
         proxy_http_version 1.1;
@@ -144,7 +144,7 @@ server {
     # in auracpd rejects the handshake with 400. Declared BEFORE the
     # catch-all "location /" so nginx picks this regex first via the
     # longest-prefix-after-regex rule.
-    location ~ ^/api/dbadmin/.*/sql/stream$ {
+    location ~ ^/api/dbadmin(/[^/]+)*/sql/stream$ {
         proxy_pass {{.Backend}};
         proxy_ssl_verify off;
         proxy_http_version 1.1;

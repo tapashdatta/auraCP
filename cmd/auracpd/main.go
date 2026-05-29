@@ -15,6 +15,7 @@ import (
 	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/api"
 	dbadminintegration "github.com/auracp/auracp/internal/api/dbadmin"
+	dbadminwebui "github.com/auracp/auracp/internal/dbadmin/webui"
 	"github.com/auracp/auracp/internal/backup"
 	"github.com/auracp/auracp/internal/cron"
 	"github.com/auracp/auracp/internal/db"
@@ -240,6 +241,14 @@ func main() {
 		<-rootCtx.Done()
 		_ = dbaEngine.Shutdown(context.Background())
 	}()
+
+	// PR #11: Aura DB Svelte SPA shell. Sibling Vite build embedded under
+	// /dbadmin/. Mounted BEFORE the panel "/" catch-all so requests with
+	// the /dbadmin/ prefix route to the DB workstation rather than the
+	// panel. Cohabits with /api/dbadmin/ (JSON API) on the same eTLD so
+	// the auracp_csrf + auracp_session cookies cross-mount automatically.
+	mux.Handle("/dbadmin/", http.StripPrefix("/dbadmin", dbadminwebui.Handler()))
+	mux.Handle("/dbadmin", http.RedirectHandler("/dbadmin/", http.StatusMovedPermanently))
 
 	mux.Handle("/", webui.Handler()) // embedded SPA (catch-all)
 

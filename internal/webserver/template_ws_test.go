@@ -2,6 +2,7 @@ package webserver
 
 import (
 	"bytes"
+	"regexp"
 	"strings"
 	"testing"
 	"text/template"
@@ -107,3 +108,61 @@ func TestPanelTemplate_WSLocationPrecedesCatchAll(t *testing.T) {
 		t.Fatalf("catch-all 'location /' not found AFTER the WS location")
 	}
 }
+
+// TestPanelTemplate_WSRegexMatchesActualPath — FIX-5 (PR #11 must-fix).
+// The previous regex was `^/api/dbadmin/.*/sql/stream$`, which requires at
+// least one path segment between `/dbadmin/` and `/sql/stream`. The actual
+// router (pkg/dbadmin/httpapi/router.go) registers `GET /sql/stream` under
+// the `/api/dbadmin` mount — i.e. the real URL is `/api/dbadmin/sql/stream`
+// with NO intermediate segment. The faulty regex would have made nginx
+// skip the WS-upgrade block entirely, falling through to "location /" with
+// no Upgrade headers. This test extracts the rendered regex and confirms
+// it matches the canonical path.
+func TestPanelTemplate_WSRegexMatchesActualPath(t *testing.T) {
+	tpl, err := template.New("panel").Parse(panelTemplate)
+	if err != nil {
+		t.Fatalf("parse panelTemplate: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := tpl.Execute(&buf, panelData{
+		Domain:   "panel.example.test",
+		Backend:  "https://127.0.0.1:8443",
+		ACMEDir:  "/var/www/acme",
+		CertPath: "/etc/ssl/auracp/panel.example.test.crt",
+		KeyPath:  "/etc/ssl/auracp/panel.example.test.key",
+	}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	out := buf.String()
+	// Pull every `location ~ <pattern>` line out of the rendered template
+	// and find the one that targets the SQL-streaming endpoint.
+	locRE := regexp.MustCompile(`location\s+~\s+(\S+)`)
+	var pattern string
+	for _, m := range locRE.FindAllStringSubmatch(out, -1) {
+		if strings.Contains(m[1], "dbadmin") && strings.Contains(m[1], "sql/stream") {
+			pattern = m[1]
+			break
+		}
+	}
+	if pattern == "" {
+		t.Fatalf("could not extract sql/stream location regex from template output:\n%s", out)
+	}
+	rx, err := regexp.Compile(pattern)
+	if err != nil {
+		t.Fatalf("rendered nginx regex did not compile (%v): %s", err, pattern)
+	}
+	// CRITICAL: the canonical WS path must match.
+	const canonicalPath = "/api/dbadmin/sql/stream"
+	if !rx.MatchString(canonicalPath) {
+		t.Fatalf("WS location regex %q does NOT match canonical path %q — nginx will fall through to location / and the WebSocket handshake will fail", pattern, canonicalPath)
+	}
+	// And the future-proof variant with a connection segment.
+	if !rx.MatchString("/api/dbadmin/conn-123/sql/stream") {
+		t.Fatalf("WS location regex %q rejected nested-conn variant", pattern)
+	}
+	// Negative: must NOT match plain API GET routes.
+	if rx.MatchString("/api/dbadmin/connections") {
+		t.Fatalf("WS location regex %q is too greedy — matched /api/dbadmin/connections", pattern)
+	}
+}
+
