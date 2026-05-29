@@ -346,6 +346,21 @@ type SSHTunnel struct {
 	// must be 0600; the driver layer refuses to load keys with broader
 	// permissions. Password auth is not supported by design.
 	KeyPath string
+
+	// KnownHostsPath points at a SSH known_hosts file used for strict
+	// host-key verification. Required by the driver layer — open with
+	// no KnownHostsPath fails closed. Path's permissions are not
+	// restricted (it's not secret material), but the file must be
+	// readable by the auracpd / aura-db process.
+	//
+	// Format matches OpenSSH's known_hosts (one line per entry,
+	// host-pattern + key-type + base64-key). golang.org/x/crypto/ssh/
+	// knownhosts parses it.
+	//
+	// Per SECURITY.md §7.2: blank-trust host-key callbacks are a known
+	// MITM primitive; the driver refuses to dial without an explicit
+	// pinning source.
+	KnownHostsPath string
 }
 
 // Target identifies what an action targets, for audit purposes. Empty

@@ -612,8 +612,9 @@ PRs without their tests are blocked at review. We do not retroactively
 | 1   | `pkg/dbadmin` skeleton + test helpers  | ✓ done   | c6419e9      |
 | 2   | Classifier (tokenizer-based)           | ✓ done   | 8514a37      |
 | 2.5 | Classifier AST upgrade                 | deferred |              |
-| 3   | Driver layer                           | next     |              |
-| 4   | Schema readers                         | pending  |              |
+| 3   | Driver layer                           | ✓ done   | TBD          |
+| 3.5 | Driver hardening follow-up             | deferred |              |
+| 4   | Schema readers                         | next     |              |
 | 5   | Row operations                         | pending  |              |
 | 6   | EXPLAIN normalization                  | pending  |              |
 | 7   | Query history                          | pending  |              |

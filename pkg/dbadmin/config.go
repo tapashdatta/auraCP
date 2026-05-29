@@ -96,6 +96,16 @@ type QueryConfig struct {
 	// 1 MiB. Hard ceiling: 16 MiB; configurable up to that with owner
 	// + step-up.
 	SQLInputMaxBytes int
+
+	// PoolSizePerConn caps the database/sql or pgx connection pool's
+	// MaxOpen per Aura DB connection. Default: 4. Hard ceiling: 16.
+	// See SECURITY.md §6.5.
+	PoolSizePerConn int
+
+	// PoolIdleTimeout closes an idle pooled connection after this
+	// duration. Default: 5 minutes. Keeps the panel's memory + DB
+	// connection footprint flat for sites that aren't actively used.
+	PoolIdleTimeout time.Duration
 }
 
 // AuditConfig controls the engine's audit emission behavior.
@@ -159,6 +169,8 @@ func DefaultConfig() Config {
 			ConcurrentPerUserPerConn: 1,
 			ConcurrentMax:            3,
 			SQLInputMaxBytes:         1024 * 1024,
+			PoolSizePerConn:          4,
+			PoolIdleTimeout:          5 * time.Minute,
 		},
 		Audit: AuditConfig{
 			SampleReadQueries:     0.01,
@@ -227,6 +239,12 @@ func mergeConfig(base, over Config) Config {
 	}
 	if over.Query.SQLInputMaxBytes != 0 {
 		out.Query.SQLInputMaxBytes = over.Query.SQLInputMaxBytes
+	}
+	if over.Query.PoolSizePerConn != 0 {
+		out.Query.PoolSizePerConn = over.Query.PoolSizePerConn
+	}
+	if over.Query.PoolIdleTimeout != 0 {
+		out.Query.PoolIdleTimeout = over.Query.PoolIdleTimeout
 	}
 
 	if over.Audit.SampleReadQueries != 0 {
