@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -62,6 +63,13 @@ func newRequestID() string {
 
 // recoverer traps panics, emits 500 with the canonical envelope, and logs
 // the stack with the request ID. Audit-best-effort.
+//
+// DEF-3: the audit record echoes only the panic value's TYPE — not the
+// value itself. A panic from the SQL stack may contain bound parameters
+// (credentials, tokens, raw row data) which an operator can read out of
+// the audit log. The full panic value + stack are retained server-side
+// for log-tail wiring; the audit record carries the type for
+// correlation.
 func recoverer(s *server) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -74,14 +82,15 @@ func recoverer(s *server) middleware {
 						st := auditFrom(r.Context())
 						st.suppress = true
 						user, _ := userFrom(r.Context())
-						s.engine.Audit().Record(r.Context(), dbadmin.Event{
+						s.recordAudit(r.Context(), dbadmin.Event{
 							EventID:       newRequestID(),
 							Timestamp:     time.Now().UTC(),
 							UserID:        user.ID,
 							SourceIP:      clientIP(r),
 							UserAgentHash: uaHash(r),
 							Action:        dbadmin.Action("panic"),
-							Error:         fmt.Sprintf("panic: %v", rec),
+							// DEF-3: type only, never the raw value.
+							Error: fmt.Sprintf("panic: %T", rec),
 						})
 					}
 					writeError(w, r, http.StatusInternalServerError, CodeInternal, "internal error")
@@ -194,46 +203,103 @@ func csrf(s *server) middleware {
 	}
 }
 
-// audit emits the audit event after the handler returns. Uses the
-// per-request auditState (populated by handlers via setAuditAction etc).
+// audit emits the audit event. DEF-12: the event is recorded BEFORE the
+// first response byte hits the wire, so a server crash between the
+// handler's Write and the audit Record cannot lose the record. We
+// achieve this by wrapping the ResponseWriter: the first WriteHeader /
+// Write call (whichever comes first) flushes the audit record using the
+// per-request audit accumulator the handler populated. If the handler
+// returns without ever writing (early panic, no-content path), we
+// flush on the way out.
 func audit(s *server) middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			next.ServeHTTP(w, r)
-			st := auditFrom(r.Context())
-			if st.suppress || st.action == "" {
-				return
-			}
-			user, _ := userFrom(r.Context())
-			started := startTimeFrom(r.Context())
-			var dur int64
-			if !started.IsZero() {
-				dur = time.Since(started).Milliseconds()
-			}
-			event := dbadmin.Event{
-				EventID:       newRequestID(),
-				Timestamp:     time.Now().UTC(),
-				UserID:        user.ID,
-				SourceIP:      clientIP(r),
-				UserAgentHash: uaHash(r),
-				Action:        st.action,
-				Target:        st.target,
-				Statement:     st.statement,
-				ResultRows:    st.rows,
-				DurationMS:    dur,
-				Error:         st.err,
-				StepUpJTI:     st.stepUpJTI,
-			}
-			if conn := connIDFrom(r.Context()); conn != "" && event.Target.ConnectionID == "" {
-				event.Target.ConnectionID = conn
-			}
-			// Role-at-time best-effort: user.Roles map keyed by conn id.
-			if cid := event.Target.ConnectionID; cid != "" {
-				event.UserRoleAtTime = user.Roles[cid]
-			}
-			s.engine.Audit().Record(r.Context(), event)
+			aw := &auditingWriter{ResponseWriter: w, r: r, s: s}
+			next.ServeHTTP(aw, r)
+			// Handler returned without writing — flush now.
+			aw.flush()
 		})
 	}
+}
+
+// auditingWriter wraps http.ResponseWriter and emits the audit record on
+// the first WriteHeader / Write so the event lands before any body
+// bytes (DEF-12). Idempotent: subsequent calls are no-ops.
+type auditingWriter struct {
+	http.ResponseWriter
+	r       *http.Request
+	s       *server
+	emitted bool
+	status  int
+}
+
+func (aw *auditingWriter) WriteHeader(status int) {
+	aw.status = status
+	aw.flush()
+	aw.ResponseWriter.WriteHeader(status)
+}
+
+func (aw *auditingWriter) Write(p []byte) (int, error) {
+	if aw.status == 0 {
+		aw.status = http.StatusOK
+	}
+	aw.flush()
+	return aw.ResponseWriter.Write(p)
+}
+
+// Flush exposes the underlying flusher (export uses it).
+func (aw *auditingWriter) Flush() {
+	if f, ok := aw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack exposes the underlying hijacker (WS upgrade path doesn't use
+// audit() middleware, but bare safety).
+func (aw *auditingWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := aw.ResponseWriter.(http.Hijacker); ok {
+		aw.flush()
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
+}
+
+func (aw *auditingWriter) flush() {
+	if aw.emitted || aw.s == nil || aw.s.engine == nil {
+		return
+	}
+	aw.emitted = true
+	st := auditFrom(aw.r.Context())
+	if st.suppress || st.action == "" {
+		return
+	}
+	user, _ := userFrom(aw.r.Context())
+	started := startTimeFrom(aw.r.Context())
+	var dur int64
+	if !started.IsZero() {
+		dur = time.Since(started).Milliseconds()
+	}
+	event := dbadmin.Event{
+		EventID:       newRequestID(),
+		Timestamp:     time.Now().UTC(),
+		UserID:        user.ID,
+		SourceIP:      clientIP(aw.r),
+		UserAgentHash: uaHash(aw.r),
+		Action:        st.action,
+		Target:        st.target,
+		Statement:     st.statement,
+		ResultRows:    st.rows,
+		DurationMS:    dur,
+		Error:         st.err,
+		StepUpJTI:     st.stepUpJTI,
+	}
+	if conn := connIDFrom(aw.r.Context()); conn != "" && event.Target.ConnectionID == "" {
+		event.Target.ConnectionID = conn
+	}
+	if cid := event.Target.ConnectionID; cid != "" {
+		event.UserRoleAtTime = user.Roles[cid]
+	}
+	aw.s.recordAudit(aw.r.Context(), event)
 }
 
 // emitDenialAudit emits an audit event from a middleware that is about
@@ -251,7 +317,7 @@ func emitDenialAudit(s *server, r *http.Request, action dbadmin.Action, reason s
 		return
 	}
 	user, _ := userFrom(r.Context())
-	s.engine.Audit().Record(r.Context(), dbadmin.Event{
+	s.recordAudit(r.Context(), dbadmin.Event{
 		EventID:       newRequestID(),
 		Timestamp:     time.Now().UTC(),
 		UserID:        user.ID,
@@ -272,6 +338,11 @@ type rateLimitClass int
 const (
 	rateClassReading rateLimitClass = iota
 	rateClassMutating
+	// rateClassStepUp is reserved for /step-up/verify (DEF-1).
+	// SECURITY.md §4.4 requires a 10 verify attempts / 15 minutes
+	// sliding window per (user) and a small per-second burst on top —
+	// see ratelimit.go for the secondary gate.
+	rateClassStepUp
 )
 
 // rateLimit installs the per-(user, class) token-bucket limiter.

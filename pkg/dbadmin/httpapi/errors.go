@@ -20,6 +20,13 @@ import (
 // SDK.md §7 (the form is semver-stable and matches the codes in
 // pkg/dbadmin/errors.go — these handler-layer codes extend that
 // foundation with httpapi-specific failures).
+//
+// DEF-35: these constants ARE the public wire surface, not internal
+// implementation. They are exported so SDK consumers writing Go can
+// switch on them by name; the kebab-case string value is the wire
+// form. Renaming a constant is a breaking change — the wire shipped
+// in PR #8 freezes both the identifier and the value. Future codes
+// must be appended; never renamed or removed without a major bump.
 const (
 	CodeUnauthenticated    = "unauthenticated"
 	CodeForbidden          = "forbidden"
@@ -71,7 +78,27 @@ type errorBody struct {
 
 // writeError serializes the canonical error envelope at the given status.
 // requestID is read from ctx; an empty value is emitted unchanged.
+//
+// DEF-20: when the response has already been written (mid-stream
+// failure), the second WriteHeader call logs "superfluous WriteHeader"
+// and silently drops the new status. We detect this via the
+// auditingWriter wrapper installed by audit() middleware (which tracks
+// emitted status). When the response was already started, we skip the
+// header write but still attempt to push the envelope onto the body so
+// the SDK can surface the error tail; if even that fails, the trailer
+// channel is the canonical signal.
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, msg string) {
+	if aw, ok := w.(*auditingWriter); ok && aw.status != 0 {
+		// Status already emitted — emit body envelope only.
+		_ = json.NewEncoder(w).Encode(errorEnvelope{
+			Error: errorBody{
+				Code:      code,
+				Message:   msg,
+				RequestID: requestIDFrom(r.Context()),
+			},
+		})
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)

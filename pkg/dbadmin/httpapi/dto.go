@@ -129,6 +129,10 @@ type stepUpVerifyRequest struct {
 type emptyResponse struct{}
 
 // connectionDTO — secrets redacted; presence-only booleans for stored creds.
+//
+// DEF-39: Owner + Origin are part of the SDK §7 connection shape but
+// were previously elided here. They're populated from the dbadmin
+// Connection record.
 type connectionDTO struct {
 	ID          string        `json:"id"`
 	Name        string        `json:"name"`
@@ -144,6 +148,8 @@ type connectionDTO struct {
 	PoolSize    int           `json:"poolSize"`
 	CreatedAt   time.Time     `json:"createdAt"`
 	UpdatedAt   time.Time     `json:"updatedAt"`
+	Owner       string        `json:"owner,omitempty"`
+	Origin      string        `json:"origin,omitempty"`
 }
 
 type sshTunnelDTO struct {
@@ -166,9 +172,14 @@ type testConnectionResponse struct {
 	ServerVersion string `json:"serverVersion"`
 }
 
+// revealPasswordResponse is the response of POST
+// /connections/{id}/password/reveal. DEF-4: Password is now always
+// empty on the initiate; clients fetch the plaintext via RevealURL
+// (one-time signed URL, single redeem within Expires).
 type revealPasswordResponse struct {
-	Password string    `json:"password"`
-	Expires  time.Time `json:"expires"`
+	Password  string    `json:"password"`
+	Expires   time.Time `json:"expires"`
+	RevealURL string    `json:"revealUrl,omitempty"`
 }
 
 type listSchemasResponse struct {
@@ -429,6 +440,8 @@ func redactConnection(c dbadmin.Connection, hasPassword bool) connectionDTO {
 		PoolSize:    0,
 		CreatedAt:   c.CreatedAt,
 		UpdatedAt:   c.UpdatedAt,
+		Owner:       c.Owner,
+		Origin:      string(c.Origin),
 	}
 	if c.SSHTunnel != nil {
 		out.SSHTunnel = &sshTunnelDTO{

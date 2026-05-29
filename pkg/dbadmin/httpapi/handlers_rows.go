@@ -71,6 +71,13 @@ func handleReadRows(s *server) http.HandlerFunc {
 			}
 			opts.Offset = n
 		}
+		// DEF-28: cap repeated URL parameters at rowsURLSliceCap so a
+		// malicious client cannot ask for 100k columns / sorts / filters
+		// in a single URL.
+		if len(q["columns"]) > rowsURLSliceCap || len(q["sort"]) > rowsURLSliceCap || len(q["filter"]) > rowsURLSliceCap {
+			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "too many columns/sort/filter parameters")
+			return
+		}
 		for _, col := range q["columns"] {
 			if col != "" {
 				opts.Columns = append(opts.Columns, col)
@@ -332,12 +339,19 @@ func handleDeleteRow(s *server) http.HandlerFunc {
 	}
 }
 
+// rowsURLSliceCap caps the count of repeated URL query parameters the
+// rows endpoint accepts. DEF-28 — a request like
+// ?filter=a:eq:1&filter=b:eq:2... could otherwise be unbounded.
+const rowsURLSliceCap = 32
+
 // parseFilter parses "col:op:value" into a rows.Predicate.
 //
-// For OpIn / OpNotIn the value is JSON-decoded into a []any so the
-// downstream rows.Predicate has the slice shape that rows.buildSelect
-// requires (see WIRE-03). For all other ops the value is kept verbatim
-// as a string and the driver coerces during parameter binding.
+// DEF-18: for OpIn / OpNotIn ONLY the value is JSON-decoded into a
+// []any so the downstream rows.Predicate has the slice shape that
+// rows.buildSelect requires (see WIRE-03). For all other ops the value
+// is kept verbatim as a string and the driver coerces during parameter
+// binding — the previous doc claimed the value was JSON-decoded for
+// all ops, which never matched the behavior.
 func parseFilter(spec string) (rows.Predicate, error) {
 	parts := strings.SplitN(spec, ":", 3)
 	if len(parts) < 2 {

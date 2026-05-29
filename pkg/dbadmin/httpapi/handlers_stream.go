@@ -41,6 +41,23 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			writeError(w, r, http.StatusForbidden, CodeOriginRejected, "origin not allowed")
 			return
 		}
+		// DEF-13: per-user concurrent-stream cap. Token-bucket gating
+		// on the WS upgrade is enforced via the dedicated stream limiter
+		// (s.limiter, rateClassMutating bucket); the semaphore here
+		// caps long-lived connection count, not just upgrade rate.
+		if s.limiter != nil && !s.limiter.allow(user.ID, rateClassMutating) {
+			emitDenialAudit(s, r, dbadmin.Action("ratelimit.denied"), "ws-upgrade")
+			w.Header().Set("Retry-After", "1")
+			writeError(w, r, http.StatusTooManyRequests, CodeRateLimited, "rate limit exceeded")
+			return
+		}
+		if !s.queryGate.acquire(user.ID) {
+			w.Header().Set("Retry-After", "5")
+			writeError(w, r, http.StatusTooManyRequests, CodeRateLimited, "concurrent query cap reached")
+			return
+		}
+		defer s.queryGate.release(user.ID)
+
 		// CSRF on the WS upgrade. Browsers cannot set custom headers
 		// on a WebSocket handshake (the constructor doesn't expose
 		// them), so we accept the CSRF token via the Sec-WebSocket-
@@ -53,6 +70,11 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			writeError(w, r, http.StatusForbidden, CodeCSRFRejected, "CSRF check failed")
 			return
 		}
+
+		// Capture the cookie value before the upgrade — handlers below
+		// re-check the open-frame CSRF token (DEF-6) against this
+		// cookie value via constant-time compare.
+		expectedCSRF := wsExpectedCSRFCookie(s, r)
 
 		conn, err := s.upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -70,6 +92,38 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		streamCtx, cancel := context.WithCancel(r.Context())
 		defer cancel()
 
+		// DEF-14: protect every websocket writer call with mu — the
+		// helper below is the ONLY place that writes to conn.
+		var mu sync.Mutex
+		writeFrame := func(v any) error {
+			mu.Lock()
+			defer mu.Unlock()
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			return conn.WriteJSON(v)
+		}
+		writeWSErr := func(code, msg, reqID string) error {
+			mu.Lock()
+			defer mu.Unlock()
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			return conn.WriteJSON(errorFrame{
+				Type: frameError, Code: code, Message: msg, RequestID: reqID,
+			})
+		}
+		writeClose := func(code int, msg string) {
+			mu.Lock()
+			defer mu.Unlock()
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(code, msg),
+				time.Now().Add(wsWriteWait))
+		}
+		writePing := func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+			return conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(wsWriteWait))
+		}
+
 		// Read the first frame (must be open).
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
@@ -77,34 +131,49 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		}
 		var open openFrame
 		if err := json.Unmarshal(raw, &open); err != nil || open.Type != frameOpen {
-			writeWSError(conn, CodeInvalidJSON, "missing or invalid open frame", requestIDFrom(r.Context()))
+			_ = writeWSErr(CodeInvalidJSON, "missing or invalid open frame", requestIDFrom(r.Context()))
 			wsAuditDenial(s, streamCtx, user, "", "invalid-open-frame", "")
-			_ = conn.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(wsClosePolicyViolation, "invalid open"),
-				time.Now().Add(wsWriteWait))
+			writeClose(wsClosePolicyViolation, "invalid open")
 			return
+		}
+
+		// DEF-6: revalidate the CSRF token on every inbound open frame.
+		// The handshake CSRF check above runs once on the upgrade. An
+		// attacker who can replay an open frame on a hijacked session
+		// must also present a matching CSRF — the open frame carries
+		// it in the Csrf field (clients SHOULD also include this with
+		// every cancel). Empty / mismatched → reject.
+		if !s.csrfDisabled {
+			if !validateOpenFrameCSRF(open.Csrf, expectedCSRF) {
+				_ = writeWSErr(CodeCSRFRejected, "CSRF check failed on open frame", requestIDFrom(r.Context()))
+				wsAuditDenial(s, streamCtx, user, dbadmin.ConnectionID(open.ConnectionID), "open-csrf-rejected", "")
+				writeClose(wsClosePolicyViolation, "csrf")
+				return
+			}
 		}
 
 		connID := dbadmin.ConnectionID(open.ConnectionID)
 		c, err := s.engine.Conns().Get(streamCtx, connID)
 		if err != nil {
 			wsAuditError(s, streamCtx, user, connID, dbadmin.ActionConnView, "", err)
-			closeWSWithErr(conn, r, err, wsCloseForbidden)
+			_, ecode, msg := mapErr(err)
+			_ = writeWSErr(ecode, msg, requestIDFrom(r.Context()))
+			writeClose(wsCloseForbidden, msg)
 			return
 		}
 
 		parsed, err := classifier.Classify(c.Engine, open.Statement)
 		if err != nil {
 			wsAuditError(s, streamCtx, user, connID, dbadmin.ActionQueryRead, open.Statement, err)
-			closeWSWithErr(conn, r, err, wsCloseForbiddenStatement)
+			_, ecode, msg := mapErr(err)
+			_ = writeWSErr(ecode, msg, requestIDFrom(r.Context()))
+			writeClose(wsCloseForbiddenStatement, msg)
 			return
 		}
 		if parsed.Class == classifier.ClassForbidden {
-			writeWSError(conn, CodeForbiddenStatement, "forbidden statement", requestIDFrom(r.Context()))
+			_ = writeWSErr(CodeForbiddenStatement, "forbidden statement", requestIDFrom(r.Context()))
 			wsAuditDenial(s, streamCtx, user, connID, "forbidden-statement", "")
-			_ = conn.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(wsCloseForbiddenStatement, "forbidden"),
-				time.Now().Add(wsWriteWait))
+			writeClose(wsCloseForbiddenStatement, "forbidden")
 			return
 		}
 		action := parsed.Class.Action()
@@ -113,12 +182,14 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		}
 		if err := authorize(s, streamCtx, user, connID, action); err != nil {
 			wsAuditDenial(s, streamCtx, user, connID, "authorize-denied", string(action))
-			closeWSWithErr(conn, r, err, wsCloseForbidden)
+			_, ecode, msg := mapErr(err)
+			_ = writeWSErr(ecode, msg, requestIDFrom(r.Context()))
+			writeClose(wsCloseForbidden, msg)
 			return
 		}
 
 		// Emit one audit event for the open.
-		s.engine.Audit().Record(streamCtx, dbadmin.Event{
+		s.recordAudit(streamCtx, dbadmin.Event{
 			EventID:       newRequestID(),
 			Timestamp:     time.Now().UTC(),
 			UserID:        user.ID,
@@ -129,22 +200,40 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		})
 
 		// Resolve effective limits.
+		//
+		// DEF-22: hard caps come from Config().Query.*Max (operator-
+		// tunable), not hard-coded package constants. The hard-coded
+		// wsMax* constants remain as fall-back ceilings if the
+		// operator left the max at 0.
+		qcfg := s.engine.Config().Query
+		maxRowsCap := qcfg.ResultRowsMax
+		if maxRowsCap <= 0 || maxRowsCap > wsMaxRowsHardCap {
+			maxRowsCap = wsMaxRowsHardCap
+		}
+		maxBytesCap := qcfg.ResultBytesMax
+		if maxBytesCap <= 0 || maxBytesCap > wsMaxBytesHardCap {
+			maxBytesCap = wsMaxBytesHardCap
+		}
+		maxDurationCap := qcfg.TimeoutMax
+		if maxDurationCap <= 0 || maxDurationCap > wsMaxStreamDuration {
+			maxDurationCap = wsMaxStreamDuration
+		}
 		eff := openFrameLimitsSpec{
-			MaxRows:   s.engine.Config().Query.ResultRowsDefault,
-			MaxBytes:  s.engine.Config().Query.ResultBytesDefault,
-			TimeoutMS: int64(s.engine.Config().Query.TimeoutDefault.Milliseconds()),
+			MaxRows:   qcfg.ResultRowsDefault,
+			MaxBytes:  qcfg.ResultBytesDefault,
+			TimeoutMS: int64(qcfg.TimeoutDefault.Milliseconds()),
 		}
 		if open.Limits != nil {
-			if open.Limits.MaxRows > 0 && open.Limits.MaxRows <= wsMaxRowsHardCap {
+			if open.Limits.MaxRows > 0 && open.Limits.MaxRows <= maxRowsCap {
 				eff.MaxRows = open.Limits.MaxRows
 			}
-			if open.Limits.MaxBytes > 0 && open.Limits.MaxBytes <= wsMaxBytesHardCap {
+			if open.Limits.MaxBytes > 0 && open.Limits.MaxBytes <= maxBytesCap {
 				eff.MaxBytes = open.Limits.MaxBytes
 			}
 			if open.Limits.TimeoutMS > 0 {
 				d := time.Duration(open.Limits.TimeoutMS) * time.Millisecond
-				if d > wsMaxStreamDuration {
-					d = wsMaxStreamDuration
+				if d > maxDurationCap {
+					d = maxDurationCap
 				}
 				eff.TimeoutMS = int64(d.Milliseconds())
 			}
@@ -156,20 +245,33 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		// Open backend conn.
 		bc, err := openConn(s, streamCtx, c)
 		if err != nil {
-			closeWSWithErr(conn, r, err, wsCloseBackendTimeout)
+			_, ecode, msg := mapErr(err)
+			_ = writeWSErr(ecode, msg, requestIDFrom(r.Context()))
+			writeClose(wsCloseBackendTimeout, msg)
 			return
 		}
 		defer bc.Close()
 
-		// Read pump for cancel frames + pings.
-		var mu sync.Mutex
-		writeFrame := func(v any) error {
-			mu.Lock()
-			defer mu.Unlock()
-			_ = conn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-			return conn.WriteJSON(v)
-		}
+		// DEF-24: server-side ping ticker. The pong handler refreshes
+		// the read deadline; without a ping, a long-running query (>
+		// wsPongWait = 60s) with no row emission would never extend
+		// the deadline and the read pump would tear down the stream.
+		go func() {
+			t := time.NewTicker(wsPingPeriod)
+			defer t.Stop()
+			for {
+				select {
+				case <-streamCtx.Done():
+					return
+				case <-t.C:
+					if err := writePing(); err != nil {
+						return
+					}
+				}
+			}
+		}()
 
+		// Read pump for cancel frames + pings.
 		go func() {
 			for {
 				_, raw, err := conn.ReadMessage()
@@ -179,6 +281,12 @@ func handleSQLStream(s *server) http.HandlerFunc {
 				}
 				var cf cancelFrame
 				if json.Unmarshal(raw, &cf) == nil && cf.Type == frameCancel {
+					// DEF-6: optional CSRF revalidation on cancel.
+					if !s.csrfDisabled && cf.Csrf != "" && !validateOpenFrameCSRF(cf.Csrf, expectedCSRF) {
+						// silently treat as no-op to avoid leaking
+						// validity oracle.
+						continue
+					}
 					streamCancel()
 					return
 				}
@@ -196,29 +304,37 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			res, err := bc.Exec(streamCtx, limits, open.Statement)
 			if err != nil {
 				_, code, msg := mapErr(err)
-				writeWSError(conn, code, msg, requestIDFrom(r.Context()))
+				_ = writeWSErr(code, msg, requestIDFrom(r.Context()))
 				wsAuditError(s, streamCtx, user, connID, dbadmin.ActionQueryWrite, open.Statement, err)
+				// DEF-19: also send the close frame so the client sees
+				// the canonical close code (4xx) rather than a stale
+				// connection.
+				writeClose(wsCloseInternal, msg)
 				return
 			}
-			_ = writeFrame(metaFrame{
+			if err := writeFrame(metaFrame{
 				Type: frameMeta, Class: parsed.Class.String(),
 				EffectiveLimits: eff,
-			})
-			_ = writeFrame(doneFrame{
+			}); err != nil {
+				return
+			}
+			if err := writeFrame(doneFrame{
 				Type: frameDone, TotalRows: res.RowsAffected,
 				DurationMS: time.Since(startedAt).Milliseconds(),
-			})
-			_ = conn.WriteControl(websocket.CloseMessage,
-				websocket.FormatCloseMessage(wsCloseNormal, "done"),
-				time.Now().Add(wsWriteWait))
+			}); err != nil {
+				return
+			}
+			writeClose(wsCloseNormal, "done")
 			return
 		}
 
 		rs, err := bc.Query(streamCtx, limits, open.Statement)
 		if err != nil {
 			_, code, msg := mapErr(err)
-			writeWSError(conn, code, msg, requestIDFrom(r.Context()))
+			_ = writeWSErr(code, msg, requestIDFrom(r.Context()))
 			wsAuditError(s, streamCtx, user, connID, dbadmin.ActionQueryRead, open.Statement, err)
+			// DEF-19: follow the error frame with a Close.
+			writeClose(wsCloseInternal, msg)
 			return
 		}
 		defer rs.Close()
@@ -240,13 +356,18 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			lastProgress = time.Now()
 			truncated    = false
 		)
-		flush := func() {
+		// DEF-23: track the last write error so the row pump exits
+		// cleanly on a dead client instead of looping forever.
+		flush := func() error {
 			if len(batch) == 0 {
-				return
+				return nil
 			}
-			_ = writeFrame(rowFrame{Type: frameRow, Rows: batch})
+			if err := writeFrame(rowFrame{Type: frameRow, Rows: batch}); err != nil {
+				return err
+			}
 			batch = nil
 			batchBytes = 0
+			return nil
 		}
 
 	loop:
@@ -254,14 +375,10 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			select {
 			case <-streamCtx.Done():
 				if streamCtx.Err() == context.Canceled {
-					_ = conn.WriteControl(websocket.CloseMessage,
-						websocket.FormatCloseMessage(wsCloseClientCancel, "cancelled"),
-						time.Now().Add(wsWriteWait))
+					writeClose(wsCloseClientCancel, "cancelled")
 					return
 				}
-				_ = conn.WriteControl(websocket.CloseMessage,
-					websocket.FormatCloseMessage(wsCloseBackendTimeout, "timeout"),
-					time.Now().Add(wsWriteWait))
+				writeClose(wsCloseBackendTimeout, "timeout")
 				return
 			default:
 			}
@@ -275,54 +392,48 @@ func handleSQLStream(s *server) http.HandlerFunc {
 			}
 			if err != nil {
 				_, code, msg := mapErr(err)
-				writeWSError(conn, code, msg, requestIDFrom(r.Context()))
+				_ = writeWSErr(code, msg, requestIDFrom(r.Context()))
 				wsAuditError(s, streamCtx, user, connID, dbadmin.ActionQueryRead, open.Statement, err)
+				// DEF-19: close after error.
+				writeClose(wsCloseInternal, msg)
 				return
 			}
 			batch = append(batch, vals)
 			totalRows++
 			batchBytes += 256 // rough; not precise
 			if len(batch) >= 256 || batchBytes >= 512*1024 {
-				flush()
+				if err := flush(); err != nil {
+					// DEF-23: client write failed (broken pipe /
+					// timeout). Exit the loop so the stream tears
+					// down instead of looping forever.
+					return
+				}
 			}
 			if time.Since(lastProgress) > time.Second || totalRows%10000 == 0 {
-				_ = writeFrame(progressFrame{
+				if err := writeFrame(progressFrame{
 					Type:         frameProgress,
 					RowsEmitted:  totalRows,
 					ElapsedMS:    time.Since(startedAt).Milliseconds(),
 					BytesEmitted: 0,
-				})
+				}); err != nil {
+					return
+				}
 				lastProgress = time.Now()
 			}
 		}
-		flush()
-		_ = writeFrame(doneFrame{
+		if err := flush(); err != nil {
+			return
+		}
+		if err := writeFrame(doneFrame{
 			Type:       frameDone,
 			TotalRows:  totalRows,
 			DurationMS: time.Since(startedAt).Milliseconds(),
 			Truncated:  truncated,
-		})
-		_ = conn.WriteControl(websocket.CloseMessage,
-			websocket.FormatCloseMessage(wsCloseNormal, "done"),
-			time.Now().Add(wsWriteWait))
+		}); err != nil {
+			return
+		}
+		writeClose(wsCloseNormal, "done")
 	}
-}
-
-// writeWSError emits an error frame on the WS connection.
-func writeWSError(c *websocket.Conn, code, msg, reqID string) {
-	_ = c.SetWriteDeadline(time.Now().Add(wsWriteWait))
-	_ = c.WriteJSON(errorFrame{
-		Type: frameError, Code: code, Message: msg, RequestID: reqID,
-	})
-}
-
-// closeWSWithErr maps a Go error onto a WS close code + error frame.
-func closeWSWithErr(c *websocket.Conn, r *http.Request, err error, code int) {
-	_, ecode, msg := mapErr(err)
-	writeWSError(c, ecode, msg, requestIDFrom(r.Context()))
-	_ = c.WriteControl(websocket.CloseMessage,
-		websocket.FormatCloseMessage(code, msg),
-		time.Now().Add(wsWriteWait))
 }
 
 // originAllowed reports whether the WS request's Origin matches the
@@ -388,6 +499,30 @@ func isLoopback(r *http.Request) bool {
 	return false
 }
 
+// wsExpectedCSRFCookie returns the CSRF cookie value the upgrade
+// presented. Empty when the cookie is missing — open-frame
+// validation (DEF-6) defaults to rejecting in that case.
+func wsExpectedCSRFCookie(s *server, r *http.Request) string {
+	cookieName := DefaultCSRFCookieName
+	if s != nil && s.csrfCookieName != "" {
+		cookieName = s.csrfCookieName
+	}
+	cookie, err := r.Cookie(cookieName)
+	if err != nil || cookie == nil {
+		return ""
+	}
+	return cookie.Value
+}
+
+// validateOpenFrameCSRF compares the open-frame Csrf field against the
+// upgrade cookie value via constant-time compare. Empty values fail.
+func validateOpenFrameCSRF(presented, want string) bool {
+	if presented == "" || want == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(want)) == 1
+}
+
 // wsCSRFValid validates the CSRF token on the WS upgrade. Browsers
 // cannot set custom headers on the WebSocket constructor, so we accept
 // either:
@@ -442,7 +577,7 @@ func wsAuditDenial(s *server, ctx context.Context, user dbadmin.User, connID dba
 	if detail != "" {
 		msg = reason + ":" + detail
 	}
-	s.engine.Audit().Record(ctx, dbadmin.Event{
+	s.recordAudit(ctx, dbadmin.Event{
 		EventID:   newRequestID(),
 		Timestamp: time.Now().UTC(),
 		UserID:    user.ID,
@@ -460,7 +595,7 @@ func wsAuditError(s *server, ctx context.Context, user dbadmin.User, connID dbad
 		return
 	}
 	_, code, _ := mapErr(err)
-	s.engine.Audit().Record(ctx, dbadmin.Event{
+	s.recordAudit(ctx, dbadmin.Event{
 		EventID:   newRequestID(),
 		Timestamp: time.Now().UTC(),
 		UserID:    user.ID,

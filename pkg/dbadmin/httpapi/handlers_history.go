@@ -8,6 +8,14 @@ import (
 	"github.com/auracp/auracp/pkg/dbadmin/history"
 )
 
+// History endpoint limits. DEF-15 + DEF-29 cap pagination + query
+// inputs so a misbehaving client cannot ask for an unbounded scan.
+const (
+	historyMaxListLimit  = 500
+	historyMaxOffset     = 100_000
+	historyMaxQueryRunes = 256
+)
+
 func handleListHistory(s *server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		connID := dbadmin.ConnectionID(r.PathValue("id"))
@@ -27,15 +35,29 @@ func handleListHistory(s *server) http.HandlerFunc {
 			ConnectionID: connID,
 		}
 		q := r.URL.Query()
+		// DEF-15: reject negative numbers at decode time.
+		// DEF-29: clamp positive values to MaxListLimit / MaxOffset.
 		if v := q.Get("limit"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				opts.Limit = n
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "invalid limit")
+				return
 			}
+			if n > historyMaxListLimit {
+				n = historyMaxListLimit
+			}
+			opts.Limit = n
 		}
 		if v := q.Get("offset"); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				opts.Offset = n
+			n, err := strconv.Atoi(v)
+			if err != nil || n < 0 {
+				writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "invalid offset")
+				return
 			}
+			if n > historyMaxOffset {
+				n = historyMaxOffset
+			}
+			opts.Offset = n
 		}
 		entries, err := store.List(r.Context(), opts)
 		if err != nil {
@@ -68,6 +90,12 @@ func handleSearchHistory(s *server) http.HandlerFunc {
 			return
 		}
 		query := r.URL.Query().Get("q")
+		// DEF-29: cap the search-query length so a pathological regex
+		// or huge LIKE doesn't pin a SQLite FTS5 column scan.
+		if len([]rune(query)) > historyMaxQueryRunes {
+			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "query string too long")
+			return
+		}
 		opts := history.ListOpts{UserID: user.ID, ConnectionID: connID}
 		results, err := store.Search(r.Context(), query, opts)
 		if err != nil {
@@ -110,14 +138,26 @@ func handlePatchHistory(s *server) http.HandlerFunc {
 			writeError(w, r, http.StatusNotFound, CodeNotFound, "history disabled")
 			return
 		}
+		// DEF-16: the Star + Tag fields used to apply as two non-atomic
+		// store calls. The Store interface (history.Store) ships Star /
+		// Tag independently and lacks a composite Patch; until the
+		// store grows one we sequence the calls and roll back Star on
+		// a Tag failure so the user-observable state is consistent.
+		var didStar bool
 		if in.Starred != nil {
 			if err := store.Star(r.Context(), eid, user.ID, *in.Starred); err != nil {
 				writeMappedErr(w, r, err)
 				return
 			}
+			didStar = true
 		}
 		if in.Tags != nil {
 			if err := store.Tag(r.Context(), eid, user.ID, in.Tags); err != nil {
+				// Roll back the Star change so the operator sees the
+				// row unmodified after the failure.
+				if didStar {
+					_ = store.Star(r.Context(), eid, user.ID, !*in.Starred)
+				}
 				writeMappedErr(w, r, err)
 				return
 			}

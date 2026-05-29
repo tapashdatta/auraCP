@@ -33,6 +33,21 @@ type server struct {
 	// existing CSRF mint is honored (FIX-2 / PD-SEC-02_INT-1).
 	csrfCookieName string
 	csrfHeaderName string
+
+	// DEF-25: async audit hand-off. All httpapi.Record calls go through
+	// recordAudit, which uses async when configured and falls back to
+	// the engine's sink directly when not. Defaults to wrapping the
+	// engine's sink so slow sinks never block the request goroutine.
+	asyncAudit *asyncSink
+
+	// DEF-32: per-user concurrent-query semaphore. PoolSizePerConn is
+	// typically 4; without a cap a single user can keep N=100 reads
+	// pending against a 4-slot pool, queueing everyone else.
+	queryGate *userSemaphore
+
+	// DEF-4: signed-URL grants for password reveal. The /reveal POST
+	// mints a token; the /reveal/{token} GET burns it.
+	revealStore *revealStore
 }
 
 // Default CSRF cookie / header names. Exported so embedders that override
@@ -108,6 +123,11 @@ func NewWithOptions(e *dbadmin.Engine, opts Options) http.Handler {
 		csrfDisabled:             opts.CSRFDisabled,
 		csrfCookieName:           cookieName,
 		csrfHeaderName:           headerName,
+		queryGate:                newUserSemaphore(perUserQueryCap),
+		revealStore:              newRevealStore(),
+	}
+	if e != nil && e.Audit() != nil {
+		s.asyncAudit = newAsyncSink(e.Audit())
 	}
 	// The Upgrader's CheckOrigin defers to the package-level helper so
 	// the policy is identical whether the upgrade is gated by the

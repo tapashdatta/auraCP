@@ -45,12 +45,17 @@ const (
 )
 
 // openFrame is the first frame the client sends.
+//
+// DEF-6: Csrf carries the same token presented on the handshake. The
+// server revalidates it on every inbound open frame to defend against
+// replay against a hijacked WS session.
 type openFrame struct {
 	Type         frameType            `json:"type"`
 	ConnectionID string               `json:"connectionId"`
 	Statement    string               `json:"statement"`
 	Parameters   []any                `json:"parameters,omitempty"`
 	Limits       *openFrameLimitsSpec `json:"limits,omitempty"`
+	Csrf         string               `json:"csrf,omitempty"`
 }
 
 type openFrameLimitsSpec struct {
@@ -61,6 +66,11 @@ type openFrameLimitsSpec struct {
 
 type cancelFrame struct {
 	Type frameType `json:"type"`
+	// DEF-6: optional CSRF on cancel. When set, must equal the
+	// handshake cookie; otherwise the cancel is ignored. When omitted,
+	// the server accepts the cancel (the connection itself was
+	// authenticated at upgrade).
+	Csrf string `json:"csrf,omitempty"`
 }
 
 type metaFrame struct {

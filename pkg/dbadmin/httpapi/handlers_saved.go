@@ -17,10 +17,21 @@ import (
 // cannot list or delete another operator's saved queries. The compound
 // key avoids cross-user disclosure within a shared connection while
 // preserving the per-connection scoping the UI expects.
+//
+// DEF-26: per-(conn, user) cap is savedQueriesPerUser. When a create
+// would exceed the cap, the oldest entry for the same (conn, user) is
+// evicted. Without the cap, the in-memory store grew without bound
+// under an automated client that re-saves on every keystroke.
 type savedRecord struct {
 	dto     savedQueryDTO
 	ownerID string
 }
+
+// savedQueriesPerUser is the cap on entries per (conn, user) tuple.
+// 256 matches the SDK's documented limit; clients that need more
+// should migrate to the durable saved-query store landing in a later
+// PR.
+const savedQueriesPerUser = 256
 
 type savedQueriesStore struct {
 	mu      sync.RWMutex
@@ -43,10 +54,33 @@ func (s *savedQueriesStore) listForUser(conn, ownerID string) []savedQueryDTO {
 	return out
 }
 
+// create appends a new saved query. When the per-(conn, user) tuple
+// already holds savedQueriesPerUser entries, the OLDEST entry owned by
+// the same user is evicted before the append. This preserves the
+// "latest savedQueriesPerUser saves" invariant the SDK documents.
 func (s *savedQueriesStore) create(conn, ownerID string, q savedQueryDTO) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queries[conn] = append(s.queries[conn], savedRecord{dto: q, ownerID: ownerID})
+	list := s.queries[conn]
+
+	// Count how many entries this user already owns and find the
+	// index of their oldest. Append order is chronological because
+	// every create path goes through this method.
+	var owned int
+	oldestIdx := -1
+	for i, rec := range list {
+		if rec.ownerID != ownerID {
+			continue
+		}
+		if oldestIdx == -1 {
+			oldestIdx = i
+		}
+		owned++
+	}
+	if owned >= savedQueriesPerUser && oldestIdx >= 0 {
+		list = append(list[:oldestIdx], list[oldestIdx+1:]...)
+	}
+	s.queries[conn] = append(list, savedRecord{dto: q, ownerID: ownerID})
 }
 
 // deleteForUser removes a query iff it exists AND belongs to ownerID.

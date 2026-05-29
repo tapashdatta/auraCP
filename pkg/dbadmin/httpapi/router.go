@@ -3,6 +3,8 @@ package httpapi
 import (
 	"net/http"
 	"time"
+
+	"github.com/auracp/auracp/pkg/dbadmin"
 )
 
 // routes builds the chi-style ServeMux for the engine. Uses Go 1.22+
@@ -58,6 +60,10 @@ func (s *server) routes() http.Handler {
 	mux.Handle("DELETE /connections/{id}", write(defaultTimeout, handleDeleteConnection(s)))
 	mux.Handle("POST /connections/{id}/test", write(testTimeout, handleTestConnection(s)))
 	mux.Handle("POST /connections/{id}/password/reveal", write(defaultTimeout, handleRevealPassword(s)))
+	// DEF-4: redeem path for the signed URL minted above. GET so the
+	// reveal can be triggered from a plain anchor; the path token is
+	// single-use + per-(user, conn).
+	mux.Handle("GET /connections/{id}/password/reveal/{token}", read(defaultTimeout, handleRedeemPassword(s)))
 
 	// Schema metadata.
 	mux.Handle("GET /connections/{id}/schemas", read(defaultTimeout, handleListSchemas(s)))
@@ -144,6 +150,10 @@ func (s *server) routes() http.Handler {
 		rateLimit(s, rateClassMutating),
 		audit(s),
 	))
+	// DEF-1: /step-up/verify uses the dedicated step-up rate limit
+	// class. SECURITY.md §4.4 calls for 10 attempts / 15min sliding
+	// window per user — the generic mutating bucket (10 rps / 20
+	// burst) is far too permissive for an OTP brute-force surface.
 	mux.Handle("POST /step-up/verify", chain(handleStepUpVerify(s),
 		shutdownGate(s),
 		requestID(),
@@ -152,12 +162,16 @@ func (s *server) routes() http.Handler {
 		perRouteTimeout(defaultTimeout),
 		authn(s),
 		csrf(s),
-		rateLimit(s, rateClassMutating),
+		rateLimit(s, rateClassStepUp),
 		audit(s),
 	))
 
-	// Catch-all: emit canonical 404.
+	// Catch-all: emit canonical 404. DEF-11: also emit an audit
+	// denial event so an attacker scanning routes (e.g. fuzzing for
+	// hidden admin paths) is forensically visible. The authn
+	// middleware runs first; any auth failure already audits.
 	mux.Handle("/", chain(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		emitDenialAudit(s, r, dbadmin.Action("route.notfound"), r.URL.Path)
 		writeError(w, r, http.StatusNotFound, CodeNotFound, "route not found")
 	}),
 		shutdownGate(s),

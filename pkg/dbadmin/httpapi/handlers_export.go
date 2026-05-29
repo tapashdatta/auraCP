@@ -83,7 +83,7 @@ func handleExport(s *server) http.HandlerFunc {
 				errStr = code
 			}
 			usr, _ := userFrom(r.Context())
-			s.engine.Audit().Record(context.Background(), dbadmin.Event{
+			s.recordAudit(context.Background(), dbadmin.Event{
 				EventID:        newRequestID(),
 				Timestamp:      time.Now().UTC(),
 				UserID:         usr.ID,
@@ -282,7 +282,7 @@ func handleExport(s *server) http.HandlerFunc {
 		jobID := newRequestID()
 		startStmt := fmt.Sprintf("SELECT <%d cols> FROM %s.%s LIMIT %d",
 			len(cols), in.Schema, in.Table, limit)
-		s.engine.Audit().Record(streamCtx, dbadmin.Event{
+		s.recordAudit(streamCtx, dbadmin.Event{
 			EventID:        jobID,
 			Timestamp:      time.Now().UTC(),
 			UserID:         user.ID,
@@ -510,7 +510,7 @@ func emitExportFinish(s *server, ctx context.Context, user dbadmin.User, conn db
 	// must not silence the audit. context.WithoutCancel preserves
 	// values (request ID, tenant tag) without propagating cancellation.
 	auditCtx := context.WithoutCancel(ctx)
-	s.engine.Audit().Record(auditCtx, dbadmin.Event{
+	s.recordAudit(auditCtx, dbadmin.Event{
 		EventID:        newRequestID(),
 		Timestamp:      time.Now().UTC(),
 		UserID:         user.ID,
@@ -571,10 +571,21 @@ func handleImport(s *server) http.HandlerFunc {
 		}
 		// 64 MiB multipart upload ceiling. Best-effort parse — full
 		// importer is a later PR.
+		//
+		// DEF-31: ParseMultipartForm spools form parts > the in-memory
+		// threshold (8 MiB here) into $TMPDIR. Without RemoveAll on
+		// the way out, every error path leaves tmp files behind. We
+		// defer the cleanup unconditionally so the disk is reclaimed
+		// on every exit path.
 		if err := r.ParseMultipartForm(8 << 20); err != nil {
 			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "invalid multipart body")
 			return
 		}
+		defer func() {
+			if r.MultipartForm != nil {
+				_ = r.MultipartForm.RemoveAll()
+			}
+		}()
 		writeJSON(w, http.StatusOK, importResponse{
 			RowsImported: 0,
 			JobID:        newRequestID(),

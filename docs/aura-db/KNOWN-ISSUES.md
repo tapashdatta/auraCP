@@ -639,7 +639,21 @@ error code constants matching `pkg/dbadmin/errors.go`, and `errors.Is`
 for driver sentinels in `handleQuery`. The remaining 39 findings are
 deferred below.
 
-### Deferred high findings — PR #8.5
+### Deferred high findings — PR #8.5 [landed]
+
+All five deferred-high items below were addressed in PR #8.5:
+
+- DEF-1 → new `rateClassStepUp` with 10/15-min sliding window
+  (`ratelimit.go`), `/step-up/verify` rewired in `router.go`.
+- DEF-2 → `handleQuery` / `handleExplain` now call
+  `AuthSurface().HasPermission(user, conn, ActionConnView)` BEFORE
+  `Conns().Get` (`handlers_sql.go`).
+- DEF-22 → WS stream limits clamp against `Config().Query.*Max`
+  (`handlers_stream.go`).
+- DEF-23 → `writeFrame` errors propagate; row pump exits on
+  EOF / closed-pipe (`handlers_stream.go`).
+- DEF-24 → server-side ping ticker emits a ping every 30 s for the
+  stream lifetime (`handlers_stream.go`).
 
 #### DEF-1 — Step-up `/verify` shares the generic mutating rate-limit bucket
 
@@ -685,7 +699,14 @@ deadline and tears down the connection mid-stream. Fix in PR #8.5:
 ticker goroutine that sends ping frames every 30s for the lifetime
 of the stream.
 
-### Deferred medium findings — PR #8.5
+### Deferred medium findings — PR #8.5 [landed]
+
+PR #8.5 landed every deferred-medium item below except DEF-30 (gated by
+PR #16's real exporter) and the SDK-reconciliation items
+DEF-33/34/35/36 (DEF-35 now ships a doc comment freezing the wire
+form; DEF-33/34 are SDK-side work and remain deferred to a SDK
+revision; DEF-36 is a coverage backlog item rolled into the test
+plan for the next PR).
 
 - **DEF-3** — `recoverer` audit `Record` echoes raw `panic` value;
   possible credential/SQL residue in audit log. Fix: format with
@@ -738,7 +759,12 @@ of the stream.
   the synthesis count). Fix: round out per-route happy-path +
   error-envelope assertions.
 
-### Deferred low / nit findings — PR #8.5
+### Deferred low / nit findings — PR #8.5 [landed]
+
+All low/nit items below ship in PR #8.5 except DEF-9 (`/import` work)
+and DEF-10 (Export `SignedURL`), both gated by PR #16. DEF-37
+(WS frame schema in SDK.md) is SDK-side documentation work and remains
+deferred.
 
 - **DEF-7** — Rate limiter never evicts buckets — unbounded memory
   growth keyed by user ID. Fix: LRU eviction at 10K entries.

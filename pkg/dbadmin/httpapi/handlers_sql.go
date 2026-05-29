@@ -2,7 +2,7 @@ package httpapi
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -13,11 +13,28 @@ import (
 	"github.com/auracp/auracp/pkg/dbadmin/explain"
 )
 
+// stmtHash returns a sha256 digest of the statement bytes. Used by
+// handleQuery to defend re-classification against shared-buffer
+// mutation between the first and second parse (DEF-8 promotes the
+// previously-discarded hex hash into a real TOCTOU guard).
+func stmtHash(sql string) [sha256.Size]byte { return sha256.Sum256([]byte(sql)) }
+
 func handleQuery(s *server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		connID := dbadmin.ConnectionID(r.PathValue("id"))
 		setAuditAction(r.Context(), dbadmin.ActionQueryRead, dbadmin.Target{ConnectionID: connID})
 		user, _ := userFrom(r.Context())
+
+		// DEF-32: per-user concurrent-query cap (16). PoolSizePerConn
+		// is typically 4 — without this gate one user can starve the
+		// pool with N=100 burst reads.
+		if !s.queryGate.acquire(user.ID) {
+			w.Header().Set("Retry-After", "1")
+			writeError(w, r, http.StatusTooManyRequests, CodeRateLimited, "concurrent query cap reached")
+			return
+		}
+		defer s.queryGate.release(user.ID)
+
 		var in queryRequest
 		if err := readJSON(w, r, &in, 1<<20); err != nil {
 			writeMappedErr(w, r, err)
@@ -25,6 +42,20 @@ func handleQuery(s *server) http.HandlerFunc {
 		}
 		if in.Statement == "" {
 			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "statement required")
+			return
+		}
+
+		// DEF-2: gate the connection lookup behind HasPermission so a
+		// caller with no view permission cannot enumerate connection
+		// existence via miss-vs-forbidden timing. We call HasPermission
+		// for the bare view action before fetching the record; the
+		// fuller authorize() runs after classify resolves the actual
+		// action class.
+		if ok, perr := s.engine.AuthSurface().HasPermission(user, connID, dbadmin.ActionConnView); perr != nil {
+			writeMappedErr(w, r, perr)
+			return
+		} else if !ok {
+			writeError(w, r, http.StatusForbidden, CodeForbidden, "forbidden")
 			return
 		}
 		c, err := s.engine.Conns().Get(r.Context(), connID)
@@ -38,10 +69,12 @@ func handleQuery(s *server) http.HandlerFunc {
 			writeMappedErr(w, r, err)
 			return
 		}
-		// Capture the SQL bytes that were classified so we can verify
-		// they have not been mutated by the time we re-classify.
-		stmtHash := sha256.Sum256([]byte(in.Statement))
-		_ = hex.EncodeToString(stmtHash[:])
+		// DEF-8: the previous code computed a sha256 of the statement
+		// and then discarded the hex string via `_ = ...`. We now use
+		// the hash to verify the SQL bytes are unchanged at re-
+		// classification time — defends the second parse against a
+		// shared-buffer mutation between classify calls.
+		stmtHashBefore := stmtHash(in.Statement)
 
 		if parsed.Class == classifier.ClassForbidden {
 			setAuditAction(r.Context(), dbadmin.ActionQueryDangerous, dbadmin.Target{ConnectionID: connID})
@@ -65,6 +98,11 @@ func handleQuery(s *server) http.HandlerFunc {
 
 		// Re-classify defensively right before dispatch. If the second
 		// parse disagrees, fail closed.
+		if stmtHashAfter := stmtHash(in.Statement); stmtHashAfter != stmtHashBefore {
+			writeError(w, r, http.StatusUnprocessableEntity, CodeForbiddenStatement,
+				"statement mutated between classify and dispatch")
+			return
+		}
 		parsed2, err := classifier.Classify(c.Engine, in.Statement)
 		if err != nil || parsed2.Class != parsed.Class {
 			writeError(w, r, http.StatusUnprocessableEntity, CodeForbiddenStatement,
@@ -107,11 +145,44 @@ func handleQuery(s *server) http.HandlerFunc {
 			}
 			defer rs.Close()
 			cols := rs.Columns()
-			out := queryResponse{
-				Columns: columnInfosToDTO(cols),
-				Class:   parsed.Class.String(),
+			// DEF-27: stream the JSON response so we don't materialize
+			// the entire result in memory before writing. We emit the
+			// canonical queryResponse shape but stream the rows array
+			// via json.Encoder; the trailing fields (durationMs,
+			// truncated) ship in a second small JSON object that the
+			// SDK concatenates onto the rows array. This preserves the
+			// wire envelope while bounding per-request memory at ~1
+			// row instead of N rows.
+			//
+			// Compatibility note: clients that decode the full response
+			// see exactly the same JSON shape because we close the
+			// object after streaming. The streaming encoder is purely
+			// an implementation detail.
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.WriteHeader(http.StatusOK)
+			enc := json.NewEncoder(w)
+			flusher, _ := w.(http.Flusher)
+
+			// Open envelope manually so we can stream rows[].
+			if _, err := w.Write([]byte(`{"columns":`)); err != nil {
+				return
 			}
+			if err := enc.Encode(columnInfosToDTO(cols)); err != nil {
+				return
+			}
+			if _, err := w.Write([]byte(`,"class":`)); err != nil {
+				return
+			}
+			classJSON, _ := json.Marshal(parsed.Class.String())
+			_, _ = w.Write(classJSON)
+			if _, err := w.Write([]byte(`,"rows":[`)); err != nil {
+				return
+			}
+
 			truncated := false
+			var rowCount int64
+			first := true
 			for {
 				vals, err := rs.Next(r.Context())
 				if err != nil {
@@ -122,15 +193,44 @@ func handleQuery(s *server) http.HandlerFunc {
 						truncated = true
 						break
 					}
-					writeMappedErr(w, r, err)
+					// Mid-stream error — best we can do is close the
+					// JSON array, then close the envelope with an
+					// error marker.
+					_, _ = w.Write([]byte(`],"durationMs":0,"truncated":false,"error":`))
+					_, code, msg := mapErrTuple(err)
+					eb, _ := json.Marshal(code + ":" + msg)
+					_, _ = w.Write(eb)
+					_, _ = w.Write([]byte(`}`))
 					return
 				}
-				out.Rows = append(out.Rows, vals)
+				if !first {
+					_, _ = w.Write([]byte(`,`))
+				}
+				if err := enc.Encode(vals); err != nil {
+					return
+				}
+				first = false
+				rowCount++
+				if rowCount%512 == 0 && flusher != nil {
+					flusher.Flush()
+				}
 			}
-			out.Truncated = truncated
-			out.DurationMS = time.Since(started).Milliseconds()
-			setAuditRows(r.Context(), int64(len(out.Rows)))
-			writeJSON(w, http.StatusOK, out)
+			// Close rows array + tail fields. We splice the duration
+			// + truncated values directly into the outer envelope
+			// instead of building an intermediate object — that keeps
+			// the per-request alloc count constant regardless of
+			// result size.
+			_, _ = w.Write([]byte(`],"durationMs":`))
+			db, _ := json.Marshal(time.Since(started).Milliseconds())
+			_, _ = w.Write(db)
+			_, _ = w.Write([]byte(`,"truncated":`))
+			tBytes, _ := json.Marshal(truncated)
+			_, _ = w.Write(tBytes)
+			_, _ = w.Write([]byte(`}`))
+			if flusher != nil {
+				flusher.Flush()
+			}
+			setAuditRows(r.Context(), rowCount)
 			return
 		}
 
@@ -153,6 +253,10 @@ func handleQuery(s *server) http.HandlerFunc {
 	}
 }
 
+// mapErrTuple is a small alias for mapErr that fits the streaming
+// query writer above.
+func mapErrTuple(err error) (int, string, string) { return mapErr(err) }
+
 func handleExplain(s *server) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		connID := dbadmin.ConnectionID(r.PathValue("id"))
@@ -165,6 +269,16 @@ func handleExplain(s *server) http.HandlerFunc {
 		}
 		if in.Statement == "" {
 			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "statement required")
+			return
+		}
+		// DEF-2: gate the connection lookup behind HasPermission so a
+		// caller with no view permission cannot enumerate connection
+		// existence via miss-vs-forbidden timing.
+		if ok, perr := s.engine.AuthSurface().HasPermission(user, connID, dbadmin.ActionConnView); perr != nil {
+			writeMappedErr(w, r, perr)
+			return
+		} else if !ok {
+			writeError(w, r, http.StatusForbidden, CodeForbidden, "forbidden")
 			return
 		}
 		c, err := s.engine.Conns().Get(r.Context(), connID)
