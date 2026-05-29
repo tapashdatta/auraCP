@@ -318,6 +318,117 @@ to PR #5.5 (engine-parity & limits hardening) and tracked below.
 
 ---
 
+## Source: PR #6 adversarial review (workflow run wf_57a37769-701)
+
+The 4-lens review of the EXPLAIN normalization layer
+(`pkg/dbadmin/explain/`) produced 40 findings (1 critical, 12 high,
+17 medium, 9 low, 2 nit). Seven must-fix items landed in PR #6
+itself (C1 structural ClassRead gate on Analyze, H1 post-fetch
+byte cap, H2 Sscanf→strconv+NaN/Inf sanitization, H3 depth +
+node-count caps, H4 RowsActual overflow clamp, H8 lowerCamelCase
+JSON tags + shape test, H10 truthful Plan.Warnings docstring).
+Everything below is deferred to PR #6.5.
+
+### Deferred high findings — PR #6.5
+
+- **H5** — MariaDB rollup semantics: `mergeMetrics` sums
+  `RowsExpected` additively, but join cardinality is multiplicative
+  (a Nested Loop with 100 outer × 10 inner produces 1000, not 110).
+  **Fix in PR #6.5:** model join cardinality on the JOIN node itself
+  using outer.RowsExpected × inner.RowsExpected for Nested Loop.
+- **H6** — Missing Postgres per-node metadata: Sort Key, Group Key,
+  Hash Keys, Output, Subplan Name, Workers Planned/Launched, Parallel
+  Aware, JIT, Triggers, Settings are decoded by neither `pgPlan` nor
+  surfaced on `Node`. Operators inspecting parallel plans see less
+  than `EXPLAIN ANALYZE` console output. **Fix in PR #6.5:** add the
+  fields to `pgPlan` + extend `Node` with a typed `Extras` map.
+- **H7** — MariaDB shape coverage gaps: windowing, having_subqueries,
+  select_list_subqueries, "Impossible WHERE", and a coexisting
+  subquery+table shape are silently mapped to `Kind: "Unknown"`
+  without emitting a warning. **Fix in PR #6.5:** handle each shape
+  explicitly and append an "MariaDB block shape not recognized:
+  <keys>" warning for the residual unknowns.
+- **H9** — `Plan.Total` semantics diverge per engine: MariaDB only
+  fills `CostTotal` (no row/time/buffer rollup); Postgres mirrors
+  `Root.Metrics`. doc.go says "Mirrors Root.Metrics", which is true
+  only for Postgres. **Fix in PR #6.5:** roll up MariaDB metrics to
+  match, or document the divergence per-engine.
+- **H11** — Engine-parity field availability matrix missing from
+  doc.go. The README-style table that says "Postgres fills Buffers*,
+  RowsActual, TimeStartMS; MariaDB fills CostTotal, RowsExpected only"
+  is essential for callers. **Fix in PR #6.5:** add the matrix.
+
+### Deferred medium findings — PR #6.5
+
+- **M1** — Brittle EXPLAIN wrap: string prepend with no
+  multi-statement / leading-comment check. `--; DROP TABLE x;` slips
+  through the wrap.
+- **M2** — Postgres JIT / Triggers / Settings fields dropped during
+  decode (overlaps H6).
+- **M3** — `PlanningTimeMS=0` is ambiguous: it means both "not
+  measured" and "sub-microsecond". Add an explicit `PlanningTimed
+  bool` or document the convention.
+- **M4** — `asFloat64("1K")` returns 0 (silent partial-parse). MariaDB
+  emits "1K" / "10M" for `data_read_per_join`; we drop the value.
+- **M5** — `parseMySQLTable` overwrites `RowsExpected` with
+  `RowsProducedPJ` when the latter is > 0, but the former is the
+  examined-per-scan count which is sometimes more useful.
+- **M6** — MariaDB `warnings[].Code` and `warnings[].Level` are
+  discarded; only `Message` is kept. Operators triaging warnings need
+  the code.
+- **M7** — `defaultExplainTimeout=60s` is hardcoded; not plumbed from
+  `Config.Query.TimeoutMax`. Operators with shorter budgets get an
+  effective 60s on EXPLAIN paths.
+- **M8** — `fmt.Sscanf` perf: post-H2 strconv migration covers most
+  paths, but any remaining Sscanf call should also move (the H2 fix
+  covers all known call sites).
+- **M9** — `Plan.Raw` always retained; no `OmitRaw` option to drop
+  the bytes when the response body is constrained.
+- **M10** — Double-counting in `mergeMetrics` via wrapper nesting:
+  an Ordering wrapper passes child metrics up AND the parent's own
+  metrics include the same children's contribution.
+- **M11** — `Normalizer` interface exported but no public
+  implementation slot; reads as forward-compat but inviting
+  third-party extensions we don't intend to support.
+- **M12** — `Plan.Raw` shape is engine-specific (Postgres = JSON
+  array, MariaDB = JSON object) but undocumented; the frontend's
+  "raw tab" needs to know.
+- **M13** — Engine string literals `"mariadb"` / `"postgres"`
+  duplicated across mysql.go + postgres.go + tests; should be const.
+- **M14** — Postgres EXPLAIN options are hardcoded to `BUFFERS,
+  FORMAT JSON` (+ ANALYZE); no plumbing for SETTINGS / VERBOSE / WAL.
+- **M15** — `Node.Filter` collapses five Postgres conditions (Filter,
+  Index Cond, Hash Cond, Merge Cond, Recheck Cond) via `firstNonEmpty`;
+  the lost ones (e.g., Bitmap Heap Scan's Recheck Cond when Filter is
+  also present) are silently dropped.
+
+### Deferred low + nit findings — PR #6.5
+
+- **L1** — `asInt64(float64)` truncates (1.9 → 1); should round.
+- **L2** — Shared Dirtied Blocks decoded but discarded;
+  Local/Temp/IO timing fields absent entirely.
+- **L3** — `firstNonEmpty` drops Bitmap Heap Scan's Recheck Cond
+  (overlaps M15).
+- **L4** — `mysqlAccessKind` misses `index_merge` / `index_subquery`
+  / `unique_subquery`; they fall through to "Table Scan (<access>)".
+- **L5** — Nested unions silently skipped (no recursion for
+  union-within-union).
+- **L6** — `parseMySQLNestedLoop` entries without a `table` key are
+  dropped silently (e.g., when a `block-nl-join` operator appears).
+- **L7** — Wrapper `cost_info` is overwritten by child metrics in
+  `parseMySQLBlock` instead of merged.
+- **L8** — `readSingleJSONRow` doesn't assert that a second `Next()`
+  returns EOF; a malformed driver returning two rows passes silently.
+- **L9** — "Unknown" fallback in `parseMySQLBlock` has no warning
+  collector (overlaps H7).
+- **N1** — `Plan` struct lacks an explicit additive-stability
+  statement (forward-compat note for future field additions).
+- **N2** — `Metrics.CostStart` is documented as "always 0 on MariaDB"
+  but the field is never actively zeroed — operators relying on the
+  doc could see junk if a future MariaDB version starts populating it.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics
