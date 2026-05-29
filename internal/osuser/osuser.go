@@ -53,7 +53,39 @@ func (m *Manager) Create(ctx context.Context, user, domain string) error {
 		filepath.Join(home, "htdocs"), paths.LogDir(user)); err != nil {
 		return err
 	}
+	// v0.2.61: add nginx's www-data user to the site user's group so
+	// nginx can traverse the 0750-mode home + read the docroot. Without
+	// this, the v0.2.61 ResetPermissions chmod-750 on /home/<user>
+	// blocks `stat()` from nginx workers — operator-reported symptom:
+	//   [crit] stat() "/home/<user>/htdocs/<domain>/" failed (13:
+	//          Permission denied) → HTTP 404 to the client.
+	// Best-effort: failure here doesn't fail the create (group might
+	// not exist yet on a brand-new install — the ResetPermissions
+	// 0750 chmod is also best-effort), but the warning surfaces in
+	// `journalctl -u auracpd`.
+	_, _ = m.R.Run(ctx, "gpasswd", "-a", "www-data", user)
 	return nil
+}
+
+// EnsureNginxAccess adds www-data to every existing site user's group.
+// Idempotent — `gpasswd -a` is a no-op if www-data is already in the
+// group. Called once on auracpd startup so panels that were upgraded
+// from a pre-v0.2.61 release pick up the fix without operator action.
+//
+// Returns the count of users it processed, for the startup log line.
+// Caller is responsible for `systemctl reload nginx` after — new group
+// memberships only take effect for nginx workers spawned post-reload.
+func (m *Manager) EnsureNginxAccess(ctx context.Context, siteUsers []string) int {
+	n := 0
+	for _, u := range siteUsers {
+		if err := validate.Username(u); err != nil {
+			continue
+		}
+		if _, err := m.R.Run(ctx, "gpasswd", "-a", "www-data", u); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // Delete removes the user, its home, and kills its processes.

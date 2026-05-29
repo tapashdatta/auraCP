@@ -292,9 +292,14 @@ func (c *Creator) ReloadNginx(ctx context.Context) error {
 // ─── Step 7: ownership + permissions ───
 //
 // chown -R <user>:<user> /home/<user>     (recursive)
-// chmod 750 /home/<user>                  (so nginx-as-www-data can cd in via group)
+// chmod 750 /home/<user>                  (private to user + group)
 // chmod 700 /home/<user>/.ssh
 // chmod 600 /home/<user>/.ssh/*
+//
+// 0750 on the home requires www-data to be a member of the site user's
+// group for nginx to traverse + serve files. osuser.Create handles that
+// (`gpasswd -a www-data <user>` — added in v0.2.61); without it, nginx
+// workers get EACCES on stat() and the operator sees a HTTP 404.
 //
 // Best-effort — failures here don't roll back the site, since a write to
 // e.g. .ssh might fail if the operator hasn't added one yet. Logged and

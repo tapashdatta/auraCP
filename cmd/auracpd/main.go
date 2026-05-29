@@ -103,6 +103,9 @@ func main() {
 	node.Reconcile()
 	php := phpruntime.New(runner, st)
 	php.Reconcile()
+	// v0.2.62: osuser manager is needed both by the startup heal below
+	// AND by the API server. Construct it once here; pass to both.
+	osu := osuser.New(runner)
 
 	// v0.2.58: self-heal nginx state on boot. Two-step:
 	//   1. PruneDeadVhosts removes vhost files whose site user no
@@ -120,6 +123,31 @@ func main() {
 	// system arrived at its current state.
 	creator.PruneDeadVhosts()
 	creator.EnsureLogDirsForEnabledVhosts(context.Background(), runner)
+
+	// v0.2.62: ensure nginx's www-data is a member of every site user's
+	// group. Without it, ResetPermissions' chmod-750 on /home/<user>
+	// blocks nginx workers from `stat()`'ing the docroot — operator-
+	// reported failure mode:
+	//   [crit] stat() "/home/<u>/htdocs/<d>/" failed (13: Permission denied)
+	// surfaces to the visitor as HTTP 404. Idempotent gpasswd -a calls
+	// + a single nginx reload at the end pick up the new group memberships
+	// for newly-spawned worker processes. Existing workers stay until
+	// the reload re-execs them, after which group resolution refreshes.
+	if sites, err := st.Sites(); err == nil && len(sites) > 0 {
+		users := make([]string, 0, len(sites))
+		seen := map[string]bool{}
+		for _, s := range sites {
+			if !seen[s.SiteUser] {
+				users = append(users, s.SiteUser)
+				seen[s.SiteUser] = true
+			}
+		}
+		n := osu.EnsureNginxAccess(context.Background(), users)
+		if n > 0 {
+			log.Printf("nginx access: www-data added to %d site user group(s); reloading nginx", n)
+			_, _ = runner.Run(context.Background(), "systemctl", "reload", "nginx")
+		}
+	}
 
 	// Self-update checker. The Manager owns a 1h cache; a goroutine refreshes
 	// every 12h so the UI never blocks on api.github.com. Honours the version
@@ -182,7 +210,7 @@ func main() {
 		Cron:         cron.New(runner, st),
 		Backups:      backup.New(runner, st),
 		Web:          web,
-		OS:           osuser.New(runner),
+		OS:           osu,
 		Node:         node,
 		PHP:          php,
 		ACME:         ac,
