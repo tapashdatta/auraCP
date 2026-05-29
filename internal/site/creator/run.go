@@ -13,7 +13,6 @@ package creator
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -120,31 +119,34 @@ type Deps struct {
 	Store *store.Store // needed by nodejs/python for port allocation
 }
 
-// SmokeProbe curls https://<domain>/ against 127.0.0.1 with TLS verify
-// disabled (so self-signed certs in the pre-issuance window don't
-// throw) and asserts the response body is non-empty.
+// SmokeProbe curls http://<domain>/ against 127.0.0.1 and asserts the
+// response body is non-empty.
 //
-// v0.2.54: the URL uses the real domain (not 127.0.0.1) so TLS SNI
-// matches a configured server_name. Forcing the URL host to 127.0.0.1
-// made SNI advertise "127.0.0.1" which nothing matches — the v0.2.38
-// catch-all (00-default.conf with ssl_reject_handshake on) intercepts
-// and the handshake fails with "tls: unrecognized name". We still
-// want to bypass DNS, so a custom DialContext rewrites the TCP target
-// to 127.0.0.1 regardless of what the URL host resolves to. Same
-// pattern as `curl --resolve <domain>:443:127.0.0.1`.
+// v0.2.56: switched from HTTPS to HTTP. Pre-issuance the vhost has no
+// cert; v0.2.55 and earlier emitted `listen 443 ssl;` unconditionally,
+// which nginx loads (only a warning on -t, no error) but at TLS
+// handshake time falls back to the 00-default.conf catch-all because
+// no cert is presented → "tls: unrecognized name". Even when v0.2.54
+// gave SNI the right name, the 443 block had no cert to use.
+//
+// HTTP-only probe matches reality: pre-issuance the only listener
+// that actually serves traffic is :80. The lego goroutine issues the
+// cert in the background; after issuance, RunReapply re-renders the
+// vhost with the 443 block correctly wired (via the new {{ssl_listen}}
+// placeholder added in this release).
+//
+// The dialer still bypasses DNS by forcing TCP to 127.0.0.1 so the
+// probe works regardless of whether the operator's DNS A record
+// resolves to this VM yet.
 func SmokeProbe(domain string) error {
 	dialer := &net.Dialer{Timeout: 3 * time.Second}
 	transport := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
-			// ServerName left empty — Go derives SNI from the URL host.
-		},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			// addr is "<domain>:443" — rewrite TCP target to loopback,
+			// addr is "<domain>:80" — rewrite TCP target to loopback,
 			// keeping the port the URL implied.
 			_, port, err := net.SplitHostPort(addr)
 			if err != nil {
-				port = "443"
+				port = "80"
 			}
 			return dialer.DialContext(ctx, network, "127.0.0.1:"+port)
 		},
@@ -158,20 +160,21 @@ func SmokeProbe(domain string) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest("GET", "https://"+domain+"/", nil)
+	req, err := http.NewRequest("GET", "http://"+domain+"/", nil)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.54")
+	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.56")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("probe request: %w", err)
 	}
 	defer resp.Body.Close()
-	// A 3xx redirect (e.g. wordpress redirecting to /wp-admin/install.php)
-	// counts as success — the upstream IS responding with intent. We
-	// only flag empty 2xx / 5xx bodies, which is the actual symptom of
-	// the a.garuda.sh-class bug.
+	// A 3xx redirect (e.g. operator-supplied force-HTTPS in {{settings}},
+	// or wordpress redirecting to /wp-admin/install.php) counts as
+	// success — the upstream IS responding with intent. We only flag
+	// empty 2xx / 5xx bodies, which is the actual symptom of the
+	// a.garuda.sh-class bug.
 	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 		return nil
 	}

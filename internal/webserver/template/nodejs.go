@@ -12,6 +12,7 @@ func Nodejs() *Template {
 			processor.BotMap,
 			processor.ServerName,
 			processor.Root,
+			processor.SslListen,
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,

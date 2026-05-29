@@ -8,7 +8,12 @@
   /* v0.2.6 refresh — warmer cream palette, expanded status colour family,
      bigger radii, softer shadows. Tokens-only change; every screen
      inherits the new feel without per-screen edits. */
-  --ink:#f6f1ea;                       /* page bg — warm cream like Lisso */
+  /* v0.2.56: deepened body bg from #f6f1ea → #ece4d3 (~5 lightness
+     points darker) so white card surfaces visibly lift off the page.
+     Pre-this, --ink was too close to --surface-0 (#ffffff) and cards
+     blended into the bg in light mode. Still warm cream — kept the
+     palette character; just added contrast. */
+  --ink:#ece4d3;                        /* page bg — warm cream, deepened */
   --surface-0:#ffffff;                  /* primary card surface */
   --surface-1:#faf6f0;                  /* secondary surface (toolbars, subtle fills) */
   --surface-2:#f0eadf;                  /* tertiary (chips, bars, disabled states) */
@@ -383,6 +388,14 @@ td .mono{color:var(--txt-2);font-size:12.5px}
    strip never grows to a second row, regardless of viewport width.
    Without overflow-y:hidden the browser fell back to vertical scroll
    when content marginally overflowed vertically (operator-reported). */
+/* v0.2.56: site Settings tab — Backups and Danger Zone laid out side
+   by side so operators see "back up before you delete" in one frame.
+   Collapses to one column under 980 px (mobile / narrow side panels). */
+.settings-bottom-row{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+@media (max-width:980px){
+  .settings-bottom-row{grid-template-columns:1fr}
+}
+
 .tabs{display:flex;flex-wrap:nowrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global

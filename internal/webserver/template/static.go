@@ -14,6 +14,7 @@ func Static() *Template {
 			processor.BotMap,
 			processor.ServerName,
 			processor.Root,
+			processor.SslListen,
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,
@@ -34,6 +35,7 @@ func ReverseProxy() *Template {
 		Processors: []processor.Func{
 			processor.BotMap,
 			processor.ServerName,
+			processor.SslListen,
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,

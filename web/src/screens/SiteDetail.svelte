@@ -252,7 +252,19 @@
       return
     }
     const r = await apiFetch(`/api/sites/${encodeURIComponent(site.domain)}`, { method: 'DELETE' })
-    if (!r.ok) { const d = await r.json().catch(() => ({})); notice = d.error || 'Delete failed'; return }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      // v0.2.56: error path now also goes through the toast so the
+      // operator gets feedback regardless of which tab they were on
+      // when they clicked delete (notice strip only renders on Vhost).
+      toastError(d.error || 'Delete failed')
+      return
+    }
+    // v0.2.56: success toast survives the navigation (ToastHost lives at
+    // App.svelte). Pre-this, the operator saw the sites list reappear
+    // with the deleted site gone but no confirmation that the action
+    // actually completed — easy to mistake for "the click didn't work."
+    toastSuccess(`Site ${site.domain} deleted`)
     go('sites')
   }
   async function addSSH() {
@@ -916,48 +928,56 @@
           </div>
         </div>
       {/if}
-      <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Document root + databases, stored locally</p></div>
-        <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
-        {#if backups.length === 0}
-          <div class="empty">No backups yet.</div>
-        {:else}
-          <table><thead><tr><th>Created</th><th>Kind</th><th>Size</th><th>Path</th><th style="text-align:right">Actions</th></tr></thead><tbody>
-            {#each backups as b}
-              <tr>
-                <td><span class="mono">{b.createdAt}</span></td>
-                <td>{b.kind}</td>
-                <td><span class="mono">{fmtSize(b.size)}</span></td>
-                <td><span class="mono" style="color:var(--txt-3);font-size:11.5px">{b.path}</span></td>
-                <td style="text-align:right">
-                  <button type="button" class="file-del" onclick={() => deleteBackup(b.id)} title="Delete backup" aria-label="Delete backup">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-                  </button>
-                </td>
-              </tr>
-            {/each}
-          </tbody></table>
-        {/if}
-      </div>
+      <!-- v0.2.56: backups + danger zone laid out side-by-side at ≥980 px
+           viewport, stacked on narrower. They're paired because operators
+           often want to back up before deleting and the visual proximity
+           reinforces that workflow. -->
+      <div class="settings-bottom-row">
+        <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Document root + databases, stored locally</p></div>
+          <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
+          {#if backups.length === 0}
+            <div class="empty">No backups yet.</div>
+          {:else}
+            <table><thead><tr><th>Created</th><th>Kind</th><th>Size</th><th>Path</th><th style="text-align:right">Actions</th></tr></thead><tbody>
+              {#each backups as b}
+                <tr>
+                  <td><span class="mono">{b.createdAt}</span></td>
+                  <td>{b.kind}</td>
+                  <td><span class="mono">{fmtSize(b.size)}</span></td>
+                  <td><span class="mono" style="color:var(--txt-3);font-size:11.5px">{b.path}</span></td>
+                  <td style="text-align:right">
+                    <button type="button" class="file-del" onclick={() => deleteBackup(b.id)} title="Delete backup" aria-label="Delete backup">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                    </button>
+                  </td>
+                </tr>
+              {/each}
+            </tbody></table>
+          {/if}
+        </div>
 
-      <!-- v0.2.23: Danger Zone — destructive site removal, guarded by a
-           type-the-domain confirm prompt. Databases aren't dropped here
-           (they belong to the engine, not the site); drop them on the
-           Databases tab first if you want a clean teardown. -->
-      <div class="section danger-zone">
-        <div class="section-h"><div>
-          <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px;color:var(--down)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Danger Zone</h3>
-          <p>Permanent actions for this site</p>
-        </div></div>
-        <div class="section-b">
-          <div class="danger-row">
-            <div>
-              <b>Delete this site</b>
-              <p>Removes the nginx vhost, PHP-FPM pool / systemd unit, site user, document root, and SFTP access. Databases are NOT dropped — drop them on the Databases tab first if you want a complete teardown.</p>
+        <!-- v0.2.23: Danger Zone — destructive site removal, guarded by a
+             type-the-domain confirm prompt. v0.2.51 expanded delete to a
+             COMPLETE teardown: nginx vhost, FPM pool (every PHP version),
+             systemd units, site user (+ home + crontab), every associated
+             database, extra SFTP/SSH users, backup files, every store row.
+             Updated copy reflects that. -->
+        <div class="section danger-zone">
+          <div class="section-h"><div>
+            <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px;color:var(--down)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Danger Zone</h3>
+            <p>Permanent actions for this site</p>
+          </div></div>
+          <div class="section-b">
+            <div class="danger-row">
+              <div>
+                <b>Delete this site</b>
+                <p>Removes the nginx vhost, PHP-FPM pool / systemd unit, site user (with home dir + crontab + SFTP access), associated databases, extra SSH/FTP users, backup files, and every panel-side record. <b>This is irreversible</b> — take a backup first if you may need the data again.</p>
+              </div>
+              <button class="btn btn-danger" onclick={deleteSite}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+                Delete site
+              </button>
             </div>
-            <button class="btn btn-danger" onclick={deleteSite}>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-              Delete site
-            </button>
           </div>
         </div>
       </div>
