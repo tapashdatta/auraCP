@@ -5,24 +5,22 @@
    ============================================================ */
 
 :root {
-  /* v0.2.6 refresh — warmer cream palette, expanded status colour family,
-     bigger radii, softer shadows. Tokens-only change; every screen
-     inherits the new feel without per-screen edits. */
-  /* v0.2.56: deepened body bg from #f6f1ea → #ece4d3 (~5 lightness
-     points darker) so white card surfaces visibly lift off the page.
-     Pre-this, --ink was too close to --surface-0 (#ffffff) and cards
-     blended into the bg in light mode. Still warm cream — kept the
-     palette character; just added contrast. */
-  --ink:#ece4d3;                        /* page bg — warm cream, deepened */
+  /* v0.2.6 refresh — original palette was warm cream, deepened in v0.2.56.
+     v0.2.59: operator-flagged the warm character as "too beige". Flipped to
+     a cool neutral-gray stack — page bg is a slate-gray that's distinctly
+     darker than white cards, surfaces step down in cool tones, hairlines
+     and shadows recoloured so the warm-vs-cool mismatch doesn't show on
+     hover states. Cards remain pure white; the gray frames them. */
+  --ink:#d6dae1;                        /* page bg — neutral slate-gray, darker */
   --surface-0:#ffffff;                  /* primary card surface */
-  --surface-1:#faf6f0;                  /* secondary surface (toolbars, subtle fills) */
-  --surface-2:#f0eadf;                  /* tertiary (chips, bars, disabled states) */
-  --surface-3:#e6dfd1;                  /* deepest neutral (track fills) */
-  --line:rgba(60,40,20,.07);            /* hairline divider, warm slate */
-  --line-2:rgba(60,40,20,.14);
-  --txt:#1a1612;                        /* ink — warm near-black */
-  --txt-2:#5e554a;
-  --txt-3:#a39787;
+  --surface-1:#f4f5f7;                  /* secondary surface (toolbars, subtle fills) */
+  --surface-2:#e8eaee;                  /* tertiary (chips, bars, disabled states) */
+  --surface-3:#dde0e6;                  /* deepest neutral (track fills) */
+  --line:rgba(20,28,48,.08);            /* hairline divider, cool slate */
+  --line-2:rgba(20,28,48,.16);
+  --txt:#141821;                        /* ink — cool near-black */
+  --txt-2:#525a6b;
+  --txt-3:#929aa9;
   /* aura accent — mint, unchanged from v0.1.x. Plus a category family for
      vivid pills that match Lisso's tag chips (meeting=mint, high-priority=
      coral, voice-tasks=lavender, statistic=amber). */
@@ -36,9 +34,9 @@
   --down-soft:#fbd5dc;
   --info:#7a6fff;                       /* lavender — informational (was royal blue) */
   --info-soft:#e2dfff;
-  --shadow:0 1px 2px rgba(60,40,20,.04), 0 12px 32px -18px rgba(60,40,20,.20);
-  --shadow-lg:0 4px 16px rgba(60,40,20,.06), 0 28px 56px -22px rgba(60,40,20,.26);
-  --grid-dot:rgba(60,40,20,.035);
+  --shadow:0 1px 2px rgba(20,28,48,.04), 0 12px 32px -18px rgba(20,28,48,.22);
+  --shadow-lg:0 4px 16px rgba(20,28,48,.07), 0 28px 56px -22px rgba(20,28,48,.28);
+  --grid-dot:rgba(20,28,48,.04);
   --aura-rgb:16,185,129;
   --warn-rgb:217,119,6;
   --down-rgb:225,29,72;
@@ -55,9 +53,9 @@
      active nav pills, active chips, etc. The pair flips in dark mode below.
      Without this we'd use --txt as a background, which in dark mode is
      #e6eaf2 (light) on white text — invisible. */
-  --solid-bg:#1a1612;
+  --solid-bg:#141821;
   --solid-fg:#ffffff;
-  --solid-bg-hover:#2b261f;
+  --solid-bg-hover:#222836;
 
   /* Typography: one variable font (Manrope) covers display + UI; JetBrains
      Mono stays for code/identifiers. Manrope ships tnum for tabular figures

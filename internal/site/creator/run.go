@@ -14,8 +14,10 @@ package creator
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/auracp/auracp/internal/noderuntime"
@@ -129,6 +131,15 @@ type Deps struct {
 // no cert is presented → "tls: unrecognized name". Even when v0.2.54
 // gave SNI the right name, the 443 block had no cert to use.
 //
+// v0.2.59: retry on transient EOF / connection-closed responses. The
+// operator-reported failure was `probe request: Get "http://a.garuda.sh/":
+// EOF`, which traces to nginx's :80 catch-all (`return 444;` in
+// internal/webserver/template.go) — when the new vhost's server_name
+// hasn't yet been picked up by the running workers, the request
+// matches the default_server and gets dropped without a response. The
+// reload-to-worker-swap window is sub-second; retrying with backoff
+// past it closes the false-positive class.
+//
 // HTTP-only probe matches reality: pre-issuance the only listener
 // that actually serves traffic is :80. The lego goroutine issues the
 // cert in the background; after issuance, RunReapply re-renders the
@@ -160,30 +171,60 @@ func SmokeProbe(domain string) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest("GET", "http://"+domain+"/", nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.58")
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("probe request: %w", err)
-	}
-	defer resp.Body.Close()
-	// A 3xx redirect (e.g. operator-supplied force-HTTPS in {{settings}},
-	// or wordpress redirecting to /wp-admin/install.php) counts as
-	// success — the upstream IS responding with intent. We only flag
-	// empty 2xx / 5xx bodies, which is the actual symptom of the
-	// a.garuda.sh-class bug.
-	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+
+	// v0.2.59: up to 5 attempts, each ~200ms apart. Total wait ≤ 1s
+	// before we declare the probe genuinely failed. Most reload races
+	// resolve on the 2nd or 3rd try. Backend warm-up (PHP-FPM ondemand
+	// spinning a worker, Node systemd unit binding its port) also
+	// benefits from the retry budget — these can take 100–400 ms even
+	// on a healthy host.
+	const maxAttempts = 5
+	const backoff = 200 * time.Millisecond
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		req, err := http.NewRequest("GET", "http://"+domain+"/", nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "auracp-smoke-probe/0.2.59")
+		resp, err := client.Do(req)
+		if err != nil {
+			// Retryable transients: EOF (catch-all 444 mid-reload),
+			// connection reset, connection refused (backend coming up).
+			msg := err.Error()
+			if strings.Contains(msg, "EOF") || strings.Contains(msg, "connection reset") || strings.Contains(msg, "connection refused") {
+				lastErr = fmt.Errorf("probe request: %w", err)
+				time.Sleep(backoff)
+				continue
+			}
+			return fmt.Errorf("probe request: %w", err)
+		}
+		// A 3xx redirect (e.g. force-HTTPS, WordPress → /wp-admin/install.php)
+		// counts as success — the upstream is responding with intent.
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			return nil
+		}
+		// 502 / 503 / 504 — upstream not ready yet (FPM ondemand worker
+		// still spinning, Node systemd unit still binding). Treat as
+		// retryable for the first few attempts.
+		if resp.StatusCode >= 502 && resp.StatusCode <= 504 && attempt < maxAttempts {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("HTTP %d (upstream not ready)", resp.StatusCode)
+			time.Sleep(backoff)
+			continue
+		}
+		// Read the first 512 bytes — enough to detect "empty body"
+		// without spending bandwidth on a heavy homepage.
+		buf := make([]byte, 512)
+		n, _ := resp.Body.Read(buf)
+		resp.Body.Close()
+		if n == 0 {
+			return fmt.Errorf("HTTP %d returned an empty body (vhost↔pool user mismatch is the most likely cause; check /etc/nginx/sites-enabled/%s.conf vs /etc/php/*/fpm/pool.d/%s.conf)", resp.StatusCode, domain, domain)
+		}
 		return nil
 	}
-	// Read the first 512 bytes — that's enough to detect "empty body"
-	// without spending bandwidth on a heavy homepage.
-	buf := make([]byte, 512)
-	n, _ := resp.Body.Read(buf)
-	if n == 0 {
-		return fmt.Errorf("HTTP %d returned an empty body (vhost↔pool user mismatch is the most likely cause; check /etc/nginx/sites-enabled/%s.conf vs /etc/php/*/fpm/pool.d/%s.conf)", resp.StatusCode, domain, domain)
-	}
-	return nil
+	return lastErr
 }
