@@ -10,6 +10,82 @@ the corresponding ADR or release notes; don't leave dead entries here.
 
 ---
 
+## Source: PR #2.5 adversarial review
+
+PR #2.5 swapped the tokenizer-only statement classification for an
+AST-primary cascade (Vitess for MariaDB/MySQL, pg_query_go for
+Postgres). The cascade keeps the forbidden-token matcher as a
+second-gate defense; AST + tokenizer + matcher all run and the
+strictest verdict wins. The following residual limitations are
+acknowledged and tracked here.
+
+### Accepted — PR #2.5 ships with these limitations
+
+#### Dynamic SQL (PREPARE … EXECUTE) tables remain unknown
+
+The prepared statement body is opaque to the AST — the parser sees a
+string literal. ParsedStatement.Tables stays nil for those statements.
+The per-table authorization layer in PR #4 must treat empty Tables as
+"unknown tables touched" and either refuse or downgrade to
+per-connection authorization. There is no clean fix short of executing
+the PREPARE side-effect free, which the panel will not do.
+
+#### Vitess refuses GRANT / REVOKE and some vendor extensions
+
+Vitess marks GRANT and REVOKE keywords as UNUSED in its grammar. Those
+statements fall back to the PR #2 tokenizer per-statement —
+classification is unchanged (KindGrant / KindRevoke / ClassDangerous),
+but Tables stays nil because the AST didn't see the statement. Same
+applies to a small list of MySQL-vendor extensions that vitess hasn't
+caught up with. The cascade logs a single INFO-level fallback per
+event with the sha256-prefix of the SQL (never the raw text).
+
+#### Postgres search_path is not resolved
+
+Unqualified Postgres references (`SELECT * FROM users` with no schema)
+leave Target.Schema empty. The per-table auth layer in PR #4 must
+either consult the connection's current search_path or treat empty
+schema as "any schema the user has access to". The classifier does
+not have a Postgres connection in scope, so it cannot resolve this.
+
+#### CGO_ENABLED=0 builds disable the Postgres AST
+
+libpg_query is C-only and pg_query_go is therefore cgo. Builds with
+CGO_ENABLED=0 silently degrade the Postgres parser to the PR #2
+tokenizer (a single INFO log line announces this at process start).
+MySQL/MariaDB stays on the Vitess AST because Vitess is pure Go.
+Operators who build no-cgo binaries do so deliberately; the
+degradation matches PR #2 behavior and preserves all security
+guarantees of that PR.
+
+### Deferred — depends on PR #2.5 AST availability
+
+#### PR #7.5 redaction can now consume the AST
+
+KNOWN-ISSUES entry "classifier.RedactSensitiveInline misses non-
+standard credential forms" (originally targeted at PR #7.5) can now
+read CREATE USER / CREATE SUBSCRIPTION / etc. node types directly
+from the AST instead of regexing the token stream. PR #7.5 should
+take advantage; the AST surface is already exposed through the
+cascade's per-statement parse.
+
+#### Binary size budget
+
+The Vitess + pg_query_go additions raise the static aura-db binary
+size by an estimated ~10 MiB on linux/amd64. The CI matrix needs to
+add the `45 MiB hard ceiling` check from the PR #2.5 design. Until
+that lands, operators rebuilding from source should verify the
+binary size manually.
+
+#### Cross-compile to linux/arm64 needs aarch64 toolchain
+
+The pg_query_go cgo step needs `aarch64-linux-gnu-gcc` on the
+builder when GOARCH=arm64 GOOS=linux. The existing CI Dockerfile
+already includes the C toolchain for the macOS build host; the
+Linux ARM64 cross-compile target needs one line of apt install.
+
+---
+
 ## Source: PR #3 adversarial review (workflow run wf_2ae2ea6a-3b3)
 
 The 4-lens review of the driver layer (security / correctness / limits

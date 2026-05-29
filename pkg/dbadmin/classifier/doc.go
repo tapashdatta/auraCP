@@ -36,6 +36,28 @@
 // CVE-historical attack patterns with margin to spare, and the
 // integration boundary is set so the upgrade is mechanical.
 //
+// Strategy (PR #2.5):
+//
+// AST primary, tokenizer fallback, forbidden matcher always-on. The
+// classifier now wires the AST parser (vitess.io/vitess/go/vt/sqlparser
+// for MariaDB/MySQL, github.com/pganalyze/pg_query_go/v5 for Postgres)
+// in front of the PR #2 tokenizer. When the AST parser succeeds, its
+// structured result drives Kind/Class/Action/Tables/HasWhere; when it
+// fails or panics on a specific statement, the cascade transparently
+// falls back to the PR #2 tokenizer for that statement. The
+// forbidden-token matcher (forbidden.go) runs UNCONDITIONALLY against
+// the raw token stream so that — even if a parser bug or vendor
+// extension causes the AST to accept something dangerous — the lexer
+// still catches LOAD_FILE/INTO OUTFILE/COPY FROM PROGRAM/pg_read_file/
+// PLPYTHONU and similar patterns. See SECURITY.md §6.3.2 for the
+// no-override contract that this defense-in-depth posture implements.
+//
+// The Postgres AST parser links libpg_query via cgo. Builds with
+// CGO_ENABLED=0 silently degrade to the PR #2 tokenizer for Postgres
+// (announced at process start via a single INFO-level log line);
+// MySQL/MariaDB classification stays on the AST because Vitess is
+// pure Go.
+//
 // Public surface:
 //
 //   - Classify(engine, sql) → ParsedQuery: the one function the engine

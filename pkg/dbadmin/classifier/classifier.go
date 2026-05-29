@@ -229,6 +229,16 @@ type ParsedQuery struct {
 	// engine surfaces these to the operator in the error message so
 	// they understand which specific feature is blocked.
 	Forbidden []ForbiddenMatch
+
+	// ParseSource is the aggregate provenance of this parse. PR #2.5+:
+	// ParseSourceAST when every statement came from the AST parser,
+	// ParseSourceFallback when every statement came from the
+	// tokenizer fallback, ParseSourceMixed when statements split
+	// between the two sources. New in PR #2.5; older code that did
+	// not set this field reads the zero value (ParseSourceAST). The
+	// authorization layer does not read this field; it is purely
+	// informational for audit/debug surfaces.
+	ParseSource ParseSource
 }
 
 // ParsedStatement is one statement in a multi-statement query.
@@ -244,8 +254,14 @@ type ParsedStatement struct {
 	Action dbadmin.Action
 
 	// Tables lists the objects this statement touches. Populated by
-	// the AST upgrade in PR #2.5; empty in this PR. Hosts can check
-	// for emptiness and fall back to per-connection authorization.
+	// the AST upgrade in PR #2.5 (Vitess for MySQL/MariaDB,
+	// pg_query_go for Postgres). The Target.ConnectionID field is
+	// left empty by the classifier; callers populate it from the
+	// request context. Statements whose source falls back to the
+	// tokenizer (ParseSource == ParseSourceFallback) leave Tables
+	// nil — hosts that depend on per-table authorization must treat
+	// that as "unknown tables touched" and refuse, or downgrade to
+	// per-connection authorization.
 	Tables []dbadmin.Target
 
 	// HasWhere is true for UPDATE/DELETE statements that include a
@@ -261,6 +277,14 @@ type ParsedStatement struct {
 	// input. Useful for error reporting ("statement at byte 47 is
 	// forbidden").
 	Offset int
+
+	// ParseSource records whether this specific statement was
+	// classified by the AST parser (ParseSourceAST) or the tokenizer
+	// fallback (ParseSourceFallback). New in PR #2.5; pre-PR #2.5
+	// hosts that read the zero value see ParseSourceAST, which is
+	// the cascade's optimistic default. See ParsedQuery.ParseSource
+	// for the aggregate.
+	ParseSource ParseSource
 }
 
 // ForbiddenMatch describes why a statement was classified as forbidden.
@@ -331,7 +355,14 @@ var ErrTooLarge = fmt.Errorf("classifier: SQL exceeds %d bytes", maxSQLBytes)
 
 // Default parser instances. Constructed once at package init and shared
 // (parsers are stateless — they tokenize a fresh input on every call).
+//
+// PR #2.5: each engine's parser is now a cascade — the AST classifier
+// (Vitess for MySQL, pg_query_go for Postgres) runs first, and the
+// tokenizer-based classifier from PR #2 is the fallback when the AST
+// parser fails or panics. The forbidden-token matcher runs
+// unconditionally inside the cascade as the no-override defense from
+// SECURITY.md §6.3.2.
 var (
-	mysqlParser    Parser = &mysqlClassifier{}
-	postgresParser Parser = &postgresClassifier{}
+	mysqlParser    Parser = newCascadeParser(newMySQLASTClassifier(), &mysqlTokenizer{}, DialectMySQL)
+	postgresParser Parser = newCascadeParser(newPostgresASTClassifier(), &postgresTokenizer{}, DialectPostgres)
 )

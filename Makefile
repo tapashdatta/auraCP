@@ -1,7 +1,18 @@
-# auraCP build. Pure-Go (no cgo) → trivial cross-compilation for both arches.
+# auraCP build. Pure-Go for cross-compilation; the Aura DB Postgres
+# classifier (PR #2.5) pulls libpg_query through pg_query_go/v5 which
+# requires cgo for the AST path. CGO_ENABLED=0 builds remain valid —
+# they degrade Postgres to the PR #2 tokenizer fallback.
 VERSION ?= 0.3.0
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
+
+# CGO_CFLAGS workaround for macOS SDK 15+: the SDK declares strchrnul,
+# but libpg_query also declares its own when HAVE_STRCHRNUL is unset.
+# Passing -DHAVE_STRCHRNUL=1 selects libpg_query's #else branch which
+# defers to the SDK symbol. Harmless on Linux (where the same SDK
+# symbol exists). Override with CGO_CFLAGS="" if your toolchain
+# disagrees.
+export CGO_CFLAGS ?= -DHAVE_STRCHRNUL=1
 
 .PHONY: all ui ui-dbadmin daemon cli build dist deb clean test vet fmt run
 

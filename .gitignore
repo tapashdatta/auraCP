@@ -25,3 +25,4 @@ auracp.db*
 # Standalone HTML mock-ups produced during design exploration; not part
 # of the panel source.
 auraDBPrototype.html
+aura-db

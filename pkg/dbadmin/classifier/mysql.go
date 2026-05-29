@@ -6,7 +6,7 @@ import (
 	"github.com/auracp/auracp/pkg/dbadmin"
 )
 
-// mysqlClassifier implements Parser for MariaDB/MySQL.
+// mysqlTokenizer implements Parser for MariaDB/MySQL.
 //
 // The classifier:
 //  1. Tokenizes the input with DialectMySQL options.
@@ -17,16 +17,18 @@ import (
 //     that contain a forbidden match are escalated to ClassForbidden
 //     regardless of their leading keyword.
 //  5. Aggregates: ParsedQuery.Class is the strictest among statements.
-type mysqlClassifier struct{}
+type mysqlTokenizer struct{}
 
-func (m *mysqlClassifier) Parse(sql string) (ParsedQuery, error) {
+func (m *mysqlTokenizer) Parse(sql string) (ParsedQuery, error) {
 	tokens := Lex(sql, LexOptions{Dialect: DialectMySQL})
 	forbidden := matchForbidden(tokens, DialectMySQL)
 
 	stmts := splitStatements(tokens, sql)
 	parsed := make([]ParsedStatement, 0, len(stmts))
 	for _, s := range stmts {
-		parsed = append(parsed, classifyStatement(s, DialectMySQL))
+		ps := classifyStatement(s, DialectMySQL)
+		ps.ParseSource = ParseSourceFallback
+		parsed = append(parsed, ps)
 	}
 
 	// Apply forbidden matches: escalate to ClassForbidden, drop Action.
@@ -38,9 +40,10 @@ func (m *mysqlClassifier) Parse(sql string) (ParsedQuery, error) {
 	}
 
 	return ParsedQuery{
-		Class:      strictestClass(parsed),
-		Statements: parsed,
-		Forbidden:  forbidden,
+		Class:       strictestClass(parsed),
+		Statements:  parsed,
+		Forbidden:   forbidden,
+		ParseSource: ParseSourceFallback,
 	}, nil
 }
 

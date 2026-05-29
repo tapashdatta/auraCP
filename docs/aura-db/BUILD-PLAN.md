@@ -120,17 +120,36 @@ forbidden to read/write.
 
 **Dependencies:** PR #1.
 
-### PR #2.5 — Classifier AST upgrade (deferred)
+### PR #2.5 — Classifier AST upgrade (shipped)
 
 **Goal:** swap the tokenizer-based statement detection for full AST
-classification using Vitess (MySQL) + pg_query_go (Postgres). The
-forbidden-token matcher stays — it's belt-and-braces.
+classification using Vitess (MariaDB/MySQL) + pg_query_go (Postgres).
+The forbidden-token matcher stays — it's belt-and-braces.
 
-Scheduled after the v0.3.0 cutover proves the design holds. If real
-operators report classification edge cases we can't catch with the
-tokenizer, this PR moves earlier. If not, it ships in v0.3.1.
+Cascade: AST primary, tokenizer fallback per-statement, forbidden
+matcher always-on against the raw token stream. The Postgres AST
+parser links libpg_query through cgo; builds with CGO_ENABLED=0
+silently degrade to the PR #2 tokenizer for Postgres (MySQL stays on
+AST because Vitess is pure Go).
 
-**Dependencies:** PR #2 + production feedback.
+Tables on each ParsedStatement are populated for AST-parsed statements
+(unblocks per-table authorization in PR #4). Statements that fall back
+to the tokenizer leave Tables nil — hosts that depend on per-table
+authorization must treat that as "unknown tables touched" and refuse.
+
+**Known limitations of the AST cascade (resolved or accepted):**
+
+- Quoted-identifier `LANGUAGE "plpythonu"` was a tokenizer false
+  negative; PR #2.5 adds an AST-level detector for it.
+- Dynamic SQL (`PREPARE … EXECUTE`) is opaque; Tables remains empty
+  and per-table auth in PR #4 must refuse "unknown tables touched".
+- Vitess refuses GRANT / REVOKE / some vendor extensions; those fall
+  back to the tokenizer per-statement (classification unchanged from
+  PR #2 for those inputs).
+- search_path is not resolved by the classifier; unqualified Postgres
+  references leave Target.Schema empty.
+
+**Dependencies:** PR #2.
 
 ---
 
@@ -611,7 +630,7 @@ PRs without their tests are blocked at review. We do not retroactively
 | --- | -------------------------------------- | -------- | ------------ |
 | 1   | `pkg/dbadmin` skeleton + test helpers  | ✓ done   | c6419e9      |
 | 2   | Classifier (tokenizer-based)           | ✓ done   | 8514a37      |
-| 2.5 | Classifier AST upgrade                 | deferred |              |
+| 2.5 | Classifier AST upgrade                 | shipped  |              |
 | 3   | Driver layer                           | ✓ done   | 97de7d3      |
 | 3.5 | Driver hardening follow-up             | deferred |              |
 | 4   | Schema readers                         | ✓ done   | da65065      |

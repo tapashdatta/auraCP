@@ -1,6 +1,6 @@
 package classifier
 
-// postgresClassifier implements Parser for PostgreSQL.
+// postgresTokenizer implements Parser for PostgreSQL.
 //
 // The classification core (splitStatements + classifyByKeyword) is shared
 // with the MySQL classifier; this type only:
@@ -14,16 +14,18 @@ package classifier
 // Engine-specific keyword recognition lives in classifyByKeyword's switch:
 // Postgres-only keywords (REINDEX, VACUUM) are already handled there
 // alongside their MySQL counterparts.
-type postgresClassifier struct{}
+type postgresTokenizer struct{}
 
-func (p *postgresClassifier) Parse(sql string) (ParsedQuery, error) {
+func (p *postgresTokenizer) Parse(sql string) (ParsedQuery, error) {
 	tokens := Lex(sql, LexOptions{Dialect: DialectPostgres})
 	forbidden := matchForbidden(tokens, DialectPostgres)
 
 	stmts := splitStatements(tokens, sql)
 	parsed := make([]ParsedStatement, 0, len(stmts))
 	for _, s := range stmts {
-		parsed = append(parsed, classifyStatement(s, DialectPostgres))
+		ps := classifyStatement(s, DialectPostgres)
+		ps.ParseSource = ParseSourceFallback
+		parsed = append(parsed, ps)
 	}
 
 	for _, f := range forbidden {
@@ -34,8 +36,9 @@ func (p *postgresClassifier) Parse(sql string) (ParsedQuery, error) {
 	}
 
 	return ParsedQuery{
-		Class:      strictestClass(parsed),
-		Statements: parsed,
-		Forbidden:  forbidden,
+		Class:       strictestClass(parsed),
+		Statements:  parsed,
+		Forbidden:   forbidden,
+		ParseSource: ParseSourceFallback,
 	}, nil
 }
