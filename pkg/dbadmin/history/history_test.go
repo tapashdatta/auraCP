@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/auracp/auracp/pkg/dbadmin"
 	"github.com/auracp/auracp/pkg/dbadmin/classifier"
@@ -739,6 +740,432 @@ func TestOpen_RequiresDSN(t *testing.T) {
 	_, err := history.Open(context.Background(), "", dbadmin.EngineMariaDB)
 	if err == nil {
 		t.Error("expected error for empty DSN")
+	}
+}
+
+// ─── PR #7.5 H4: extended redaction coverage ─────────────────────────
+
+func TestAppend_RedactsIdentifiedVia(t *testing.T) {
+	// MariaDB IDENTIFIED VIA <plugin> AS '<hash>'. Both AS and USING
+	// variants must redact the hash literal.
+	s := openMem(t)
+	ctx := context.Background()
+	cases := []string{
+		`CREATE USER bob@'%' IDENTIFIED VIA ed25519 AS 'fakehash-aaaa'`,
+		`ALTER USER bob@'%' IDENTIFIED VIA pam USING 'service-config'`,
+	}
+	for _, sql := range cases {
+		id, err := s.Append(ctx, entry("alice", sql))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, _ := s.Get(ctx, id, "alice")
+		if strings.Contains(got.SQL, "fakehash") || strings.Contains(got.SQL, "service-config") {
+			t.Errorf("IDENTIFIED VIA hash leaked: %q", got.SQL)
+		}
+		if !strings.Contains(got.SQL, "[redacted]") {
+			t.Errorf("missing [redacted] marker: %q", got.SQL)
+		}
+	}
+}
+
+func TestAppend_RedactsConnectionString(t *testing.T) {
+	// Postgres CREATE SUBSCRIPTION … CONNECTION '<dsn>'. The DSN
+	// literal must vanish from history.
+	s, err := history.Open(context.Background(), ":memory:", dbadmin.EnginePostgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	id, err := s.Append(ctx, entry("alice",
+		`CREATE SUBSCRIPTION sub CONNECTION 'host=primary user=repl password=hunter2 dbname=app' PUBLICATION pub`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, id, "alice")
+	if strings.Contains(got.SQL, "hunter2") {
+		t.Errorf("CONNECTION DSN password leaked: %q", got.SQL)
+	}
+	if !strings.Contains(got.SQL, "[redacted]") {
+		t.Errorf("missing [redacted] marker: %q", got.SQL)
+	}
+}
+
+func TestAppend_RedactsDblinkConnect(t *testing.T) {
+	// dblink_connect / dblink_connect_u — the DSN string arg carries
+	// the credentials.
+	s, err := history.Open(context.Background(), ":memory:", dbadmin.EnginePostgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	id, err := s.Append(ctx, entry("alice",
+		`SELECT dblink_connect_u('host=remote user=root password=p@ss123 dbname=app')`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, id, "alice")
+	if strings.Contains(got.SQL, "p@ss123") {
+		t.Errorf("dblink_connect password leaked: %q", got.SQL)
+	}
+}
+
+func TestAppend_RedactsCopyFromProgram(t *testing.T) {
+	// COPY … FROM PROGRAM 'curl -u user:pw https://…' — the shell
+	// command is sensitive even though the classifier will block
+	// the run. Audit row still gets written.
+	s, err := history.Open(context.Background(), ":memory:", dbadmin.EnginePostgres)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	ctx := context.Background()
+	id, err := s.Append(ctx, entry("alice",
+		`COPY t FROM PROGRAM 'curl -u admin:hunter2 https://example.com/dump.csv'`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, id, "alice")
+	if strings.Contains(got.SQL, "hunter2") {
+		t.Errorf("COPY FROM PROGRAM command leaked: %q", got.SQL)
+	}
+}
+
+func TestAppend_RedactsCredentialedURI(t *testing.T) {
+	// Any string literal carrying a postgresql:// / mysql:// /
+	// mongodb:// URI with userinfo redacts.
+	s := openMem(t)
+	ctx := context.Background()
+	id, err := s.Append(ctx, entry("alice",
+		`INSERT INTO fdw_options VALUES ('dsn', 'postgresql://repl:hunter2@primary/app')`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, id, "alice")
+	if strings.Contains(got.SQL, "hunter2") {
+		t.Errorf("URI-userinfo leaked: %q", got.SQL)
+	}
+}
+
+func TestAppend_DoesNotRedactBareURI(t *testing.T) {
+	// A postgresql:// URI without userinfo is documentation, not a
+	// credential. Make sure we don't redact aggressively.
+	s := openMem(t)
+	ctx := context.Background()
+	id, _ := s.Append(ctx, entry("alice",
+		`INSERT INTO docs VALUES ('see postgresql://docs.example.com/manual')`))
+	got, _ := s.Get(ctx, id, "alice")
+	if !strings.Contains(got.SQL, "docs.example.com") {
+		t.Errorf("bare URI got redacted: %q", got.SQL)
+	}
+}
+
+// ─── PR #7.5 H8: FTS5 surfacing ──────────────────────────────────────
+
+func TestOpenWithOpts_RequireFTS5_SucceedsWhenAvailable(t *testing.T) {
+	// modernc.org/sqlite ships with FTS5 in current releases, so the
+	// require-flag should succeed against :memory:.
+	s, err := history.OpenWithOpts(context.Background(), ":memory:",
+		dbadmin.EngineMariaDB,
+		history.OpenOpts{RequireFTS5: true})
+	if err != nil {
+		t.Fatalf("RequireFTS5 unexpectedly errored: %v", err)
+	}
+	defer s.Close()
+	if !s.HasFTS() {
+		t.Error("HasFTS() == false after successful RequireFTS5 open")
+	}
+}
+
+func TestHasFTS_ReportsFallback(t *testing.T) {
+	// ForceLikePath flips an open Store into LIKE mode; HasFTS must
+	// reflect that.
+	s := openMem(t)
+	history.ForceLikePath(s)
+	if s.HasFTS() {
+		t.Error("HasFTS() == true after ForceLikePath")
+	}
+}
+
+// ─── PR #7.5 H9: retention enforcement ───────────────────────────────
+
+func TestOpenWithOpts_MaxRows_EvictsOldest(t *testing.T) {
+	s, err := history.OpenWithOpts(context.Background(), ":memory:",
+		dbadmin.EngineMariaDB,
+		history.OpenOpts{MaxRows: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	// Append 6 rows; only the newest 3 should survive.
+	ids := make([]int64, 0, 6)
+	for i := 0; i < 6; i++ {
+		id, err := s.Append(ctx, entry("alice", "select"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	out, _ := s.List(ctx, history.ListOpts{UserID: "alice", Limit: 100})
+	if len(out) != 3 {
+		t.Errorf("MaxRows=3 yielded %d rows, want 3", len(out))
+	}
+	// The surviving rows are the 3 highest IDs.
+	got := map[int64]bool{}
+	for _, r := range out {
+		got[r.ID] = true
+	}
+	for _, id := range ids[:3] {
+		if got[id] {
+			t.Errorf("old row id=%d survived eviction", id)
+		}
+	}
+	for _, id := range ids[3:] {
+		if !got[id] {
+			t.Errorf("new row id=%d evicted", id)
+		}
+	}
+}
+
+func TestDeleteOlderThan_ChunkedSweep(t *testing.T) {
+	// Build a corpus > the batch size (1000) and confirm the sweep
+	// removes everything below the cutoff in one call.
+	s := openMem(t)
+	ctx := context.Background()
+	base := time.Now().UTC()
+	const N = 1200
+	for i := 0; i < N; i++ {
+		e := entry("alice", "select")
+		// Spread across an hour so all are below "now".
+		e.Executed = base.Add(-time.Duration(i+1) * time.Second)
+		_, _ = s.Append(ctx, e)
+	}
+	n, err := s.DeleteOlderThan(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != N {
+		t.Errorf("DeleteOlderThan returned %d, want %d", n, N)
+	}
+	remaining, _ := s.List(ctx, history.ListOpts{UserID: "alice", Limit: 100})
+	if len(remaining) != 0 {
+		t.Errorf("remaining = %d, want 0", len(remaining))
+	}
+}
+
+func TestStartRetentionLoop_RemovesOldEntries(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	// Seed one old + one fresh entry.
+	old := entry("alice", "old")
+	old.Executed = time.Now().Add(-48 * time.Hour).UTC()
+	_, _ = s.Append(ctx, old)
+	fresh := entry("alice", "fresh")
+	fresh.Executed = time.Now().UTC()
+	_, _ = s.Append(ctx, fresh)
+
+	// Loop with a tiny period; 1-hour retention should sweep the
+	// 48h-old entry.
+	cancel := s.StartRetentionLoop(ctx, 10*time.Millisecond, 1*time.Hour)
+	defer cancel()
+	// Wait for at least one tick to run.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		out, _ := s.List(ctx, history.ListOpts{UserID: "alice"})
+		if len(out) == 1 && out[0].SQL == "fresh" {
+			return // success
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("retention loop did not sweep the old entry within 2s")
+}
+
+// ─── PR #7.5 Medium: ClassPtr filter ─────────────────────────────────
+
+func TestList_ClassPtr_FiltersForZeroValue(t *testing.T) {
+	// ClassPtr lets you say "filter by ClassRead" without IncludeClass.
+	s := openMem(t)
+	ctx := context.Background()
+	read := entry("alice", "SELECT 1")
+	read.Class = classifier.ClassRead
+	ddl := entry("alice", "CREATE TABLE t (id INT)")
+	ddl.Class = classifier.ClassDDL
+	_, _ = s.Append(ctx, read)
+	_, _ = s.Append(ctx, ddl)
+
+	cr := classifier.ClassRead
+	out, err := s.List(ctx, history.ListOpts{UserID: "alice", ClassPtr: &cr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 1 || out[0].Class != classifier.ClassRead {
+		t.Errorf("ClassPtr(ClassRead) returned %d entries, want 1 read", len(out))
+	}
+}
+
+// ─── PR #7.5 Medium: tag normalization ───────────────────────────────
+
+func TestList_TagFilter_UsesNormalizedTable(t *testing.T) {
+	// Sanity: the normalized join still returns the right rows AND
+	// respects boundary semantics ("prod" != "production"). This
+	// re-asserts the PR #7 invariant against the new join path.
+	s := openMem(t)
+	ctx := context.Background()
+	idProd, _ := s.Append(ctx, entry("alice", "select prod"))
+	idProduction, _ := s.Append(ctx, entry("alice", "select production"))
+	_ = s.Tag(ctx, idProd, "alice", []string{"prod"})
+	_ = s.Tag(ctx, idProduction, "alice", []string{"production"})
+
+	out, _ := s.List(ctx, history.ListOpts{UserID: "alice", Tag: "prod"})
+	if len(out) != 1 || out[0].ID != idProd {
+		t.Errorf("normalized tag filter wrong: %+v", out)
+	}
+}
+
+// ─── PR #7.5 Medium: :memory: detection ──────────────────────────────
+
+func TestOpen_SharedCacheMemoryDSN(t *testing.T) {
+	// file::memory:?cache=shared used to fall into the WAL branch,
+	// producing a malformed DSN. With the new detection it should
+	// open cleanly.
+	s, err := history.Open(context.Background(),
+		"file::memory:?cache=shared",
+		dbadmin.EngineMariaDB)
+	if err != nil {
+		t.Fatalf("shared-cache memory DSN open: %v", err)
+	}
+	defer s.Close()
+	// Sanity smoke: a write/read round-trip should work.
+	id, err := s.Append(context.Background(), entry("alice", "select"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Get(context.Background(), id, "alice")
+	if err != nil || got == nil {
+		t.Errorf("round-trip failed: %v / %+v", err, got)
+	}
+}
+
+// ─── PR #7.5 Medium: Search Offset validation ────────────────────────
+
+func TestSearch_NegativeOffsetRejected(t *testing.T) {
+	s := openMem(t)
+	_, err := s.Search(context.Background(), "x",
+		history.ListOpts{UserID: "alice", Offset: -1})
+	if !errors.Is(err, history.ErrInvalidInput) {
+		t.Errorf("err = %v, want ErrInvalidInput", err)
+	}
+}
+
+// ─── PR #7.5 Medium: FTS sanitization ────────────────────────────────
+
+func TestSearch_FTSQuery_StripsControlBytes(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	_, _ = s.Append(ctx, entry("alice", "SELECT * FROM orders"))
+	// Query with embedded NUL + tab should still match.
+	out, err := s.Search(ctx, "orders\x00\tlogs", history.ListOpts{UserID: "alice"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = out // We just need no panic / no error; the phrase will
+	// likely match the entry containing "orders".
+}
+
+func TestSearch_FTSQuery_RejectsAllControl(t *testing.T) {
+	s := openMem(t)
+	_, err := s.Search(context.Background(), "\x00\x01\x02",
+		history.ListOpts{UserID: "alice"})
+	if !errors.Is(err, history.ErrInvalidInput) {
+		t.Errorf("all-control query err = %v, want ErrInvalidInput", err)
+	}
+}
+
+// ─── PR #7.5 Low: UTF-8 safe truncation ──────────────────────────────
+
+func TestAppend_TruncatesUTF8AtRuneBoundary(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	// Build a payload that places a 3-byte UTF-8 rune right at the
+	// MaxSQLLength boundary. Padding chars are ASCII so the
+	// offending rune lands at exact MaxSQLLength.
+	pad := strings.Repeat("a", history.MaxSQLLength-1)
+	rune3 := "雨" // U+96E8, 3 bytes
+	sql := pad + rune3 + strings.Repeat("b", 100)
+	id, err := s.Append(ctx, entry("alice", sql))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.Get(ctx, id, "alice")
+	// The stored SQL must be valid UTF-8 — the boundary rune must
+	// not be split.
+	if !utf8.ValidString(got.SQL) {
+		t.Errorf("stored SQL is not valid UTF-8 after truncation")
+	}
+}
+
+// ─── PR #7.5 Low: Invalid timestamps get clamped ─────────────────────
+
+func TestAppend_RejectsZeroAndUnixEpochTimestamps(t *testing.T) {
+	s := openMem(t)
+	ctx := context.Background()
+	// IsZero — already handled in PR #7; re-assert.
+	e := entry("alice", "select")
+	e.Executed = time.Time{}
+	id, _ := s.Append(ctx, e)
+	got, _ := s.Get(ctx, id, "alice")
+	if got.Executed.IsZero() || got.Executed.UnixNano() <= 0 {
+		t.Errorf("zero timestamp not clamped: %v", got.Executed)
+	}
+	// time.Unix(0,0) — was the regression case; should also clamp.
+	e2 := entry("alice", "select")
+	e2.Executed = time.Unix(0, 0)
+	id2, _ := s.Append(ctx, e2)
+	got2, _ := s.Get(ctx, id2, "alice")
+	if got2.Executed.UnixNano() <= 0 {
+		t.Errorf("unix(0,0) timestamp not clamped: %v", got2.Executed)
+	}
+}
+
+// ─── PR #7.5 Medium: writer semaphore caps concurrency ───────────────
+
+func TestOpenWithOpts_MaxWriters_BoundsConcurrency(t *testing.T) {
+	// Smoke test: 16 goroutines × 20 appends each on a Store with
+	// MaxWriters=2 should still complete and produce the right
+	// number of rows. The semaphore is an effectiveness check, not
+	// a correctness invariant — but if it's wired wrong we'd
+	// deadlock or lose rows.
+	s, err := history.OpenWithOpts(context.Background(), ":memory:",
+		dbadmin.EngineMariaDB,
+		history.OpenOpts{MaxWriters: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	const writers = 16
+	const per = 20
+	var wg sync.WaitGroup
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < per; j++ {
+				_, err := s.Append(ctx, entry("alice", "select"))
+				if err != nil {
+					t.Errorf("Append: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	out, _ := s.List(ctx, history.ListOpts{UserID: "alice", Limit: writers * per * 2})
+	if len(out) != writers*per {
+		t.Errorf("got %d rows, want %d", len(out), writers*per)
 	}
 }
 

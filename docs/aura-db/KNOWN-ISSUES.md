@@ -60,14 +60,18 @@ guarantees of that PR.
 
 ### Deferred — depends on PR #2.5 AST availability
 
-#### PR #7.5 redaction can now consume the AST
+#### PR #7.5 redaction can now consume the AST — [resolved via token sweep]
 
 KNOWN-ISSUES entry "classifier.RedactSensitiveInline misses non-
-standard credential forms" (originally targeted at PR #7.5) can now
-read CREATE USER / CREATE SUBSCRIPTION / etc. node types directly
-from the AST instead of regexing the token stream. PR #7.5 should
-take advantage; the AST surface is already exposed through the
-cascade's per-statement parse.
+standard credential forms" (originally targeted at PR #7.5) has been
+closed in PR #7.5 by extending the existing token-stream walker
+rather than wiring through the AST. Coverage now includes IDENTIFIED
+VIA … AS/USING, CONNECTION '<dsn>', dblink_connect[_u], COPY FROM
+PROGRAM, and a post-pass over every string literal for credentialed
+URI schemes (postgresql://, mysql://, mongodb://, …). The
+token-stream approach degrades gracefully under CGO_ENABLED=0 (no
+AST available); future enhancement to leverage the AST for stricter
+context-checking is a low-priority cleanup.
 
 #### Binary size budget
 
@@ -519,95 +523,105 @@ dead `errors.Is` import-keeper noise. The rest are deferred below.
 
 ### Deferred high findings — PR #7.5
 
-#### H4 — RedactSensitiveInline misses non-standard credential forms
+#### H4 — RedactSensitiveInline misses non-standard credential forms [resolved]
 
-`classifier.RedactSensitiveInline` only covers `CREATE/ALTER USER …
-IDENTIFIED BY '<pw>'` and `CREATE/ALTER ROLE … WITH PASSWORD '<pw>'`.
-It does not redact:
+Closed in PR #7.5. `classifier.RedactSensitiveInline` now covers:
 
-- MariaDB `IDENTIFIED VIA <plugin> AS '<hash>'`
-- Postgres `CREATE SUBSCRIPTION … CONNECTION 'postgresql://u:p@…'`
-- `dblink_connect('host=… user=… password=…')`
-- `postgresql://`, `mysql://`, `mongodb://` URIs in any DDL
-- `COPY FROM PROGRAM 'curl -u user:pw https://…'`
+- MariaDB `IDENTIFIED VIA <plugin> AS|USING '<hash>'`
+- Postgres `CREATE/ALTER SUBSCRIPTION … CONNECTION '<dsn>'`
+- `dblink_connect[_u]('host=… password=…')` — every string arg in
+  the call is redacted
+- `COPY … FROM/TO PROGRAM '<shell command>'`
+- Any string literal carrying a credentialed URI:
+  `postgresql://u:p@…`, `postgres://`, `mysql://`, `mariadb://`,
+  `mongodb://`, `mongodb+srv://`, `redis://`, `rediss://`. Bare
+  URIs without userinfo are preserved.
 
-Documented in `pkg/dbadmin/history/doc.go` so operators aren't
-surprised; the fix is a classifier upgrade in PR #7.5.
+Test coverage in `classifier_test.go` (TestRedactSensitiveInline
+new cases) and `history_test.go` (TestAppend_Redacts*). The fix is
+a token-stream walker extension, not an AST consumer — degrades
+under CGO_ENABLED=0 the same way the rest of the classifier does.
 
-#### H8 — LIKE fallback Search is silent O(n) scan
+#### H8 — LIKE fallback Search is silent O(n) scan [resolved]
 
-When the SQLite build lacks FTS5, Search degrades to LIKE without
-telling the caller. At 10⁵ entries the LIKE branch is full-table
-scan; at 10⁶ it stalls the UI. Fix in PR #7.5:
+Closed in PR #7.5:
 
-- `OpenOpts{RequireFTS5 bool}` that errors at Open time if FTS5
-  isn't available.
-- `Store.HasFTS() bool` so callers can warn in the UI when the
-  search is running degraded.
+- `history.OpenWithOpts(ctx, dsn, engine, OpenOpts{RequireFTS5: true})`
+  errors at Open time if FTS5 is unavailable.
+- `Store.HasFTS() bool` exposes the active code path; callers
+  surface this as a "search is in degraded mode" badge.
 
-#### H9 — No retention enforcement; storage grows unbounded
+Tests: TestOpenWithOpts_RequireFTS5_SucceedsWhenAvailable,
+TestHasFTS_ReportsFallback.
 
-The package exposes `DeleteOlderThan` but the engine layer doesn't
-call it on a schedule yet. A 90-day-old install can sit on millions
-of rows. Fix in PR #7.5:
+#### H9 — No retention enforcement; storage grows unbounded [resolved]
 
-- `MaxRows` ceiling enforced at Append time (oldest evicted).
-- `StartRetentionLoop(ctx, period, cutoff)` helper that the engine
-  wires into the panel's periodic-task scheduler.
-- Chunked `DeleteOlderThan` (1000-row batches) so a 365-day-overdue
-  sweep doesn't lock the DB for a multi-second window.
+Closed in PR #7.5:
 
-### Deferred medium findings — PR #7.5
+- `OpenOpts.MaxRows` ceiling enforced at Append time (oldest
+  evicted via id-IN subselect; CASCADE removes entry_tags rows).
+- `Store.StartRetentionLoop(ctx, period, retention)` launches a
+  background goroutine that calls `DeleteOlderThan` every period;
+  returns a cancel func for shutdown.
+- `DeleteOlderThan` now chunks in 1000-row batches and honors
+  ctx cancellation between batches.
 
-- Negative `opts.Offset` in `Search` not validated (`List` validates
-  but Search doesn't).
-- `:memory:` detection is string-equality only —
-  `file::memory:?cache=shared` falls into the WAL branch and
-  produces a malformed DSN.
-- FTS5 quote-wrap doesn't cap input length or strip control bytes.
-- `bm25` raw score on short SQL fragments is degenerate; no
-  deterministic tiebreaker beyond `executed DESC`.
-- `MaxOpenConns=4` + 5s `busy_timeout` can stall the panel UI for
-  the full 5s under contention.
-- FTS5 storage overhead (~1.8× the entries table) is undocumented
-  and there's no opt-out.
-- `ListOpts.IncludeClass` is a workaround for the zero-value
-  `Class` problem; switch to `Class *classifier.QueryClass`.
-- The `tags` column should be normalized to a separate `entry_tags`
-  table with `PRIMARY KEY(tag, entry_id)` to fix the unindexed
-  full-scan on Tag filter at scale.
-- bm25 weights + deterministic tiebreaker (currently `bm25 ASC,
-  executed DESC` — operators may expect explicit weighting).
-- Write semaphore to bound concurrent SQLite writers.
-- Prepared-statement cache for `Append` (current per-call `?`
-  binding doesn't reuse a `*sql.Stmt`).
-- Partial index for admin `OnlyStarred` listings (current index
-  only covers `(user_id, starred, executed DESC) WHERE starred=1`,
-  which isn't usable when admin views run without a user filter).
-- `initSchema` FTS block swallows trigger-creation errors alongside
-  missing-FTS5 errors — should split the probe from the trigger
-  install so the latter surfaces.
+Tests: TestOpenWithOpts_MaxRows_EvictsOldest,
+TestDeleteOlderThan_ChunkedSweep, TestStartRetentionLoop_RemovesOldEntries.
+
+### Deferred medium findings — PR #7.5 [resolved]
+
+All resolved in PR #7.5:
+
+- Negative `opts.Offset` in `Search` now validated (matches `List`).
+- `:memory:` detection recognizes `file::memory:?…` shared-cache
+  URIs and `file:…?mode=memory` form; DSN-pragma append uses `?`/`&`
+  separator selection so DSNs with pre-existing query strings don't
+  get corrupted.
+- FTS5 query input is length-capped at 4 KiB and ASCII control
+  bytes are stripped before phrase-wrapping.
+- bm25 ranking accepts per-column weights via `OpenOpts.FTSBM25Weights`;
+  ordering tiebreaker is `bm25 ASC, executed DESC, id DESC` so
+  identical scores no longer ping-pong across pages.
+- `OpenOpts.BusyTimeoutMS` / `MaxOpenConns` / `MaxWriters` make
+  panel-UI contention tunable instead of hard-coded.
+- FTS5 storage overhead (~1.8×) documented in `doc.go`.
+- `ListOpts.ClassPtr *classifier.QueryClass` replaces the
+  `IncludeClass` workaround; the old `Class` + `IncludeClass`
+  pair is retained for back-compat.
+- `entry_tags(tag, entry_id)` normalized table added; `List`/`Search`
+  Tag filters JOIN against it for O(log n) tag lookups. Serialized
+  tags column on `entries` retained for FTS5 indexing of tag tokens
+  and for forward compatibility.
+- Process-wide writer semaphore (`OpenOpts.MaxWriters`, default 8)
+  bounds concurrent Append/Star/Tag/Delete; configurable per Store.
+- Prepared statements cached at Open for Append + entry_tags
+  rewrites (`stmtAppend`, `stmtTagsClear`, `stmtTagsInsert`).
+- Admin-scoped partial index `idx_entries_starred_executed (starred,
+  executed DESC) WHERE starred=1` covers cross-user starred listings.
+- `initSchema` now runs the FTS5 CREATE VIRTUAL TABLE probe
+  separately from the trigger install — trigger errors surface
+  cleanly instead of being swallowed as "FTS5 not available."
 
 ### Deferred low + nit findings — PR #7.5
 
-- Concurrency TOCTOU between `closed.Load()` and `db.ExecContext`
-  in every op (acceptable today; the second call returns
-  `sql.ErrConnDone`, but cleaner to lock-and-check).
-- `MaxSQLLength` truncates at byte boundary; can split a UTF-8 rune.
-- `Append`'s `IsZero()` guard doesn't catch `time.Unix(0,0)` or
-  pre-1970 timestamps (caller-supplied junk passes through).
-- Partial starred index `(user_id, starred, executed) WHERE
-  starred=1` unusable for admin-mode listings that scan all users.
-- Append doesn't use a held `*sql.Stmt` — per-conn cache is cold
-  under bursty load.
-- `MaxSQLLength=256KiB` silently truncates 50-statement migrations
-  pasted whole.
-- `doc.go` Concurrency section doesn't mention that `:memory:`
-  databases pin to a single connection.
-- `DeleteOlderThan` returns only the count; an `IDs callback` for
-  audit parity with the panel's existing delete flows is a nit.
-- Error sentinel naming style consistency between `ErrNotFound`,
-  `ErrInvalidInput`, `ErrClosed` — fine as-is; nit (no-op).
+- `closed`/`Exec` TOCTOU — left as-is (the `sql.ErrConnDone` path
+  is benign; locking every op is gratuitous).
+- `MaxSQLLength` truncation now snaps to the previous rune boundary
+  via `truncateUTF8`. [resolved]
+- `Append`'s timestamp guard rejects `time.Time{}`, `time.Unix(0,0)`,
+  and any pre-1970 caller-supplied junk (clamps to `time.Now()`).
+  [resolved]
+- Admin starred index added (see medium block above). [resolved]
+- Append uses `*sql.Stmt` cache (`stmtAppend`). [resolved]
+- `MaxSQLLength=256KiB` still truncates 50-statement migration
+  pastes — kept; operators using bulk DDL should be running it
+  via a migration tool, not the SQL editor.
+- `doc.go` Concurrency section now calls out the in-memory
+  single-conn pinning. [resolved]
+- `DeleteOlderThan` IDs-callback — kept as a future nit; the engine
+  audit layer can subscribe to the count for now.
+- Error sentinel naming consistency — kept as-is (no-op).
 
 ---
 

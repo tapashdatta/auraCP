@@ -545,6 +545,42 @@ func TestRedactSensitiveInline(t *testing.T) {
 			`SELECT 1`,
 			`SELECT 1`,
 		},
+		// ─── PR #7.5 H4 extensions ───────────────────────────────
+		{
+			"MySQL IDENTIFIED VIA AS",
+			`CREATE USER 'bob'@'%' IDENTIFIED VIA ed25519 AS 'fakehash'`,
+			`CREATE USER 'bob'@'%' IDENTIFIED VIA ed25519 AS '[redacted]'`,
+		},
+		{
+			"MySQL IDENTIFIED VIA USING",
+			`ALTER USER bob IDENTIFIED VIA pam USING 'service'`,
+			`ALTER USER bob IDENTIFIED VIA pam USING '[redacted]'`,
+		},
+		{
+			"Postgres CREATE SUBSCRIPTION CONNECTION",
+			`CREATE SUBSCRIPTION sub CONNECTION 'host=h user=u password=p' PUBLICATION pub`,
+			`CREATE SUBSCRIPTION sub CONNECTION '[redacted]' PUBLICATION pub`,
+		},
+		{
+			"Postgres dblink_connect",
+			`SELECT dblink_connect('host=h user=u password=p')`,
+			`SELECT dblink_connect('[redacted]')`,
+		},
+		{
+			"Postgres COPY FROM PROGRAM",
+			`COPY t FROM PROGRAM 'curl -u u:p https://e/d'`,
+			`COPY t FROM PROGRAM '[redacted]'`,
+		},
+		{
+			"Postgres credentialed postgres:// URI",
+			`INSERT INTO opt VALUES ('postgresql://u:p@h/db')`,
+			`INSERT INTO opt VALUES ('[redacted]')`,
+		},
+		{
+			"Postgres bare postgres:// URI (no userinfo)",
+			`INSERT INTO opt VALUES ('postgresql://h/db')`,
+			`INSERT INTO opt VALUES ('postgresql://h/db')`,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

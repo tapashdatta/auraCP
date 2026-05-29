@@ -68,8 +68,18 @@ type ListOpts struct {
 	// Class, when non-zero, filters to a specific query class.
 	// Zero (ClassRead) is a valid filter too; callers use
 	// IncludeClass to disambiguate.
+	//
+	// Deprecated as of PR #7.5: prefer ClassPtr below — it lets you
+	// express "filter by ClassRead" without the IncludeClass dance.
+	// IncludeClass + Class are retained for backward compatibility
+	// with PR #7 callers; ClassPtr wins when both are set.
 	Class        classifier.QueryClass `json:"class"`
 	IncludeClass bool                  `json:"includeClass"`
+
+	// ClassPtr is the PR #7.5 replacement for Class + IncludeClass:
+	// nil = no filter, non-nil = filter by *ClassPtr. omitempty so
+	// the JSON wire stays clean when unused.
+	ClassPtr *classifier.QueryClass `json:"classFilter,omitempty"`
 
 	// Since / Until bound the Executed timestamp. Zero values mean
 	// "open-ended on that side."
@@ -125,8 +135,24 @@ type Store interface {
 	// DeleteOlderThan removes every entry whose Executed is strictly
 	// before the cutoff. Returns the count removed. Engine layer
 	// calls this from a periodic goroutine; admin-scoped so no
-	// userID arg.
+	// userID arg. PR #7.5: chunked in 1000-row batches so a 365-day-
+	// overdue sweep doesn't hold the writer lock for multi-second
+	// windows; honors ctx cancellation between batches.
 	DeleteOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
+
+	// StartRetentionLoop launches a background goroutine that calls
+	// DeleteOlderThan every `period` with cutoff = now-retention.
+	// Returns a cancel func; the engine layer is expected to call
+	// it during shutdown. PR #7.5 H9.
+	StartRetentionLoop(ctx context.Context, period, retention time.Duration) (cancel func())
+
+	// HasFTS reports whether the Store's Search uses FTS5 (true) or
+	// the LIKE fallback (false). The engine layer surfaces this to
+	// the UI as a "search is running in degraded mode" indicator;
+	// the OpenOpts.RequireFTS5 flag forces Open to fail when FTS5
+	// is unavailable for callers that can't tolerate the silent
+	// degradation. PR #7.5 H8.
+	HasFTS() bool
 
 	// Close releases any underlying resources (SQLite handle, etc.).
 	// Idempotent.
@@ -182,6 +208,11 @@ func clampLimit(n int) int {
 // redactSQL applies classifier-based redaction and length truncation
 // before persistence. Engine arg picks the dialect for redaction
 // (different placeholder shapes; CREATE USER syntax differs).
+//
+// PR #7.5 low: truncation now snaps to the previous rune boundary so
+// a multi-byte UTF-8 codepoint (a chinese identifier, an emoji, etc.)
+// at exactly the byte cap doesn't get split, which would yield an
+// invalid string the FTS5 tokenizer rejects.
 func redactSQL(sql string, engine dbadmin.EngineKind) string {
 	dialect := classifier.DialectMySQL
 	if engine == dbadmin.EnginePostgres {
@@ -189,7 +220,7 @@ func redactSQL(sql string, engine dbadmin.EngineKind) string {
 	}
 	out := classifier.RedactSensitiveInline(sql, dialect)
 	if len(out) > MaxSQLLength {
-		out = out[:MaxSQLLength] + "...[truncated]"
+		out = truncateUTF8(out, MaxSQLLength) + "...[truncated]"
 	}
 	return out
 }
