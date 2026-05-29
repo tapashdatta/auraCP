@@ -634,7 +634,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 12.5| Row grid hardening follow-up           | deferred |              |
 | 13  | SQL editor                             | ✓ done   | 74a8f8b      |
 | 13.5| SQL editor hardening follow-up         | deferred |              |
-| 14  | Inspector pane                         | pending  |              |
+| 14  | Inspector pane                         | ✓ done   | 3fd7761      |
+| 14.5| Inspector hardening follow-up          | deferred |              |
 | 15  | Command palette + history UI           | pending  |              |
 | 16  | Export                                 | pending  |              |
 | 17  | Adminer removal + cutover              | pending  |              |
