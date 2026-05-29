@@ -1287,6 +1287,136 @@ The remaining 37 findings are deferred below.
 
 ---
 
+## Source: PR #13 adversarial review (workflow run wf_c41a9c9d-a14)
+
+The 4-lens review of the SQL query editor (`web-aura-db/` SqlEditor +
+CodeMirror pane, classifier wiring, exec/cancel registry, streaming
+result pipeline, saved-query + history sidebars) produced 35 findings
+(2 critical, 8 high, 13 medium, 11 low, 1 nit). After dedupe + triage:
+10 must-fix items landed in PR #13 itself — EXEC-1 (cursorPos selection
+listener wired so Cmd+Enter actually executes the statement under the
+cursor, not the first statement), EXEC-2 (`execAll()` implemented and
+wired to Cmd+Shift+Enter so the headline "run all" keymap stops aliasing
+"run current"), EXEC-3 (rapid double-Execute now cancels in-flight tabs
+before issuing the new exec frame), EXEC-4 (FIFO tab eviction cancels
+in-flight executions and clears `sqlStream.handlers` so evicted tabs no
+longer leak WS handles + silently drop rows), EXEC-5 (`cancelCurrent`
+unsubscribes per-ref handlers so cancelled tabs cannot flip back to
+done/error on late frames), EXEC-6 (`<SqlEditor />` mounted under
+`{#key routeState.params.id}` so connection switch re-inits CM dialect,
+classifier engine, and schemaCache binding), EXEC-7 (row append mutates
+`tab.rows` in place + batched flush + virtualized ResultGrid adopted
+from PR #12), INT-2 (`schemaCache.invalidate()` called on DDL exec end
+so autocomplete stops serving stale schemas), SEC-1 (saved queries
+keyed on `(userID, connID)` with regression test before any persistent
+store lands), a11y-04 (result tablist now implements the WAI-ARIA tabs
+contract end-to-end: ArrowLeft/Right/Home/End, roving tabindex,
+aria-controls/aria-labelledby, panel role + Cmd+W scope guard),
+a11y-05 (ResultGrid mirrors TableScreen's `role=grid` /
+`aria-rowcount` / `aria-colcount` / `role=row` / `role=gridcell` so the
+extraction doesn't regress AT semantics), a11y-12 (SqlEditor lazy-loaded
+behind `routeState.name === 'query'` so the ~140 KB gz CodeMirror tax
+no longer hits the 11 non-editor routes; `bundleBudget.test.js` ceiling
+tightened with a separate `sqlEditor-*` chunk assertion). The remaining
+25 findings are deferred below.
+
+### Deferred medium findings — PR #13.5
+
+- **EXEC-8** — Mid-stream error clears rows-collected-so-far from view;
+  reason: inconsistent UX (rows shown on cancel, hidden on error) but
+  no data loss — rows remain in `activeTab.rows`. Pick one rule and
+  document. **Target:** PR #13.5.
+- **EXEC-9** — Save Query uses `window.prompt` — no description, no
+  duplicate handling; reason: functional save works, rough UX; tied to
+  SEC-1 / INT-5 (saved-query overhaul). Overlaps with a11y-10 (Modal
+  pattern reuse). **Target:** PR #13.5.
+- **EXEC-10** — Loading history/saved REPLACES current buffer without
+  dirty-check; reason: undo stack preserved via CM6 so recovery exists;
+  dirty-flag + confirm dialog is good polish but not blocking.
+  **Target:** PR #13.5.
+- **EXEC-11** — Errored executions don't refresh history; reason: audit
+  captures errors server-side, sidebar lags until next success — trivial
+  `finalize()` refactor. **Target:** PR #13.5.
+- **a11y-01** — CodeMirror editor has no `aria-label`; reason: important
+  SR polish but not blocking — one-line `EditorView.contentAttributes`
+  facet. **Target:** PR #13.5.
+- **a11y-02** — Execute button uses native `disabled` with no reason
+  exposed; reason: SR users cannot hear why button is disabled — needs
+  `Btn.svelte` refactor to support `aria-disabled` + tooltip pattern.
+  **Target:** PR #11.5 (converges with shared Btn pattern work).
+- **a11y-03** — Cancel button has no `aria-keyshortcuts`; Cmd+. is
+  undiscoverable; reason: discoverability polish — mirror Execute's
+  kbd hint. **Target:** PR #13.5.
+- **a11y-06** — `ErrorPanel` renders without `role=alert`; reason: SR
+  regression vs PR #11 toast standard, but visible error UI works for
+  sighted users — route through `pushToast()` bus. **Target:** PR #13.5.
+- **a11y-07** — Sidebar accordions don't collapse, no `aria-expanded`;
+  reason: static sections styled like accordions — design intent unmet
+  but no functional break. **Target:** PR #13.5.
+- **a11y-08** — Saved-query items have no keyboard-delete affordance;
+  reason: asymmetric save/delete UX; `deleteSaved` API exists but no UI
+  calls it. **Target:** PR #13.5 (with saved-query overhaul, SEC-1 /
+  INT-5).
+- **INT-3** — Bundle test ceiling gives only 15% headroom; ADR stale;
+  reason: process/docs hygiene — tighten ceiling and update ADR in a
+  docs PR. Not a functional blocker. **Target:** PR #13.5.
+- **INT-5** — Saved queries UI gives no signal storage is in-memory
+  only; reason: operators may lose work on daemon restart — add
+  "session-only" caption now or gate Save behind a flag; tied to the
+  saved-query overhaul (SEC-1). **Target:** PR #13.5.
+- **INT-6** — Format button has no preload-on-hover; reason: ~76 KB gz
+  fetched on first click, subsequent free — polish via `onmouseenter`
+  handler. **Target:** PR #13.5.
+
+### Deferred low findings — PR #13.5
+
+- **SEC-2** — `/sql/classify` accepts any authenticated user — audit-log
+  griefing surface; reason: bounded — canonical server-side re-classify
+  in `handleQuery` is the real gate; classifier fingerprint is
+  open-source. Only real risk is audit-log flooding by low-priv
+  sessions. Drop the audit event on the UX-only route. **Target:**
+  PR #13.5.
+- **EXEC-12** — Format cursor preservation is byte-offset, not semantic;
+  reason: polish; minor disorientation on large reformats. **Target:**
+  PR #13.5.
+- **EXEC-13** — Empty-doc Save silently no-ops; reason: trivial
+  papercut; one-line `statusMsg` fix. **Target:** PR #13.5.
+- **a11y-09** — Format button does not signal busy state via
+  `aria-busy`; reason: `Btn.svelte` loading spinner exists; `aria-busy`
+  is polish. **Target:** PR #11.5 (a11y polish pass).
+- **a11y-10** — Save flow uses `window.prompt` bypassing Modal pattern;
+  reason: overlaps with EXEC-9. **Target:** PR #13.5 (with saved-query
+  Modal overhaul).
+- **a11y-11** — Escape from result grid doesn't return focus to editor;
+  reason: polish — Shift-Tab works. **Target:** PR #11.5 (a11y polish
+  pass).
+- **a11y-13** — `ClassifierChip` FORBIDDEN vs DANGEROUS share red;
+  reason: semantic collision but labels differentiate — add lock glyph
+  in polish PR. **Target:** PR #11.5 (a11y palette pass).
+- **a11y-14** — Streaming progress `aria-live` region reused for
+  transient text; reason: polite region works for completion summaries;
+  splitting status vs error lives is polish; overlaps with a11y-06.
+  **Target:** PR #13.5.
+- **a11y-15** — IBM Plex Mono loads render-blocking from Google Fonts;
+  reason: FOUT on slow networks; trivial swap to `@fontsource`.
+  **Target:** PR #11.5 (converges with dc-13 / FONTS-NO-SRI-THIRD-PARTY).
+- **INT-7** — `@codemirror/search` included for invisible feature;
+  reason: ~12-15 KB for Ctrl+F panel not in keyboard help. Decide
+  keep+document or drop. **Target:** PR #13.5.
+- **INT-8** — Tab `klass` captured as `'unknown'` before classifier
+  debounce returns; reason: cosmetic per-tab label issue; server-side
+  class is correct on the wire — add `classifier.flush()` in polish PR.
+  **Target:** PR #13.5.
+
+### Deferred nit findings — PR #13.5
+
+- **SEC-3** — Comment-only statements submitted as exec frames; reason:
+  not a security issue — splitter correctly does not mis-emit DROP;
+  server-side classifier and driver handle no-op gracefully. UX
+  papercut: empty result tab opens for nothing. **Target:** PR #13.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

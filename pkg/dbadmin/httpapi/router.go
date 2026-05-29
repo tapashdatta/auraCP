@@ -74,6 +74,12 @@ func (s *server) routes() http.Handler {
 	mux.Handle("POST /connections/{id}/query", write(queryTimeout, handleQuery(s)))
 	mux.Handle("POST /connections/{id}/explain", write(queryTimeout, handleExplain(s)))
 
+	// Classifier preview (UX only; never a security boundary — the actual
+	// security re-classify happens inside handleQuery before dispatch).
+	classifyTimeout := 10 * time.Second
+	mux.Handle("POST /sql/classify", write(classifyTimeout, handleClassify(s)))
+	mux.Handle("POST /connections/{id}/classify", write(classifyTimeout, handleClassifyForConnection(s)))
+
 	// WS stream — own timeout management.
 	mux.Handle("GET /sql/stream", chain(handleSQLStream(s),
 		shutdownGate(s),

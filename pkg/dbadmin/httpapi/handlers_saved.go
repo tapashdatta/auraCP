@@ -12,40 +12,68 @@ import (
 // savedQueriesStore is a minimal in-memory store for saved queries. The
 // project's plan defers persistent saved-query storage to a later PR;
 // this package wires the HTTP shape today.
+//
+// SEC-1: entries are keyed by (connID, ownerID) so a different operator
+// cannot list or delete another operator's saved queries. The compound
+// key avoids cross-user disclosure within a shared connection while
+// preserving the per-connection scoping the UI expects.
+type savedRecord struct {
+	dto     savedQueryDTO
+	ownerID string
+}
+
 type savedQueriesStore struct {
 	mu      sync.RWMutex
-	queries map[string][]savedQueryDTO // keyed by connection id
+	queries map[string][]savedRecord // keyed by connection id
 }
 
 func newSavedQueriesStore() *savedQueriesStore {
-	return &savedQueriesStore{queries: map[string][]savedQueryDTO{}}
+	return &savedQueriesStore{queries: map[string][]savedRecord{}}
 }
 
-func (s *savedQueriesStore) list(conn string) []savedQueryDTO {
+func (s *savedQueriesStore) listForUser(conn, ownerID string) []savedQueryDTO {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]savedQueryDTO, len(s.queries[conn]))
-	copy(out, s.queries[conn])
+	out := make([]savedQueryDTO, 0, len(s.queries[conn]))
+	for _, rec := range s.queries[conn] {
+		if rec.ownerID == ownerID {
+			out = append(out, rec.dto)
+		}
+	}
 	return out
 }
 
-func (s *savedQueriesStore) create(conn string, q savedQueryDTO) {
+func (s *savedQueriesStore) create(conn, ownerID string, q savedQueryDTO) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queries[conn] = append(s.queries[conn], q)
+	s.queries[conn] = append(s.queries[conn], savedRecord{dto: q, ownerID: ownerID})
 }
 
-func (s *savedQueriesStore) delete(conn, id string) bool {
+// deleteForUser removes a query iff it exists AND belongs to ownerID.
+// Returns:
+//
+//	(true,  true)  — found and owned, deleted
+//	(true,  false) — found but owned by another user (caller should 404)
+//	(false, false) — not present at all
+//
+// The handler folds both not-found cases into a single 404 response so
+// the existence of another user's row is not disclosed.
+func (s *savedQueriesStore) deleteForUser(conn, ownerID, id string) (found, owned bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	list := s.queries[conn]
-	for i, q := range list {
-		if q.ID == id {
-			s.queries[conn] = append(list[:i], list[i+1:]...)
-			return true
+	for i, rec := range list {
+		if rec.dto.ID != id {
+			continue
 		}
+		found = true
+		if rec.ownerID != ownerID {
+			return true, false
+		}
+		s.queries[conn] = append(list[:i], list[i+1:]...)
+		return true, true
 	}
-	return false
+	return false, false
 }
 
 func handleListSaved(s *server) http.HandlerFunc {
@@ -57,7 +85,7 @@ func handleListSaved(s *server) http.HandlerFunc {
 			writeMappedErr(w, r, err)
 			return
 		}
-		out := s.saved.list(string(connID))
+		out := s.saved.listForUser(string(connID), user.ID)
 		if out == nil {
 			out = []savedQueryDTO{}
 		}
@@ -107,7 +135,7 @@ func handleCreateSaved(s *server) http.HandlerFunc {
 		if dto.Tags == nil {
 			dto.Tags = []string{}
 		}
-		s.saved.create(string(connID), dto)
+		s.saved.create(string(connID), user.ID, dto)
 		writeJSON(w, http.StatusCreated, dto)
 	}
 }
@@ -122,7 +150,10 @@ func handleDeleteSaved(s *server) http.HandlerFunc {
 			writeMappedErr(w, r, err)
 			return
 		}
-		if !s.saved.delete(string(connID), sid) {
+		found, owned := s.saved.deleteForUser(string(connID), user.ID, sid)
+		// SEC-1: collapse not-found and not-owned into a single 404 so
+		// the existence of another user's saved query cannot be probed.
+		if !found || !owned {
 			writeError(w, r, http.StatusNotFound, CodeNotFound, "saved query not found")
 			return
 		}

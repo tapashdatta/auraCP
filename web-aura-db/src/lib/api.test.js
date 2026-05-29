@@ -108,6 +108,47 @@ describe('AuraDBClient FIX-4 path traversal containment', () => {
     expect(capturedUrl).toBe('/api/dbadmin/connections/c1/schemas/pub%2Flic/tables/my%20table')
   })
 
+  it('classifySql posts to the connection-scoped path when connId given', async () => {
+    let capturedUrl, captured
+    globalThis.fetch = vi.fn(async (url, init) => {
+      capturedUrl = url; captured = init
+      return new Response(JSON.stringify({ class: 'read', statements: [], forbidden: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const c = new AuraDBClient()
+    const r = await c.classifySql('c1', 'SELECT 1')
+    expect(capturedUrl).toBe('/api/dbadmin/connections/c1/classify')
+    expect(JSON.parse(captured.body)).toEqual({ statement: 'SELECT 1' })
+    expect(r.class).toBe('read')
+  })
+
+  it('classifySql posts to /sql/classify when connId is null', async () => {
+    let capturedUrl, captured
+    globalThis.fetch = vi.fn(async (url, init) => {
+      capturedUrl = url; captured = init
+      return new Response(JSON.stringify({ class: 'read', statements: [], forbidden: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const c = new AuraDBClient()
+    await c.classifySql(null, 'SELECT 1', 'postgres')
+    expect(capturedUrl).toBe('/api/dbadmin/sql/classify')
+    expect(JSON.parse(captured.body)).toEqual({ statement: 'SELECT 1', engine: 'postgres' })
+  })
+
+  it('searchHistory / updateHistory / deleteHistory hit connection-scoped paths', async () => {
+    /** @type {string[]} */
+    const urls = []
+    globalThis.fetch = vi.fn(async (url) => {
+      urls.push(String(url))
+      return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const c = new AuraDBClient()
+    await c.searchHistory('c1', { q: 'foo' })
+    await c.updateHistory('c1', '42', { starred: true })
+    await c.deleteHistory('c1', '42')
+    expect(urls[0]).toBe('/api/dbadmin/connections/c1/history/search?q=foo')
+    expect(urls[1]).toBe('/api/dbadmin/connections/c1/history/42')
+    expect(urls[2]).toBe('/api/dbadmin/connections/c1/history/42')
+  })
+
   it('URL-encodes deleteSaved() sid', async () => {
     let capturedUrl
     globalThis.fetch = vi.fn(async (url) => {

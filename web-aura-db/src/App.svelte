@@ -15,10 +15,30 @@
   import SchemaBrowser from './screens/SchemaBrowser.svelte'
   import TableDetail from './screens/TableDetail.svelte'
   import RowGrid from './screens/RowGrid.svelte'
-  import SqlEditor from './screens/SqlEditor.svelte'
+  // a11y-12 / bundle: SqlEditor pulls CodeMirror (~140 KB gz). Lazy-
+  // load it so non-/query routes never pay that tax. Vite splits the
+  // import into its own chunk; loaded on demand when the user navigates
+  // to /connections/:id/query.
   import HistoryView from './screens/HistoryView.svelte'
   import AuditView from './screens/AuditView.svelte'
   import AccountScreen from './screens/AccountScreen.svelte'
+
+  /** @type {any} */
+  let SqlEditorComp = $state(null)
+  let sqlEditorLoading = $state(false)
+  async function ensureSqlEditor() {
+    if (SqlEditorComp || sqlEditorLoading) return
+    sqlEditorLoading = true
+    try {
+      const mod = await import('./screens/SqlEditor.svelte')
+      SqlEditorComp = mod.default
+    } finally {
+      sqlEditorLoading = false
+    }
+  }
+  $effect(() => {
+    if (routeState.name === 'query') ensureSqlEditor()
+  })
 
   onMount(() => {
     if (!session.hasCookie) {
@@ -49,7 +69,11 @@
     {:else if routeState.name === 'rows'}
       <RowGrid />
     {:else if routeState.name === 'query'}
-      <SqlEditor />
+      {#if SqlEditorComp}
+        <SqlEditorComp />
+      {:else}
+        <div style="padding:24px;color:var(--text-mute,#888)">Loading SQL editor…</div>
+      {/if}
     {:else if routeState.name === 'history'}
       <HistoryView />
     {:else if routeState.name === 'audit'}

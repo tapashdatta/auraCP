@@ -149,19 +149,44 @@ export class AuraDBClient {
 
   // Queries (PR #13)
   /** @param {string} id @param {string} sql @param {unknown[]} [params] */
-  runQuery(id, sql, params)      { return request(`/connections/${enc(id)}/query`, { method: 'POST', body: { sql, params } }) }
+  runQuery(id, sql, params)      { return request(`/connections/${enc(id)}/query`, { method: 'POST', body: { statement: sql, parameters: params } }) }
   /** @param {string} id @param {string} sql */
-  explain(id, sql)               { return request(`/connections/${enc(id)}/explain`, { method: 'POST', body: { sql } }) }
+  explain(id, sql)               { return request(`/connections/${enc(id)}/explain`, { method: 'POST', body: { statement: sql } }) }
+  /**
+   * Server-side classifier preview (UX only — NEVER a security boundary,
+   * the actual security re-classify happens inside handleQuery before
+   * dispatch). Pass connId when you have one — the connection's engine is
+   * used; else pass an explicit engine for the connection-less form.
+   * @param {string|null} connId @param {string} sql @param {'mariadb'|'postgres'} [engine]
+   */
+  classifySql(connId, sql, engine) {
+    if (connId) {
+      return request(`/connections/${enc(connId)}/classify`, { method: 'POST', body: { statement: sql } })
+    }
+    return request('/sql/classify', { method: 'POST', body: { statement: sql, engine } })
+  }
 
   // History / saved
   /** @param {string} id */
   connHistory(id)                { return request(`/connections/${enc(id)}/history`) }
-  /** @param {Record<string,string>} q */
-  searchHistory(q)               { return request(`/history/search?${new URLSearchParams(q).toString()}`) }
-  /** @param {string} eid @param {object} patch */
-  updateHistory(eid, patch)      { return request(`/history/${enc(eid)}`, { method: 'PATCH', body: patch }) }
-  /** @param {string} eid */
-  deleteHistory(eid)             { return request(`/history/${enc(eid)}`, { method: 'DELETE' }) }
+  /**
+   * WIRE-13: history search is per-connection on the server, so the
+   * client method takes a connection id and passes it in the URL path.
+   * @param {string} id @param {Record<string,string>} q
+   */
+  searchHistory(id, q)           { return request(`/connections/${enc(id)}/history/search?${new URLSearchParams(q).toString()}`) }
+  /**
+   * WIRE-13: patch is connection-scoped on the server. Callers MUST
+   * pass connId.
+   * @param {string} id @param {string} eid @param {object} patch
+   */
+  updateHistory(id, eid, patch)  { return request(`/connections/${enc(id)}/history/${enc(eid)}`, { method: 'PATCH', body: patch }) }
+  /**
+   * WIRE-13: delete is connection-scoped on the server. Callers MUST
+   * pass connId.
+   * @param {string} id @param {string} eid
+   */
+  deleteHistory(id, eid)         { return request(`/connections/${enc(id)}/history/${enc(eid)}`, { method: 'DELETE' }) }
   /** @param {string} id */
   listSaved(id)                  { return request(`/connections/${enc(id)}/saved-queries`) }
   /** @param {string} id @param {object} body */

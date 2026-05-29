@@ -79,6 +79,14 @@ type savedQueryInput struct {
 	Tags      []string `json:"tags,omitempty"`
 }
 
+// classifyRequest drives /sql/classify and /connections/{id}/classify.
+// Engine is required on the bare /sql/classify path; on the connection
+// path it is ignored and the connection record's engine is used instead.
+type classifyRequest struct {
+	Engine    string `json:"engine,omitempty"`
+	Statement string `json:"statement"`
+}
+
 type exportRequest struct {
 	Statement string `json:"statement"`
 	Format    string `json:"format"`
@@ -300,6 +308,31 @@ type searchHistoryResponse struct {
 type searchResultDTO struct {
 	historyEntryDTO
 	Score float64 `json:"score"`
+}
+
+// classifyResponse is the wire form of classifier.ParsedQuery. The
+// editor uses Class to drive the toolbar chip and Statements[i].Class
+// for per-statement cursor preview; Forbidden drives lint diagnostics.
+type classifyResponse struct {
+	Class      string                   `json:"class"`
+	Statements []classifiedStatementDTO `json:"statements"`
+	Forbidden  []forbiddenMatchDTO      `json:"forbidden"`
+}
+
+type classifiedStatementDTO struct {
+	Class    string `json:"class"`
+	Kind     string `json:"kind"`
+	Action   string `json:"action"`
+	HasWhere bool   `json:"hasWhere"`
+	Offset   int    `json:"offset"`
+	RawText  string `json:"rawText"`
+}
+
+type forbiddenMatchDTO struct {
+	Pattern        string `json:"pattern"`
+	Reason         string `json:"reason"`
+	StatementIndex int    `json:"statementIndex"`
+	TokenOffset    int    `json:"tokenOffset"`
 }
 
 type savedQueryDTO struct {

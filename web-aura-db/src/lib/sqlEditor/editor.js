@@ -1,0 +1,141 @@
+// CodeMirror 6 factory. Composes the minimum extension set the SQL
+// editor needs:
+//
+//   - sql() language (engine-aware dialect + autocomplete schema seed)
+//   - line numbers, bracket matching, fold gutter
+//   - history, search, custom keymap (Cmd+Enter, Cmd+. etc.)
+//   - autocompletion bound to the project's schema-cache backed provider
+//   - a lightweight "oxidized-copper" theme that respects panel tokens
+//
+// Bundle note: CodeMirror is imported statically from this file because
+// the editor is the first paint on /query — lazy-loading would force a
+// spinner on every editor entry. The sql-formatter is the only thing
+// that splits into its own chunk.
+
+import { EditorState } from '@codemirror/state'
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view'
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { bracketMatching, foldGutter, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
+import { closeBrackets, closeBracketsKeymap, autocompletion, completionKeymap } from '@codemirror/autocomplete'
+import { searchKeymap, highlightSelectionMatches } from '@codemirror/search'
+import { sql, PostgreSQL, MySQL } from '@codemirror/lang-sql'
+import { lintKeymap } from '@codemirror/lint'
+
+import { theme } from './theme.js'
+import { makeCompletions } from './completions.js'
+
+/**
+ * @param {object} opts
+ * @param {HTMLElement} opts.parent
+ * @param {string} [opts.doc]
+ * @param {'mariadb'|'postgres'} opts.engine
+ * @param {string} opts.connId
+ * @param {(doc:string)=>void} [opts.onChange]
+ * @param {(pos:number)=>void} [opts.onCursor]            cursor / selection moved
+ * @param {(view:EditorView, pos:number)=>void} [opts.onExecute]       Cmd+Enter
+ * @param {(view:EditorView)=>void} [opts.onExecuteAll]    Cmd+Shift+Enter
+ * @param {(view:EditorView)=>void} [opts.onCancel]        Cmd+.
+ * @param {(view:EditorView)=>void} [opts.onFormat]        Cmd+Shift+F
+ * @param {(view:EditorView)=>void} [opts.onSave]          Cmd+S
+ * @returns {EditorView}
+ */
+export function createEditorView(opts) {
+  const dialect = opts.engine === 'postgres' ? PostgreSQL : MySQL
+  const completions = makeCompletions({
+    connId: opts.connId,
+    engine: opts.engine,
+    getSql: () => view.state.doc.toString(),
+    getCursor: () => view.state.selection.main.head,
+  })
+
+  const customKeymap = [
+    {
+      key: 'Mod-Enter',
+      preventDefault: true,
+      run: (v) => {
+        // EXEC-1: pass the current cursor head so the caller does NOT
+        // rely on a stale prop. CM6 passes the view to keymap runners.
+        const head = (v?.state?.selection?.main?.head) ?? view.state.selection.main.head
+        opts.onExecute?.(v || view, head)
+        return true
+      },
+    },
+    {
+      key: 'Mod-Shift-Enter',
+      preventDefault: true,
+      run: (v) => { opts.onExecuteAll?.(v || view); return true },
+    },
+    {
+      key: 'Mod-.',
+      preventDefault: true,
+      run: (v) => { opts.onCancel?.(v || view); return true },
+    },
+    {
+      key: 'Mod-Shift-f',
+      preventDefault: true,
+      run: (v) => { opts.onFormat?.(v || view); return true },
+    },
+    {
+      key: 'Mod-s',
+      preventDefault: true,
+      run: (v) => { opts.onSave?.(v || view); return true },
+    },
+  ]
+
+  const extensions = [
+    lineNumbers(),
+    highlightActiveLine(),
+    highlightActiveLineGutter(),
+    foldGutter(),
+    history(),
+    bracketMatching(),
+    closeBrackets(),
+    indentOnInput(),
+    highlightSelectionMatches(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    autocompletion({ override: [completions], activateOnTyping: true }),
+    sql({ dialect, upperCaseKeywords: true }),
+    EditorView.lineWrapping,
+    theme,
+    keymap.of([
+      ...customKeymap,
+      ...closeBracketsKeymap,
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...searchKeymap,
+      ...completionKeymap,
+      ...lintKeymap,
+      indentWithTab,
+    ]),
+    EditorView.updateListener.of((u) => {
+      if (u.docChanged) opts.onChange?.(u.state.doc.toString())
+      // EXEC-1: emit cursor on selection or doc change so the screen can
+      // resolve the statement under the caret accurately.
+      if (u.selectionSet || u.docChanged) {
+        opts.onCursor?.(u.state.selection.main.head)
+      }
+    }),
+  ]
+
+  const state = EditorState.create({
+    doc: opts.doc ?? '',
+    extensions,
+  })
+
+  const view = new EditorView({ state, parent: opts.parent })
+  return view
+}
+
+/**
+ * Replace the doc atomically via a CM6 transaction (preserves the undo
+ * stack better than re-creating the state).
+ *
+ * @param {EditorView} view
+ * @param {string} next
+ */
+export function replaceDoc(view, next) {
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: next },
+    selection: { anchor: Math.min(next.length, view.state.selection.main.head) },
+  })
+}

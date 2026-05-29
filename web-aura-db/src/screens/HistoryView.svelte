@@ -7,16 +7,26 @@
   import LoadingPane from '../lib/components/LoadingPane.svelte'
   import CodePreview from '../lib/components/CodePreview.svelte'
 
+  import { connections } from '../lib/connections.svelte.js'
+
   let query = $state('')
   let loading = $state(false)
   /** @type {any[]} */
   let results = $state([])
 
+  function activeConn() {
+    return connections.selectedId || connections.list?.[0]?.id || null
+  }
+
   async function run() {
     loading = true
+    const id = activeConn()
+    if (!id) { results = []; loading = false; return }
     try {
-      const r = await api.searchHistory({ q: query })
-      results = Array.isArray(r) ? r : (r?.items || [])
+      // WIRE-13: history search is per-connection on the server.
+      const r = await api.searchHistory(id, { q: query })
+      const list = Array.isArray(r) ? r : (r?.results || r?.items || [])
+      results = list
     } catch { results = [] }
     finally { loading = false }
   }
