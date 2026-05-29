@@ -5,9 +5,23 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/auracp/auracp/pkg/dbadmin/standalone"
 )
+
+// isNoKEKErr returns true when err wraps an os.PathError stemming from
+// a missing KEK file, regardless of whether LoadKEK wrapped it (OPS-01).
+func isNoKEKErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsNotExist(err) {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "no such file or directory") || strings.Contains(msg, "open KEK file")
+}
 
 func runKEKRotate(g globalFlags, args []string) error {
 	fs := newFlagSet("kek-rotate", os.Stderr)
@@ -55,6 +69,14 @@ func runKEKRotate(g globalFlags, args []string) error {
 
 	oldKEK, err := standalone.LoadKEK(cfg.KEK.File)
 	if err != nil {
+		// OPS-01: first-run users hitting `kek-rotate --generate` with no
+		// existing KEK file used to get a cryptic open() error; redirect
+		// them to `kek-init` which is the documented bootstrap path.
+		if os.IsNotExist(err) || isNoKEKErr(err) {
+			return userErr(fmt.Sprintf(
+				"no existing KEK file at %q — use `aura-db kek-init` to create the first key (kek-rotate replaces an EXISTING key while re-encrypting every credential)",
+				cfg.KEK.File))
+		}
 		return err
 	}
 
@@ -87,13 +109,13 @@ func runKEKRotate(g globalFlags, args []string) error {
 	}
 	defer store.Close()
 
-	connsN, mfaN, err := standalone.RotateKEK(ctx, store, oldKEK.Bytes(), &newRaw)
+	// RotateKEK now performs the atomic key-file swap itself (SEC-08).
+	connsN, mfaN, err := standalone.RotateKEK(ctx, store, oldKEK.Bytes(), &newRaw, *newKeyFile)
 	if err != nil {
-		// Re-encryption failed mid-flight; surface the error and
-		// leave the on-disk KEK alone so the caller can retry.
-		return err
-	}
-	if err := standalone.WriteKEKFile(*newKeyFile, newRaw); err != nil {
+		// Re-encryption failed mid-flight; surface the error so the
+		// caller can consult the runbook. (If the DB committed but the
+		// key file write failed, RotateKEK reports both facts in the
+		// error message.)
 		return err
 	}
 	// Zero the old key bytes in memory after a successful swap.

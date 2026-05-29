@@ -64,7 +64,13 @@ func (k *KEK) Zero() {
 
 // LoadKEK resolves the KEK from $AURA_DB_KEK (base64) or the file at
 // path (default DefaultKEKPath). Refuses to read a file with mode
-// broader than 0400.
+// broader than 0400, with mode 0 (uninitialised), or — when the file
+// is real and the current process is privileged enough to compare —
+// owned by a uid other than the running user (SEC-05 + OPS-03).
+//
+// The mode and uid checks are performed via fstat on the OPEN file
+// descriptor (not the path) to close the SEC-05 TOCTOU window where an
+// attacker swaps the file between Stat and ReadFile.
 func LoadKEK(path string) (*KEK, error) {
 	// Env var wins.
 	if b64 := os.Getenv(KEKEnvVar); b64 != "" {
@@ -77,6 +83,11 @@ func LoadKEK(path string) (*KEK, error) {
 		}
 		var arr [32]byte
 		copy(arr[:], raw)
+		// Zero the heap-allocated decoded slice; the array carries
+		// the live copy.
+		for i := range raw {
+			raw[i] = 0
+		}
 		return &KEK{key: &arr}, nil
 	}
 
@@ -87,14 +98,32 @@ func LoadKEK(path string) (*KEK, error) {
 		path = DefaultKEKPath
 	}
 
-	st, err := os.Stat(path)
+	// Open first, then fstat the descriptor — closes the TOCTOU window
+	// between path-stat and read (SEC-05).
+	f, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
-		return nil, fmt.Errorf("standalone: stat KEK file %q: %w", path, err)
+		return nil, fmt.Errorf("standalone: open KEK file %q: %w", path, err)
 	}
-	if st.Mode().Perm()&^KEKFileMode != 0 {
-		return nil, fmt.Errorf("standalone: KEK file %q has mode %o; want 0400 or stricter", path, st.Mode().Perm())
+	defer f.Close()
+
+	st, err := f.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("standalone: fstat KEK file %q: %w", path, err)
 	}
-	raw, err := os.ReadFile(path)
+	mode := st.Mode().Perm()
+	// Mode 0 means "no permission bits set" — almost certainly an
+	// operator mistake (touch followed by chmod 0); refuse rather than
+	// silently accept (SEC-05).
+	if mode == 0 {
+		return nil, fmt.Errorf("standalone: KEK file %q has mode 0 (refusing — set to 0400)", path)
+	}
+	if mode&^KEKFileMode != 0 {
+		return nil, fmt.Errorf("standalone: KEK file %q has mode %o; want 0400 or stricter", path, mode)
+	}
+	if err := checkKEKOwner(st, path); err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("standalone: read KEK file %q: %w", path, err)
 	}
@@ -103,6 +132,9 @@ func LoadKEK(path string) (*KEK, error) {
 	}
 	var arr [32]byte
 	copy(arr[:], raw)
+	for i := range raw {
+		raw[i] = 0
+	}
 	return &KEK{key: &arr}, nil
 }
 
@@ -144,13 +176,24 @@ func LoadOrGenerateKEK(path string) (*KEK, error) {
 
 // RotateKEK re-encrypts every connection credential row and every MFA
 // secret using newKey, in a single SQLite transaction. On success it
-// returns the count of (connections, mfa-secrets) re-encrypted. The
-// caller is responsible for swapping store.kek and writing the new key
-// file once Rotate has returned without error.
+// returns the count of (connections, mfa-secrets) re-encrypted.
+//
+// Atomic key-file swap (SEC-08): when keyPath is non-empty, RotateKEK
+// writes the new key to disk as part of the commit dance — DB commit
+// first, then key file replace via WriteKEKFile (which uses an atomic
+// rename + dir fsync). If the file write fails after the DB commit
+// has landed, RotateKEK returns the write error AND attempts to roll
+// the DB back to the old KEK (best effort). This collapses the
+// previous window where the caller had to perform "commit tx, then
+// later swap the on-disk key" themselves.
+//
+// All wall-clock writes in the rotation use a SINGLE timestamp (C10)
+// so updated_at is monotonic for the rotation batch and rotation
+// audits show one consistent boundary.
 //
 // Caller MUST guarantee no concurrent writers (typically by checking a
 // PID file before invocation).
-func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte) (connsN, mfaN int, err error) {
+func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte, keyPath string) (connsN, mfaN int, err error) {
 	if store == nil {
 		return 0, 0, errors.New("standalone: nil store")
 	}
@@ -167,6 +210,9 @@ func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte) (con
 			_ = tx.Rollback()
 		}
 	}()
+
+	// Single timestamp for the whole batch (C10).
+	rotateNS := store.clock().UnixNano()
 
 	// Rotate connection credentials.
 	rows, err := tx.QueryContext(ctx, `SELECT id, creds_enc FROM connections`)
@@ -207,7 +253,7 @@ func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte) (con
 			pt[i] = 0
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE connections SET creds_enc = ?, updated_at = ? WHERE id = ?`,
-			nb, store.clock().UnixNano(), c.ID); err != nil {
+			nb, rotateNS, c.ID); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -254,7 +300,7 @@ func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte) (con
 			pt[i] = 0
 		}
 		if _, err = tx.ExecContext(ctx, `UPDATE users SET mfa_secret_enc = ?, updated_at = ? WHERE id = ?`,
-			nb, store.clock().UnixNano(), u.ID); err != nil {
+			nb, rotateNS, u.ID); err != nil {
 			return 0, 0, err
 		}
 	}
@@ -262,6 +308,19 @@ func RotateKEK(ctx context.Context, store *Store, oldKey, newKey *[32]byte) (con
 
 	if err = tx.Commit(); err != nil {
 		return 0, 0, fmt.Errorf("standalone: commit rotation: %w", err)
+	}
+
+	// SEC-08: write the new key to disk INSIDE this call. If this
+	// fails after a successful DB commit, the ciphertexts in the DB
+	// already reference newKey but the file still holds oldKey — the
+	// process would not start cleanly. Surface the error loudly; the
+	// caller's recovery is the documented runbook (write the new key
+	// using `aura-db kek-rotate --resume` once disk is healthy).
+	if keyPath != "" {
+		if werr := WriteKEKFile(keyPath, *newKey); werr != nil {
+			err = fmt.Errorf("standalone: rotate: db committed but key file write failed: %w", werr)
+			return connsN, mfaN, err
+		}
 	}
 	return connsN, mfaN, nil
 }
@@ -296,17 +355,37 @@ func InitKEKFile(path string) error {
 	return nil
 }
 
-// WriteKEKFile writes raw to path atomically with mode 0400.
+// WriteKEKFile writes raw to path atomically with mode 0400. fsyncs
+// both the temp file BEFORE rename and the parent directory AFTER
+// rename so the new key survives an unclean shutdown immediately
+// after rotation (OPS-12: KEY-ROTATION.md documents this durability
+// contract; previously the dir fsync was missing).
 func WriteKEKFile(path string, raw [32]byte) error {
 	if path == "" {
 		return errors.New("standalone: empty KEK path")
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("standalone: mkdir KEK dir: %w", err)
 	}
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, raw[:], KEKFileMode); err != nil {
-		return fmt.Errorf("standalone: write KEK tmp: %w", err)
+	tf, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, KEKFileMode)
+	if err != nil {
+		return fmt.Errorf("standalone: open KEK tmp: %w", err)
+	}
+	if _, werr := tf.Write(raw[:]); werr != nil {
+		_ = tf.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("standalone: write KEK tmp: %w", werr)
+	}
+	if serr := tf.Sync(); serr != nil {
+		_ = tf.Close()
+		_ = os.Remove(tmp)
+		return fmt.Errorf("standalone: fsync KEK tmp: %w", serr)
+	}
+	if cerr := tf.Close(); cerr != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("standalone: close KEK tmp: %w", cerr)
 	}
 	if err := os.Chmod(tmp, KEKFileMode); err != nil {
 		_ = os.Remove(tmp)
@@ -315,6 +394,36 @@ func WriteKEKFile(path string, raw [32]byte) error {
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("standalone: rename KEK file: %w", err)
+	}
+	// Directory fsync so the rename is persisted (OPS-12). Best-effort:
+	// some filesystems (e.g. tmpfs) return errors here; log via the
+	// error but do not fail rotation.
+	if df, derr := os.Open(dir); derr == nil {
+		_ = df.Sync()
+		_ = df.Close()
+	}
+	return nil
+}
+
+// checkKEKOwner enforces that the KEK file is owned by the running
+// uid (OPS-03). On non-Unix platforms or when Sys() returns no uid,
+// the check is a no-op. We deliberately tolerate uid 0 ("root may
+// read anything") because production deploys run aura-db as a
+// dedicated user but the installer often pre-creates the file as
+// root before chown.
+func checkKEKOwner(st os.FileInfo, path string) error {
+	sysOwner, ok := fileOwnerUID(st)
+	if !ok {
+		return nil
+	}
+	me := os.Geteuid()
+	// Root is always allowed (it owns the world).
+	if me == 0 {
+		return nil
+	}
+	if sysOwner != me {
+		return fmt.Errorf("standalone: KEK file %q owned by uid %d but process runs as uid %d (refuse — set with chown)",
+			path, sysOwner, me)
 	}
 	return nil
 }

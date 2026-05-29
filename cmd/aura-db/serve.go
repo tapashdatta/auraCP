@@ -118,13 +118,20 @@ func runServe(g globalFlags, args []string) error {
 		}
 	}
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	if err := app.Engine.Shutdown(shutdownCtx); err != nil {
-		app.Logger.Warn("engine shutdown timed out", "err", err)
-	}
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	// C8: stop accepting new HTTP requests FIRST, then drain the
+	// engine's in-flight work. Sharing a 30s deadline across both is
+	// fine — the engine completes already-accepted requests; we use
+	// separate context-with-timeout so a wedged srv.Shutdown can't
+	// starve Engine.Shutdown of its drain budget.
+	httpCtx, cancelHTTP := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelHTTP()
+	if err := srv.Shutdown(httpCtx); err != nil {
 		app.Logger.Warn("http shutdown timed out", "err", err)
+	}
+	engCtx, cancelEng := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancelEng()
+	if err := app.Engine.Shutdown(engCtx); err != nil {
+		app.Logger.Warn("engine shutdown timed out", "err", err)
 	}
 	app.Logger.Info("aura-db shutdown complete")
 	return nil

@@ -94,7 +94,9 @@ func TestRotateKEK_ReEncryptsAll(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	connsN, mfaN, err := RotateKEK(ctx, store, &oldKey, &newKey)
+	// Pass empty keyPath — the test rotates the in-DB ciphertexts only
+	// (no on-disk key file involved).
+	connsN, mfaN, err := RotateKEK(ctx, store, &oldKey, &newKey, "")
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}

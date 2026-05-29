@@ -12,14 +12,38 @@ import (
 )
 
 // VerifyResult describes a chain verification outcome.
+//
+// OPS-11: the fields carry stable JSON tags so `aura-db audit verify
+// --json` can serialize the result for monitoring integrations. The
+// CLI Print helper below renders a human-readable summary so both
+// modes are first-class.
 type VerifyResult struct {
-	OK             bool
-	EventsScanned  int
-	HeadsScanned   int
-	BreakLine      int    // line number (1-based) of first mismatch; 0 if OK
-	BreakEventID   string // event_id where the break starts
-	ExpectedPrev   string // what the file claims for PrevEventHash
-	ComputedPrev   string // what we computed walking the file
+	OK            bool   `json:"ok"`
+	EventsScanned int    `json:"events_scanned"`
+	HeadsScanned  int    `json:"heads_scanned"`
+	BreakLine     int    `json:"break_line,omitempty"`     // line number (1-based) of first mismatch; 0 if OK
+	BreakEventID  string `json:"break_event_id,omitempty"` // event_id where the break starts
+	ExpectedPrev  string `json:"expected_prev,omitempty"`  // what the file claims for PrevEventHash
+	ComputedPrev  string `json:"computed_prev,omitempty"`  // what we computed walking the file
+}
+
+// MarshalJSON satisfies json.Marshaler so callers can emit results
+// directly without depending on Go's field-order behavior (OPS-11).
+func (r *VerifyResult) MarshalJSON() ([]byte, error) {
+	type alias VerifyResult
+	return json.Marshal((*alias)(r))
+}
+
+// HumanString returns a one-line summary for CLI use.
+func (r *VerifyResult) HumanString() string {
+	if r == nil {
+		return "audit verify: <nil>"
+	}
+	if r.OK {
+		return fmt.Sprintf("audit verify: OK — %d events, %d chain heads", r.EventsScanned, r.HeadsScanned)
+	}
+	return fmt.Sprintf("audit verify: BREAK at line %d (event_id=%s): expected_prev=%s computed_prev=%s",
+		r.BreakLine, r.BreakEventID, r.ExpectedPrev, r.ComputedPrev)
 }
 
 // VerifyAuditLog walks path line by line, recomputes the SHA-256 chain,

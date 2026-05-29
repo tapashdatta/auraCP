@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -151,13 +150,17 @@ func (a *Auth) VerifyStepUp(r *http.Request) (dbadmin.Action, time.Duration, err
 }
 
 // HasSteppedUp implements dbadmin.Auth.
+//
+// user-attrs-leak-token-hash: the full session-token hash is NOT in
+// User.Attrs any more; we look it up via the in-process index
+// populated by Authenticate.
 func (a *Auth) HasSteppedUp(u dbadmin.User, action dbadmin.Action) bool {
-	tokHex, ok := u.Attrs[SessionAttrTokenHashKey]
-	if !ok {
+	shortID, ok := u.Attrs["session_id"]
+	if !ok || shortID == "" {
 		return false
 	}
-	tokenHash, err := hex.DecodeString(tokHex)
-	if err != nil {
+	tokenHash, ok := a.lookupToken(shortID)
+	if !ok {
 		return false
 	}
 	row := a.store.DB.QueryRowContext(context.Background(),
@@ -170,6 +173,17 @@ func (a *Auth) HasSteppedUp(u dbadmin.User, action dbadmin.Action) bool {
 	return a.clock().UnixNano() < exp
 }
 
+// consumeRecoveryCode verifies a recovery code against the user's
+// unused entries.
+//
+// SEC-11 + C9: iterate through every unused code BEFORE settling on
+// the outcome so an observer cannot distinguish "first code matched"
+// from "last code matched" by timing. Once a match is found we
+// remember it but keep iterating; the actual UPDATE happens after the
+// loop. C9 reduces the race-loss UX surprise: if two concurrent
+// step-ups consume the same code, the loser now reports
+// ErrInvalidRecoveryCode (not a malformed-PHC error from the
+// half-aborted UPDATE).
 func (a *Auth) consumeRecoveryCode(ctx context.Context, userID, code string) error {
 	norm := NormalizeRecoveryCode(code)
 	rows, err := a.store.DB.QueryContext(ctx,
@@ -178,6 +192,7 @@ func (a *Auth) consumeRecoveryCode(ctx context.Context, userID, code string) err
 		return err
 	}
 	defer rows.Close()
+	var matchedHash string
 	for rows.Next() {
 		var enc string
 		if err := rows.Scan(&enc); err != nil {
@@ -185,26 +200,32 @@ func (a *Auth) consumeRecoveryCode(ctx context.Context, userID, code string) err
 		}
 		ok, _, verr := VerifyPassword(norm, enc, a.cfg.Password)
 		if verr != nil {
+			// Skip malformed rows but keep iterating so timing depends
+			// only on the count of unused rows, not on which row
+			// matched.
 			continue
 		}
-		if ok {
-			now := a.clock().UnixNano()
-			res, err := a.store.DB.ExecContext(ctx,
-				`UPDATE recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`,
-				now, userID, enc)
-			if err != nil {
-				return err
-			}
-			n, _ := res.RowsAffected()
-			if n == 0 {
-				// Lost the race against another concurrent use.
-				return ErrInvalidRecoveryCode
-			}
-			return nil
+		if ok && matchedHash == "" {
+			matchedHash = enc
 		}
 	}
 	if err := rows.Err(); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	return ErrInvalidRecoveryCode
+	if matchedHash == "" {
+		return ErrInvalidRecoveryCode
+	}
+	now := a.clock().UnixNano()
+	res, err := a.store.DB.ExecContext(ctx,
+		`UPDATE recovery_codes SET used_at = ? WHERE user_id = ? AND code_hash = ? AND used_at IS NULL`,
+		now, userID, matchedHash)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		// Lost the race against another concurrent consumer.
+		return ErrInvalidRecoveryCode
+	}
+	return nil
 }

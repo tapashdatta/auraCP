@@ -24,6 +24,11 @@ import (
 // of the very first event in a fresh audit log. See doc.go decision #4.
 const GenesisPrevHash = "0000000000000000000000000000000000000000000000000000000000000000"
 
+// auditFileMode is the strict on-disk mode for the audit log
+// (SEC-15: docs in SECURITY.md §6 spec 0600; previous code accepted
+// up to 0640 — tighten to match the documented invariant).
+const auditFileMode os.FileMode = 0o600
+
 // Rotation defaults (FIX-4 / INT-3). 100 MiB / 10 files matches the
 // installer's logrotate.d defaults for the panel's own audit table.
 const (
@@ -144,19 +149,19 @@ func (s *FileAuditSink) Start() error {
 	}
 
 	if st, err := os.Stat(s.Path); err == nil {
-		if st.Mode().Perm()&^0o640 != 0 {
+		if st.Mode().Perm()&^auditFileMode != 0 {
 			s.started.Store(false)
-			return fmt.Errorf("standalone: audit log %q mode %o broader than 0640", s.Path, st.Mode().Perm())
+			return fmt.Errorf("standalone: audit log %q mode %o broader than 0600", s.Path, st.Mode().Perm())
 		}
 	}
 
-	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, auditFileMode)
 	if err != nil {
 		s.started.Store(false)
 		return fmt.Errorf("standalone: open audit log: %w", err)
 	}
 	// Re-chmod to handle the case where umask widened things.
-	if err := os.Chmod(s.Path, 0o640); err != nil {
+	if err := os.Chmod(s.Path, auditFileMode); err != nil {
 		_ = f.Close()
 		s.started.Store(false)
 		return fmt.Errorf("standalone: chmod audit log: %w", err)
@@ -177,6 +182,16 @@ func (s *FileAuditSink) Start() error {
 		_ = f.Close()
 		s.started.Store(false)
 		return err
+	}
+	// SEC-12: if the current file is empty (cold start after a rotation
+	// where only the .YYYYMMDDHHMMSS file holds events), the bare
+	// recover above would return Genesis and silently fork the chain.
+	// Fall back to the most recent rotated sibling so the chain remains
+	// continuous.
+	if s.prevHash == GenesisPrevHash {
+		if tail, terr := recoverFromMostRecentBackup(s.Path); terr == nil && tail != "" {
+			s.prevHash = tail
+		}
 	}
 	s.lastSign = s.Clock()
 
@@ -214,6 +229,18 @@ func (s *FileAuditSink) Record(ctx context.Context, e dbadmin.Event) {
 func (s *FileAuditSink) Drops() int64 { return s.drops.Load() }
 
 // Reopen closes and reopens the audit file (for SIGHUP / logrotate).
+//
+// C6: enforces the same mode invariant as Start before accepting the
+// reopened file — logrotate misconfig (e.g., create 0644) used to
+// silently widen the audit log permissions because Reopen skipped the
+// stat check.
+//
+// SEC-12: prevHash is preserved across reopen even when the new file
+// on disk is empty (logrotate has just moved the old file aside and
+// recreated an empty one). The in-memory chain head stays anchored to
+// the LAST event we ourselves wrote, so the chain is continuous when
+// verified across the rotated + current files. (recoverPrevHash is
+// NOT called on Reopen — that path is for cold-start recovery only.)
 func (s *FileAuditSink) Reopen() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -222,9 +249,21 @@ func (s *FileAuditSink) Reopen() error {
 		_ = s.f.Close()
 		s.f = nil
 	}
-	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	// Pre-stat mode check — if the file exists, refuse to reopen if it
+	// is world-readable (C6).
+	if st, err := os.Stat(s.Path); err == nil {
+		if st.Mode().Perm()&^auditFileMode != 0 {
+			return fmt.Errorf("standalone: audit log %q mode %o broader than 0600 (refuse reopen)", s.Path, st.Mode().Perm())
+		}
+	}
+	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, auditFileMode)
 	if err != nil {
 		return err
+	}
+	// Re-chmod to repair the case where umask just widened the bits.
+	if err := os.Chmod(s.Path, auditFileMode); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("standalone: chmod audit log on reopen: %w", err)
 	}
 	s.f = f
 	if fi, ferr := f.Stat(); ferr == nil {
@@ -232,9 +271,6 @@ func (s *FileAuditSink) Reopen() error {
 	} else {
 		s.curSize = 0
 	}
-	// We deliberately do NOT reset prevHash — the in-memory chain
-	// continues across rotation. A fresh file with no prior events
-	// will simply pick up the latest hash we already hold.
 	return nil
 }
 
@@ -390,12 +426,12 @@ func (s *FileAuditSink) rotateLocked() {
 		// permanently lose appending.
 	}
 
-	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(s.Path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, auditFileMode)
 	if err != nil {
 		s.Logger.Error("standalone: audit rotate reopen failed", "err", err)
 		return
 	}
-	_ = os.Chmod(s.Path, 0o640)
+	_ = os.Chmod(s.Path, auditFileMode)
 	s.f = f
 	s.curSize = 0
 	// PrevEventHash is intentionally preserved so the chain spans
@@ -474,6 +510,14 @@ func (s *FileAuditSink) signAndShipHeadLocked() {
 
 // recoverPrevHash returns the chain hash of the last event in the file,
 // or GenesisPrevHash if the file is empty / missing.
+//
+// audit-recover-prevhash-trusts-tail: validate the candidate tail line
+// is well-formed JSON with the expected event_id + prev_event_hash
+// fields BEFORE adopting its SHA-256 as the running chain head. A
+// truncated last write or a half-flushed line used to silently anchor
+// the chain to garbage; `audit verify` would later report a break with
+// no actionable signal. We now log + ignore corrupted tails and walk
+// further back to the last well-formed event line.
 func recoverPrevHash(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -483,31 +527,68 @@ func recoverPrevHash(path string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	// Naive: read every line, keep the last non-chainhead. Audit logs
-	// rotate daily so the file rarely grows large enough for this to
-	// matter; if needed, a future PR can tail the file in reverse.
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 4*1024*1024)
-	var lastEventLine []byte
+	type eventTail struct {
+		EventID       string `json:"event_id"`
+		PrevEventHash string `json:"prev_event_hash"`
+	}
+	var lastValid []byte
 	for sc.Scan() {
 		l := sc.Bytes()
 		if len(l) == 0 {
 			continue
 		}
-		// chainhead lines start with `{"_type":"chainhead"`; skip.
 		if isChainHead(l) {
 			continue
 		}
-		lastEventLine = append(lastEventLine[:0], l...)
+		var et eventTail
+		if jerr := json.Unmarshal(l, &et); jerr != nil {
+			// Skip corrupted line; keep the prior validated one (if any).
+			continue
+		}
+		if et.EventID == "" || len(et.PrevEventHash) != len(GenesisPrevHash) {
+			continue
+		}
+		lastValid = append(lastValid[:0], l...)
 	}
 	if err := sc.Err(); err != nil {
 		return "", err
 	}
-	if len(lastEventLine) == 0 {
+	if len(lastValid) == 0 {
 		return GenesisPrevHash, nil
 	}
-	sum := sha256.Sum256(lastEventLine)
+	sum := sha256.Sum256(lastValid)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// recoverFromMostRecentBackup walks rotated siblings of path (named
+// "<path>.YYYYMMDDHHMMSS[.N]") and returns the chain-tail SHA-256 of
+// the most recent one. Returns "" with no error when no backup
+// exists. Used to bridge SEC-12: cold start after a rotation where the
+// fresh current file is empty would otherwise reset the chain anchor.
+func recoverFromMostRecentBackup(path string) (string, error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path) + "."
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var backups []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if len(name) > len(base) && name[:len(base)] == base {
+			backups = append(backups, filepath.Join(dir, name))
+		}
+	}
+	if len(backups) == 0 {
+		return "", nil
+	}
+	sort.Strings(backups)
+	return recoverPrevHash(backups[len(backups)-1])
 }
 
 func isChainHead(line []byte) bool {

@@ -38,18 +38,44 @@ func NewULID() string {
 // NewULIDAt returns a ULID with the given timestamp. Two calls within
 // the same millisecond produce monotonically increasing identifiers by
 // incrementing the random tail.
+//
+// SEC-13 hardening:
+//   - Clock-step-backward: if the caller's t resolves to a millisecond
+//     earlier than the previously-minted ms, we clamp ms forward to
+//     ulidLastMS so monotonicity is preserved across NTP step-back /
+//     suspend-resume.
+//   - Same-ms rollover: incrementing the 10-byte entropy as a
+//     big-endian integer used to silently cascade past 0xFF without
+//     freshening — losing entropy and producing predictable tails.
+//     Now, when the increment overflows (every byte was 0xFF before
+//     the bump), we draw a fresh entropy block AND bump ms by 1 so
+//     two ULIDs in the same overflowing burst remain ordered.
 func NewULIDAt(t time.Time) string {
 	ms := uint64(t.UnixMilli())
 	var entropy [10]byte
 
 	ulidMu.Lock()
-	if ms == ulidLastMS {
+	// Clamp forward against clock step-back.
+	if ms < ulidLastMS {
+		ms = ulidLastMS
+	}
+	if ms == ulidLastMS && (ulidLastMS != 0 || ulidLastEntr != [10]byte{}) {
 		// Same-ms call: increment last entropy as a big-endian integer.
 		entropy = ulidLastEntr
+		overflow := true
 		for i := 9; i >= 0; i-- {
 			entropy[i]++
 			if entropy[i] != 0 {
+				overflow = false
 				break
+			}
+		}
+		if overflow {
+			// Cascaded past 0xFF...FF — bump ms and re-seed.
+			ms++
+			if _, err := io.ReadFull(rand.Reader, entropy[:]); err != nil {
+				ulidMu.Unlock()
+				panic("standalone: crypto/rand failed during ULID mint: " + err.Error())
 			}
 		}
 	} else {

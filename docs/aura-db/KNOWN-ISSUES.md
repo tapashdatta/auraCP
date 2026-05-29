@@ -932,6 +932,83 @@ below.
   overwrites `Connection.CreatedAt` / `UpdatedAt`. **Reason:** test-only
   surprise; documented in follow-up. **Target:** PR #9.5.
 
+### PR #9.5 resolution status
+
+All deferred items above (except **OPS-04**, reassigned to PR #10 for
+panel-integrated readiness probes) are addressed in PR #9.5 against
+`pkg/dbadmin/standalone/`. Highlights:
+
+- **SEC-05** — `LoadKEK` now `OpenFile`-then-`fstat`s the descriptor,
+  rejects mode 0 and any bits broader than 0400. KEK plaintext slices
+  are zeroed after `copy` into the [32]byte.
+- **SEC-06** — `WebhookForwarder.Ship` rejects non-https URLs and empty
+  HMAC secrets at the type level (`bootstrap.go::buildForwarder`
+  already enforced both at boot; defense-in-depth covers direct
+  constructors).
+- **SEC-08** — `RotateKEK` takes a `keyPath` and writes the new key
+  file via `WriteKEKFile` AFTER the SQLite commit, collapsing the
+  previous "commit tx, swap file later" window. Surface a loud error
+  if the file write fails post-commit.
+- **SEC-09** — `HIBPClient.Check` asserts `https://` (or loopback for
+  test fixtures) before any request goes out.
+- **SEC-10** — Added `PHCWithFakeWorkloadMatchingStored` so callers
+  with a representative stored hash can match the real Verify
+  parameters; `auth_login.go` keeps the policy-params decoy for the
+  user-not-found case where matching is impossible.
+- **SEC-11 / C9** — `consumeRecoveryCode` iterates EVERY unused code
+  before settling on the outcome; the UPDATE runs once with the
+  matched hash, returning `ErrInvalidRecoveryCode` on race loss.
+- **SEC-12** — Cold-start `recoverPrevHash` walks rotated siblings if
+  the current file is empty so the chain anchor survives rotation +
+  process restart.
+- **SEC-13** — ULID minting clamps `ms` forward against clock
+  step-back; same-ms entropy overflow re-seeds and bumps `ms`.
+- **SEC-14** — `getSessionByTokenHash` does a `subtle.ConstantTimeCompare`
+  on the fetched hash before returning the row.
+- **SEC-15** — Audit-log mode invariant tightened from 0640 to the
+  documented 0600.
+- **C1** — Session expiry uses inclusive boundary (`>=` /
+  `<=`) in `Authenticate` and `CleanupExpiredSessions`.
+- **C5** — `Login` snapshots `now` once and threads it through
+  `createSessionAndCommitTOTPStepAt`.
+- **C6** — `Reopen` re-checks the audit file mode and re-`chmod`s
+  after `OpenFile`.
+- **C8** — `serve.go` shuts down the HTTP server FIRST, then drains
+  the engine, with separate `context.WithTimeout` budgets.
+- **C10** — `RotateKEK` uses a single `rotateNS` timestamp for the
+  whole batch.
+- **OPS-01** — `kek-rotate` redirects first-run users to `kek-init`
+  with an actionable error when the configured KEK file is missing.
+- **OPS-03** — `LoadKEK` calls `checkKEKOwner` (uid match) via the
+  unix-tagged `kek_owner_unix.go` helper.
+- **OPS-05** — Default `logging.format` is `json`.
+- **OPS-06** — `Validate` enforces `tls.min_version`, `logging.level`,
+  `logging.format`, and `logging.destination` enums.
+- **OPS-11** — `VerifyResult` gained JSON tags + `MarshalJSON` +
+  `HumanString` so the CLI can emit machine-readable output.
+- **OPS-12** — `WriteKEKFile` fsyncs both the temp file before rename
+  and the parent directory after, matching `KEY-ROTATION.md`.
+- **OPS-14** — Code comment on `AuditForwarderConfig.Kind` no longer
+  lists `s3`.
+- **OPS-16** — `Validate` checks `kek.file` mode at config-load time
+  when the file already exists.
+- **user-attrs-leak-token-hash** — `Auth` keeps the full token hash in
+  an internal `sessionTokenIndex` keyed by the truncated session_id;
+  `User.Attrs` no longer exposes the full hash.
+- **audit-recover-prevhash-trusts-tail** — `recoverPrevHash` validates
+  each candidate line parses as a well-formed event before adopting
+  its SHA-256 as the running head.
+- **cfg-validate-skips-merge-then-validate** — Docstring on
+  `standalone.Config.Validate` calls out the drift contract with
+  `dbadmin.Config.validate`.
+- **save-uses-clock-for-createdat-not-handler-time** — `Connections.Save`
+  honors caller-supplied `CreatedAt` when non-zero.
+
+OPS-02 / C7 / OPS-13 / OPS-15 are CLI-cmd-surface items handled in the
+matching CLI files (`cmd/aura-db/*.go`) when those subcommands ship.
+OPS-07 / OPS-08 / OPS-09 are documentation/packaging entries tracked
+in `docs/aura-db/KEY-ROTATION.md` follow-ups.
+
 ---
 
 ## Source: PR #10 adversarial review (workflow run wf_0425c646-dd8)

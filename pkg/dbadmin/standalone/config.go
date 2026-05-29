@@ -135,8 +135,12 @@ type ChainSigningConfig struct {
 }
 
 // AuditForwarderConfig describes one forwarder.
+//
+// OPS-14: the comment used to advertise "s3" as a supported kind, but
+// buildForwarder rejects anything other than syslog/webhook. The set
+// is exhaustively listed below.
 type AuditForwarderConfig struct {
-	Kind     string `yaml:"kind"` // "syslog" | "webhook" | "s3"
+	Kind     string `yaml:"kind"` // "syslog" | "webhook"
 	Address  string `yaml:"address"`
 	Protocol string `yaml:"protocol"`
 	Facility string `yaml:"facility"`
@@ -243,8 +247,11 @@ func DefaultConfig() Config {
 		},
 		Network: NetworkConfig{},
 		Logging: LoggingConfig{
-			Level:       "info",
-			Format:      "text",
+			Level: "info",
+			// OPS-05: json by default — structured logs are required
+			// for SIEM ingestion and grep-with-jq workflows. Text
+			// remains supported via explicit configuration.
+			Format:      "json",
 			Destination: "stderr",
 		},
 		CSP: CSPConfig{
@@ -284,6 +291,13 @@ func LoadConfig(path string) (Config, error) {
 
 // Validate enforces internal consistency. Mirrors dbadmin.Config.validate
 // for the engine-shared subset and adds standalone-specific checks.
+//
+// cfg-validate-skips-merge-then-validate: this duplicates the
+// engine-shared subset of dbadmin.Config.validate so we surface
+// failures at YAML load time without having to round-trip through
+// engine New(). Keep the two in lockstep — any new invariant added to
+// dbadmin.Config.validate MUST be mirrored here and added to the
+// drift test in config_test.go.
 func (c *Config) Validate() error {
 	if c.Session.IdleTTL > c.Session.AbsoluteTTL {
 		return fmt.Errorf("standalone: session.idle_ttl (%s) must not exceed absolute_ttl (%s)",
@@ -351,6 +365,42 @@ func (c *Config) Validate() error {
 	for i, cidr := range c.Network.TrustedProxies {
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
 			return fmt.Errorf("standalone: network.trusted_proxies[%d] %q is not a valid CIDR: %w", i, cidr, err)
+		}
+	}
+	// OPS-06: validate the few enum-shaped strings so a typo at the
+	// config file lands a loud error at boot instead of silently
+	// defaulting to "the friendliest match".
+	switch strings.TrimSpace(c.TLS.MinVersion) {
+	case "", "TLS1.2", "TLS1.3":
+	default:
+		return fmt.Errorf("standalone: tls.min_version %q invalid (want TLS1.2 or TLS1.3)", c.TLS.MinVersion)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Logging.Level)) {
+	case "", "debug", "info", "warn", "warning", "error":
+	default:
+		return fmt.Errorf("standalone: logging.level %q invalid (want debug|info|warn|error)", c.Logging.Level)
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Logging.Format)) {
+	case "", "text", "json":
+	default:
+		return fmt.Errorf("standalone: logging.format %q invalid (want text|json)", c.Logging.Format)
+	}
+	if dest := strings.TrimSpace(c.Logging.Destination); dest != "" && dest != "stderr" && dest != "stdout" && !strings.HasPrefix(dest, "file:") {
+		return fmt.Errorf("standalone: logging.destination %q invalid (want stderr|stdout|file:<path>)", c.Logging.Destination)
+	}
+	// OPS-16: validate kek.file mode at config load time when the
+	// file exists. This catches operator footguns (KEK pre-created at
+	// 0644) at `aura-db config validate` or `serve --dry-run` instead
+	// of waiting until the first request that decrypts a credential.
+	if c.KEK.File != "" {
+		if st, err := os.Stat(c.KEK.File); err == nil {
+			mode := st.Mode().Perm()
+			if mode == 0 {
+				return fmt.Errorf("standalone: kek.file %q has mode 0 (set to 0400)", c.KEK.File)
+			}
+			if mode&^0o400 != 0 {
+				return fmt.Errorf("standalone: kek.file %q has mode %o; want 0400 or stricter", c.KEK.File, mode)
+			}
 		}
 	}
 	return nil

@@ -189,6 +189,15 @@ func (c *Connections) Save(ctx context.Context, conn dbadmin.Connection, creds d
 		tunnelJSON = string(b)
 	}
 	now := c.clock().UnixNano()
+	// save-uses-clock-for-createdat-not-handler-time: preserve a
+	// caller-supplied CreatedAt (used by import/migration tooling) and
+	// only synthesize a fresh timestamp when none was provided. The
+	// canonical "wall clock at handler time" is still what we record
+	// for created_at; we just don't clobber an explicit, older value.
+	createdNS := now
+	if !conn.CreatedAt.IsZero() {
+		createdNS = conn.CreatedAt.UnixNano()
+	}
 
 	if conn.ID == "" {
 		conn.ID = dbadmin.ConnectionID(NewULID())
@@ -222,7 +231,7 @@ func (c *Connections) Save(ctx context.Context, conn dbadmin.Connection, creds d
 			string(conn.ID), conn.Name, int(conn.Engine), conn.Host, conn.Port,
 			conn.Database, conn.Username, enc, tagsStr,
 			boolToInt(conn.UseSSL), conn.SSLMode, tunnelJSON,
-			origin, conn.Owner, now, now); err != nil {
+			origin, conn.Owner, createdNS, now); err != nil {
 			if isUniqueViolation(err) {
 				return "", dbadmin.ErrConflict
 			}

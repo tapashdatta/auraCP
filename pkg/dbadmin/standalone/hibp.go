@@ -6,8 +6,10 @@ import (
 	"crypto/sha1" //nolint:gosec // HIBP k-anonymity API requires SHA-1 by spec.
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -40,6 +42,11 @@ var ErrPasswordPwned = errors.New("standalone: password appears in haveibeenpwne
 // ErrPasswordPwned if it is. Network errors are surfaced as-is so the
 // caller can decide whether to fail-closed (default) or fail-open
 // (operator override).
+//
+// SEC-09: rejects custom endpoints that are not https:// — except for
+// loopback hosts (used by test fixtures via httptest.NewServer).
+// Production deploys cannot bypass this without an explicit code
+// change.
 func (c *HIBPClient) Check(ctx context.Context, password string) error {
 	if c == nil {
 		c = DefaultHIBPClient()
@@ -51,6 +58,9 @@ func (c *HIBPClient) Check(ctx context.Context, password string) error {
 	endpoint := c.Endpoint
 	if endpoint == "" {
 		endpoint = "https://api.pwnedpasswords.com/range/"
+	}
+	if err := assertHIBPScheme(endpoint); err != nil {
+		return err
 	}
 	sum := sha1.Sum([]byte(password)) //nolint:gosec
 	hashHex := strings.ToUpper(hex.EncodeToString(sum[:]))
@@ -85,6 +95,24 @@ func (c *HIBPClient) Check(ctx context.Context, password string) error {
 		}
 	}
 	return sc.Err()
+}
+
+// assertHIBPScheme enforces the SEC-09 defense-in-depth invariant
+// that production HIBP traffic uses HTTPS. Loopback endpoints are
+// permitted to accommodate test fixtures.
+func assertHIBPScheme(endpoint string) error {
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("standalone: HIBP endpoint %q is not a valid URL: %w", endpoint, err)
+	}
+	if u.Scheme == "https" {
+		return nil
+	}
+	host := u.Hostname()
+	if u.Scheme == "http" && (host == "127.0.0.1" || host == "::1" || host == "localhost") {
+		return nil
+	}
+	return fmt.Errorf("standalone: HIBP endpoint %q must use https:// (got scheme %q)", endpoint, u.Scheme)
 }
 
 func readHIBPError(body io.Reader, status int) error {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/auracp/auracp/pkg/dbadmin"
@@ -16,9 +17,16 @@ import (
 // token. Matches SECURITY.md §5.4.
 const SessionCookieName = "aura_session"
 
-// SessionAttrTokenHashKey is the key Auth attaches to User.Attrs
-// containing the hex-encoded token hash, so step-up lookups can reach
-// the right session_id without re-reading the cookie.
+// SessionAttrTokenHashKey is the historical attrs key for the
+// hex-encoded session-token hash.
+//
+// user-attrs-leak-token-hash: as of PR #9.5, Auth no longer surfaces
+// the full token hash through User.Attrs (only the truncated 16-char
+// session_id is exposed). Step-up lookups now go through an internal
+// session_id -> tokenHash index inside Auth. The constant is kept for
+// external SDK consumers that previously read this key from
+// dbadmin.User but is never written by Auth itself; reading it will
+// return "" on PR #9.5+ deployments.
 const SessionAttrTokenHashKey = "session_token_hash"
 
 // Auth implements dbadmin.Auth backed by the standalone SQLite store.
@@ -27,6 +35,17 @@ type Auth struct {
 	kek   *KEK
 	cfg   AuthRuntimeConfig
 	clock Clock
+
+	// sessionTokenIndex maps the truncated session_id (first 16 chars
+	// of hex token hash, surfaced via User.Attrs["session_id"]) to the
+	// full 32-byte token hash. Lets HasSteppedUp / VerifyStepUp look
+	// up the hash without leaking it into User.Attrs
+	// (user-attrs-leak-token-hash). Bounded by the active sessions
+	// table: entries are added on Authenticate, refreshed on every
+	// touch, and forgotten on revoke / cleanup. Worst-case size is
+	// MaxConcurrent * users active in the last IdleTTL window.
+	sessionMu          sync.RWMutex
+	sessionTokenIndex  map[string][]byte
 }
 
 // AuthRuntimeConfig holds the policy values Auth needs at every method
@@ -74,7 +93,56 @@ func NewAuth(store *Store, kek *KEK, cfg AuthRuntimeConfig) *Auth {
 			24 * time.Hour,
 		}
 	}
-	return &Auth{store: store, kek: kek, cfg: cfg, clock: store.clock}
+	return &Auth{
+		store:             store,
+		kek:               kek,
+		cfg:               cfg,
+		clock:             store.clock,
+		sessionTokenIndex: make(map[string][]byte),
+	}
+}
+
+// rememberToken indexes the truncated session_id -> full token hash
+// mapping used by step-up lookups. user-attrs-leak-token-hash: this
+// keeps the full hash inside Auth instead of leaking it through
+// User.Attrs.
+func (a *Auth) rememberToken(shortID string, tokenHash []byte) {
+	if a.sessionTokenIndex == nil {
+		return
+	}
+	cp := make([]byte, len(tokenHash))
+	copy(cp, tokenHash)
+	a.sessionMu.Lock()
+	a.sessionTokenIndex[shortID] = cp
+	a.sessionMu.Unlock()
+}
+
+// forgetToken drops a (truncated) session_id from the in-process
+// index. Called on revoke paths.
+func (a *Auth) forgetToken(shortID string) {
+	if a.sessionTokenIndex == nil {
+		return
+	}
+	a.sessionMu.Lock()
+	delete(a.sessionTokenIndex, shortID)
+	a.sessionMu.Unlock()
+}
+
+// lookupToken returns the full token hash for a session_id (truncated
+// 16-char hex) previously seen on this process.
+func (a *Auth) lookupToken(shortID string) ([]byte, bool) {
+	if a.sessionTokenIndex == nil {
+		return nil, false
+	}
+	a.sessionMu.RLock()
+	v, ok := a.sessionTokenIndex[shortID]
+	a.sessionMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	cp := make([]byte, len(v))
+	copy(cp, v)
+	return cp, true
 }
 
 // Authenticate implements dbadmin.Auth.
@@ -94,7 +162,10 @@ func (a *Auth) Authenticate(r *http.Request) (dbadmin.User, error) {
 		return dbadmin.User{}, err
 	}
 	now := a.clock()
-	if now.UnixNano() > sess.ExpiresAt || now.UnixNano() > sess.AbsoluteExpiresAt {
+	// C1: boundary is inclusive — a session whose ExpiresAt equals the
+	// current nanosecond IS expired. The strict `>` previously let one
+	// final request slip through at the boundary tick.
+	if now.UnixNano() >= sess.ExpiresAt || now.UnixNano() >= sess.AbsoluteExpiresAt {
 		_ = a.revokeSession(ctx, tokenHash)
 		return dbadmin.User{}, dbadmin.ErrUnauthenticated
 	}
@@ -138,15 +209,20 @@ func (a *Auth) Authenticate(r *http.Request) (dbadmin.User, error) {
 	}
 
 	tokHex := hex.EncodeToString(tokenHash)
+	shortID := tokHex[:16]
+	// Index the truncated id -> full hash mapping so HasSteppedUp /
+	// VerifyStepUp can look up step-up flags WITHOUT us having to
+	// surface the full hash through User.Attrs
+	// (user-attrs-leak-token-hash).
+	a.rememberToken(shortID, tokenHash)
 	return dbadmin.User{
 		ID:       user.ID,
 		Username: user.Username,
 		Roles:    roles,
 		Attrs: map[string]string{
-			"ip_class":               sess.IPClass,
-			"ua_hash":                sess.UAHash,
-			"session_id":             tokHex[:16],
-			SessionAttrTokenHashKey:  tokHex,
+			"ip_class":   sess.IPClass,
+			"ua_hash":    sess.UAHash,
+			"session_id": shortID,
 		},
 	}, nil
 }

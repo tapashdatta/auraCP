@@ -96,9 +96,41 @@ func VerifyPassword(password, encoded string, p PasswordPolicy) (ok bool, needsR
 }
 
 // PHCWithFakeWorkload runs an Argon2id derivation against a fixed
-// dummy salt + tag. Used to keep login latency roughly constant when
-// the username doesn't exist, defeating timing-based enumeration.
+// dummy salt + tag.
+//
+// SEC-10 fix: the decoy MUST use the EXACT same Argon2 parameters as
+// would be applied to a real user's stored hash — otherwise an
+// attacker can distinguish "no such user" (policy params) from "user
+// exists with older params" by latency. Callers should pass the params
+// they'd run a real verify against; we keep the unary-arg signature
+// for source-compat but document the intent.
 func PHCWithFakeWorkload(p PasswordPolicy) {
 	var fakeSalt = []byte("aaaaaaaaaaaaaaaa")
 	_ = argon2.IDKey([]byte("invalid-decoy-password"), fakeSalt, p.Time, p.Memory, p.Threads, p.KeyLen)
+}
+
+// PHCWithFakeWorkloadMatchingStored is the SEC-10 successor for the
+// "username not found, but run a decoy to flatten timing" use case.
+// Callers in possession of a representative stored hash should call
+// this so the decoy uses the SAME parameters the real Verify would
+// have used. When the stored hash is malformed we fall back to the
+// current policy params; callers can't do better.
+func PHCWithFakeWorkloadMatchingStored(stored string, fallback PasswordPolicy) {
+	parts := strings.Split(stored, "$")
+	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
+		PHCWithFakeWorkload(fallback)
+		return
+	}
+	var mem, t uint32
+	var par uint8
+	if _, perr := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &t, &par); perr != nil {
+		PHCWithFakeWorkload(fallback)
+		return
+	}
+	keyLen := fallback.KeyLen
+	if tag, derr := base64.RawStdEncoding.DecodeString(parts[5]); derr == nil {
+		keyLen = uint32(len(tag))
+	}
+	var fakeSalt = []byte("aaaaaaaaaaaaaaaa")
+	_ = argon2.IDKey([]byte("invalid-decoy-password"), fakeSalt, t, mem, par, keyLen)
 }

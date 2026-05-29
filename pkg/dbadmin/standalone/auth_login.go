@@ -39,6 +39,12 @@ type LoginResult struct {
 // Login is the canonical username+password (+ optional TOTP) entry
 // point. Used by aura-db's /login handler (delivered in a later PR)
 // and by the CLI's user-passwd --self.
+//
+// C5: a single clock snapshot is taken at the top of the request and
+// reused for every time-sensitive step (lockout check, TOTP step
+// computation, session creation). Without this, an attacker who can
+// stall the request between password verify and TOTP verify could
+// straddle a 30-second step boundary and accept a stale code.
 func (a *Auth) Login(ctx context.Context, req LoginRequest) (*LoginResult, error) {
 	now := a.clock()
 
@@ -117,7 +123,7 @@ func (a *Auth) Login(ctx context.Context, req LoginRequest) (*LoginResult, error
 		_ = a.store.SetPassword(ctx, user.ID, req.Password, a.cfg.Password)
 	}
 
-	rawToken, err := a.createSessionAndCommitTOTPStep(ctx, user.ID, req.IPClass, req.UAHash, matchedTOTPStep)
+	rawToken, err := a.createSessionAndCommitTOTPStepAt(ctx, user.ID, req.IPClass, req.UAHash, matchedTOTPStep, now)
 	if err != nil {
 		return nil, err
 	}
