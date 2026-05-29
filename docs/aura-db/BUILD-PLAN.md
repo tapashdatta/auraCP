@@ -620,7 +620,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 5.5 | Row ops engine-parity + limits         | deferred |              |
 | 6   | EXPLAIN normalization                  | ✓ done   | 0411605      |
 | 6.5 | EXPLAIN polish + rollup fixes          | deferred |              |
-| 7   | Query history                          | pending  |              |
+| 7   | Query history                          | ✓ done   | e62468e      |
+| 7.5 | History redaction/retention follow-up  | deferred |              |
 | 8   | HTTP handler                           | pending  |              |
 | 9   | Standalone implementations + cmd       | pending  |              |
 | 10  | Panel-integrated glue                  | pending  |              |
