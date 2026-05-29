@@ -614,7 +614,8 @@ PRs without their tests are blocked at review. We do not retroactively
 | 2.5 | Classifier AST upgrade                 | deferred |              |
 | 3   | Driver layer                           | ✓ done   | 97de7d3      |
 | 3.5 | Driver hardening follow-up             | deferred |              |
-| 4   | Schema readers                         | next     |              |
+| 4   | Schema readers                         | ✓ done   | da65065      |
+| 4.5 | Schema reader follow-up                | deferred |              |
 | 5   | Row operations                         | pending  |              |
 | 6   | EXPLAIN normalization                  | pending  |              |
 | 7   | Query history                          | pending  |              |
