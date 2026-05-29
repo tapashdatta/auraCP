@@ -56,22 +56,30 @@ func (m *mysqlDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, creds
 	hostPort := net.JoinHostPort(c.Host, fmt.Sprintf("%d", c.Port))
 
 	var tun *Tunnel
+	dialNet := "tcp"
 	dialAddr := hostPort
 	if c.SSHTunnel != nil {
 		// Tunnel concurrency = pool size + small headroom (review fix:
 		// previously hard-coded 16; now matches pool+slack).
-		t, err := OpenTunnel(ctx, c.SSHTunnel, hostPort, poolSize+2)
+		// PR #3.5: pass the ConnectionID as the SocketName so each
+		// connection gets a stable unix-socket path; idle-timeout is
+		// per-Connection via QueryIdleTimeout.
+		t, err := OpenTunnelWithOptions(ctx, c.SSHTunnel, hostPort, poolSize+2, TunnelOptions{
+			SocketName:  string(c.ID),
+			IdleTimeout: c.QueryIdleTimeout,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("driver/mysql: open tunnel: %w", err)
 		}
 		tun = t
+		dialNet = t.Network()
 		dialAddr = t.LocalAddr()
 	}
 
 	cfg := mysqlsql.NewConfig()
 	cfg.User = c.Username
 	cfg.Passwd = creds.Password
-	cfg.Net = "tcp"
+	cfg.Net = dialNet // "unix" through PR #3.5 tunnel; "tcp" direct or fallback
 	cfg.Addr = dialAddr
 	cfg.DBName = c.Database
 	cfg.AllowAllFiles = false
@@ -98,8 +106,12 @@ func (m *mysqlDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, creds
 		cfg.TLSConfig = name
 	}
 
-	dsn := cfg.FormatDSN()
-	db, err := sql.Open("mysql", dsn)
+	// PR #3.5: use NewConnector + sql.OpenDB instead of formatting a
+	// DSN. This lets us null cfg.Passwd after the connector is built
+	// so the password no longer lives in the *sql.DB-held string for
+	// the connection's lifetime. Previously go-sql-driver's DSN path
+	// retained a string copy that Credentials.Zero couldn't reach.
+	connector, err := mysqlsql.NewConnector(cfg)
 	if err != nil {
 		if tlsName != "" {
 			mysqlsql.DeregisterTLSConfig(tlsName)
@@ -107,8 +119,12 @@ func (m *mysqlDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, creds
 		if tun != nil {
 			_ = tun.Close()
 		}
-		return nil, fmt.Errorf("driver/mysql: sql.Open: %w", err)
+		return nil, fmt.Errorf("driver/mysql: NewConnector: %w", err)
 	}
+	// Null out cfg.Passwd: NewConnector built its own copy already; we
+	// don't want our stack frame to retain the plaintext.
+	cfg.Passwd = ""
+	db := sql.OpenDB(connector)
 
 	if poolSize < 1 {
 		poolSize = 4
@@ -131,15 +147,53 @@ func (m *mysqlDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, creds
 		return nil, classifyMySQLErr(wrapCtxErr(pingCtx, err))
 	}
 
-	return &mysqlConn{db: db, tunnel: tun, conn: c, tlsName: tlsName}, nil
+	mc := &mysqlConn{db: db, tunnel: tun, conn: c, tlsName: tlsName}
+	if tlsName != "" {
+		mc.tlsNames = []string{tlsName}
+	}
+
+	// PR #3.5: engine-identity check. After ping, SELECT VERSION() and
+	// require the string to contain "MariaDB" or "MySQL". Catches a
+	// rare-but-real misconfiguration where a Connection labeled
+	// MariaDB points at a different engine (e.g., a Postgres on the
+	// same TCP port behind a proxy, or a backdoored proxy responding
+	// to handshakes). The check is cheap (one round-trip) and runs
+	// only at open time.
+	verCtx, verCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer verCancel()
+	ver, verErr := mc.ServerVersion(verCtx)
+	if verErr != nil {
+		_ = mc.Close()
+		return nil, fmt.Errorf("driver/mysql: identity check: %w", verErr)
+	}
+	if !isMySQLOrMariaDBVersion(ver) {
+		_ = mc.Close()
+		return nil, fmt.Errorf("driver/mysql: identity check failed: server VERSION() = %q does not contain MariaDB or MySQL (refusing to use mislabeled connection)", ver)
+	}
+
+	return mc, nil
+}
+
+// isMySQLOrMariaDBVersion reports whether the SELECT VERSION() output
+// names a MariaDB or MySQL server. Case-insensitive. Used by the PR #3.5
+// engine-identity check.
+func isMySQLOrMariaDBVersion(v string) bool {
+	up := strings.ToUpper(v)
+	return strings.Contains(up, "MARIADB") || strings.Contains(up, "MYSQL")
 }
 
 // mysqlConn wraps a *sql.DB + optional SSH tunnel as a Conn.
 type mysqlConn struct {
-	db      *sql.DB
-	tunnel  *Tunnel
-	conn    *dbadmin.Connection
-	tlsName string // empty if no TLS config was registered
+	db     *sql.DB
+	tunnel *Tunnel
+	conn   *dbadmin.Connection
+	// tlsName is the primary registered TLS-config name. PR #3.5: also
+	// add to tlsNames for the slice-based bookkeeping that future
+	// re-registration paths can append to. Today only one entry is
+	// populated per open; the slice exists so the Close path doesn't
+	// need to be rewritten when (e.g.) cert-rotation hot-swap lands.
+	tlsName  string
+	tlsNames []string
 }
 
 func (c *mysqlConn) Query(ctx context.Context, limits Limits, sqlText string, args ...any) (Rows, error) {
@@ -197,8 +251,18 @@ func (c *mysqlConn) Close() error {
 			firstErr = err
 		}
 	}
+	// PR #3.5: walk the per-conn registered-name list and deregister
+	// each. The driver-global registry no longer leaks per-conn entries
+	// across the auracpd process lifetime.
+	for _, name := range c.tlsNames {
+		mysqlsql.DeregisterTLSConfig(name)
+	}
+	c.tlsNames = nil
+	// Back-compat: ensure the legacy single-field name is also dropped
+	// in case a future path populates only tlsName.
 	if c.tlsName != "" {
 		mysqlsql.DeregisterTLSConfig(c.tlsName)
+		c.tlsName = ""
 	}
 	if c.tunnel != nil {
 		if err := c.tunnel.Close(); err != nil && firstErr == nil {

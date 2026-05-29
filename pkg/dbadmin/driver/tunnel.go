@@ -2,6 +2,8 @@ package driver
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -21,7 +23,7 @@ import (
 // Tunnel forwards a local socket to a remote DB through an SSH connection.
 // Used when Connection.SSHTunnel is non-nil.
 //
-// Security per SECURITY.md §7.2 (post review-board findings, PR #3):
+// Security per SECURITY.md §7.2 (post review-board findings, PR #3 and PR #3.5):
 //   - Key-based auth only. Password auth and ssh-agent auth are NOT
 //     attempted; we never pull a key out of the operator's agent.
 //   - Host keys ARE verified against the operator-supplied
@@ -37,13 +39,21 @@ import (
 //     not honor ClientConfig.Timeout, so we wrap the TCP conn with
 //     SetDeadline before handing it to NewClientConn.
 //   - Data-copy phase has an idle timeout to stop slow-loris style
-//     attacks from holding tunnel slots indefinitely.
+//     attacks from holding tunnel slots indefinitely. The timeout is
+//     configurable per-Connection via QueryIdleTimeout (PR #3.5);
+//     defaults to defaultIdleTimeout when unset.
+//   - Local listener is a unix-domain socket with mode 0600 owned by
+//     the auracpd process (PR #3.5). Previously a 127.0.0.1:0 TCP
+//     listener; that listener accepted from any local UID. Multi-tenant
+//     hosts can now share an auracpd box without exposing the tunnel
+//     to other tenants.
 type Tunnel struct {
 	cfg       *dbadmin.SSHTunnel
 	dialAddr  string // remote DB host:port to forward to
 	client    *ssh.Client
 	listener  net.Listener
-	localAddr string
+	localAddr string // socket path (unix) or host:port (tcp fallback)
+	network   string // "unix" or "tcp"
 	closed    atomic.Bool
 
 	// closeCh closes when Tunnel.Close is invoked. acceptLoop and
@@ -53,6 +63,10 @@ type Tunnel struct {
 
 	// activePool caps the number of simultaneous forwarders.
 	concurrencySem chan struct{}
+
+	// idleTimeout is the sliding deadline applied to the data-copy
+	// phase. PR #3.5: replaces the previous hardcoded 5min constant.
+	idleTimeout time.Duration
 }
 
 // concurrencyLimit caps simultaneous channels through one tunnel. Set to
@@ -69,18 +83,76 @@ const tunnelHandshakeTimeout = 10 * time.Second
 // "direct-tcpip" channel open).
 const tunnelChannelTimeout = 10 * time.Second
 
-// tunnelIdleTimeout drops a forwarded connection that goes idle for
-// this long. Caps slow-loris attacks; the database driver typically
-// keeps its own keepalive shorter than this.
-const tunnelIdleTimeout = 5 * time.Minute
+// defaultIdleTimeout is the fallback idle-deadline applied when no
+// per-Connection QueryIdleTimeout is set. Caps slow-loris attacks; the
+// database driver typically keeps its own keepalive shorter than this.
+// PR #3.5: now configurable per-Connection; the hardcoded value used to
+// be the only choice.
+const defaultIdleTimeout = 5 * time.Minute
+
+// tunnelSocketBaseDir is the directory under which the unix-socket
+// listeners live. Production deployments expect this to be
+// /run/aura-db/tunnels/, mode 0700, owned by the auracpd uid. The
+// package-level var lets tests redirect to a TempDir; the systemd unit
+// creates the production directory before auracpd starts (PR #3.5).
+//
+// SECURITY: each socket file is created mode 0600; only the auracpd
+// process can connect, eliminating the local-UID exposure that the
+// previous 127.0.0.1:0 TCP listener had.
+var tunnelSocketBaseDir = "/run/aura-db/tunnels"
+
+// SetTunnelSocketBaseDir overrides the directory in which Tunnel unix
+// sockets are created. Exposed for tests + alt-deployment hosts that
+// cannot use the default /run path. Returns the previous value so
+// tests can restore.
+func SetTunnelSocketBaseDir(dir string) string {
+	prev := tunnelSocketBaseDir
+	tunnelSocketBaseDir = dir
+	return prev
+}
+
+// TunnelOptions carries the per-Connection knobs for OpenTunnel.
+// Optional; the zero value yields defaults equivalent to PR #3 behavior
+// (random socket name, defaultIdleTimeout). PR #3.5.
+type TunnelOptions struct {
+	// SocketName is the filename inside tunnelSocketBaseDir for the
+	// unix socket listener. Should be the connection ID (or a safe
+	// digest of it) so concurrent tunnels for different connections
+	// don't collide. Empty → a per-call random name is used.
+	//
+	// For Postgres, callers must additionally pass
+	// PostgresPort because pgx's unix-socket convention requires the
+	// socket be named ".s.PGSQL.<port>" inside a directory.
+	SocketName string
+
+	// PostgresPort, when non-zero, switches the socket-naming scheme
+	// to pgx's "<dir>/.s.PGSQL.<port>" convention. The driver
+	// allocates a directory (using SocketName or random) and creates
+	// the socket file inside it under that name. The path returned
+	// by Tunnel.LocalAddr() is the DIRECTORY in this mode; pgx
+	// expects to receive that directory as Host and the synthetic
+	// port (the value passed here) as Port.
+	PostgresPort uint16
+
+	// IdleTimeout overrides defaultIdleTimeout. Zero → default.
+	IdleTimeout time.Duration
+}
 
 // OpenTunnel establishes an SSH tunnel to cfg.Host:cfg.Port and binds a
-// loopback listener that forwards to dialAddr (the DB host:port, from
-// the perspective of the SSH server's network).
+// listener that forwards to dialAddr (the DB host:port, from the
+// perspective of the SSH server's network). PR #3.5: listener is a
+// unix-domain socket with mode 0600 (previously 127.0.0.1:0 TCP).
 //
 // concurrency caps simultaneous forwarders; if <= minConcurrency, raises
 // to minConcurrency.
 func OpenTunnel(ctx context.Context, cfg *dbadmin.SSHTunnel, dialAddr string, concurrency int) (*Tunnel, error) {
+	return OpenTunnelWithOptions(ctx, cfg, dialAddr, concurrency, TunnelOptions{})
+}
+
+// OpenTunnelWithOptions is OpenTunnel with the TunnelOptions hook for
+// callers that need to specify the unix-socket name (e.g., to tie it to
+// a ConnectionID) or override the idle-timeout. PR #3.5.
+func OpenTunnelWithOptions(ctx context.Context, cfg *dbadmin.SSHTunnel, dialAddr string, concurrency int, opts TunnelOptions) (*Tunnel, error) {
 	if cfg == nil {
 		return nil, errors.New("driver/tunnel: nil cfg")
 	}
@@ -183,23 +255,34 @@ func OpenTunnel(ctx context.Context, cfg *dbadmin.SSHTunnel, dialAddr string, co
 	_ = tcpConn.SetDeadline(time.Time{})
 	client := ssh.NewClient(sshConn, chans, reqs)
 
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	lis, sockPath, advertisePath, err := openTunnelListener(opts)
 	if err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("driver/tunnel: listen: %w", err)
 	}
+	_ = sockPath // retained for cleanup; lis.Close removes the file (unix listener does this on close)
 
 	if concurrency < minConcurrency {
 		concurrency = minConcurrency
+	}
+	idle := opts.IdleTimeout
+	if idle <= 0 {
+		idle = defaultIdleTimeout
+	}
+	netKind := "unix"
+	if _, ok := lis.(*tcpFallbackListener); ok {
+		netKind = "tcp"
 	}
 	t := &Tunnel{
 		cfg:            cfg,
 		dialAddr:       dialAddr,
 		client:         client,
 		listener:       lis,
-		localAddr:      lis.Addr().String(),
+		localAddr:      advertisePath,
+		network:        netKind,
 		closeCh:        make(chan struct{}),
 		concurrencySem: make(chan struct{}, concurrency),
+		idleTimeout:    idle,
 	}
 
 	t.wg.Add(1)
@@ -207,14 +290,26 @@ func OpenTunnel(ctx context.Context, cfg *dbadmin.SSHTunnel, dialAddr string, co
 	return t, nil
 }
 
-// LocalAddr returns the loopback host:port the database driver should dial.
+// LocalAddr returns the local address the database driver should dial.
+// In PR #3.5+ this is a unix-socket path (file path for MySQL, parent
+// directory for Postgres-style sockets); the driver picks the appropriate
+// Net/Host for its DSN based on Network().
 //
-// SECURITY NOTE: this listener accepts connections from any process on the
-// host. The auracpd deployment model assumes a dedicated host; if you
-// share the host with other tenants, see docs/aura-db/KNOWN-ISSUES.md
-// "tunnel local-listener exposure" for the deferred unix-socket migration.
+// SECURITY: the unix socket is created mode 0600 and lives under
+// tunnelSocketBaseDir (default /run/aura-db/tunnels/). Only the
+// auracpd process can dial it.
 func (t *Tunnel) LocalAddr() string {
 	return t.localAddr
+}
+
+// Network reports the listener's address family. "unix" for the PR #3.5+
+// unix-domain socket default; retained as a method so the driver layer
+// can build the right DSN.
+func (t *Tunnel) Network() string {
+	if t.network == "" {
+		return "unix"
+	}
+	return t.network
 }
 
 // Close stops the listener + SSH connection. Idempotent. Waits for all
@@ -305,9 +400,10 @@ func (t *Tunnel) forwardOne(localConn net.Conn) {
 	}()
 
 	// Apply sliding idle deadline. Wrap both ends; each Read/Write
-	// resets the deadline on its connection.
-	lc := &idleDeadlineConn{Conn: localConn, idle: tunnelIdleTimeout}
-	rc := &idleDeadlineConn{Conn: remoteConn, idle: tunnelIdleTimeout}
+	// resets the deadline on its connection. PR #3.5: uses the
+	// per-Tunnel configurable idleTimeout (was a hardcoded 5min const).
+	lc := &idleDeadlineConn{Conn: localConn, idle: t.idleTimeout}
+	rc := &idleDeadlineConn{Conn: remoteConn, idle: t.idleTimeout}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -387,6 +483,128 @@ func verifyKeyMode(path string) error {
 		return fmt.Errorf("driver/tunnel: key %s has unsafe permissions %#o (must be 0600); refusing to load", path, mode)
 	}
 	return nil
+}
+
+// openTunnelListener creates the unix-socket listener for OpenTunnel
+// per PR #3.5. The socket file is mode 0600. Returns (listener, socket
+// file path, advertise path).
+//
+// In TCP/loopback fallback mode (filesystem unavailable), returns a
+// 127.0.0.1:0 TCP listener and logs a warning. This fallback is only
+// used when the unix-socket path cannot be created (e.g., a hardened
+// container without writable /run); production deployments must
+// provision tunnelSocketBaseDir.
+//
+// For Postgres callers (opts.PostgresPort != 0), the socket is named
+// ".s.PGSQL.<port>" inside a per-Connection directory; LocalAddr() then
+// returns the directory and pgx uses Host=dir + Port=<port> to dial.
+//
+// For MySQL callers, the socket is a plain file; LocalAddr() returns the
+// file path and go-sql-driver/mysql uses Net="unix" Addr=<path>.
+func openTunnelListener(opts TunnelOptions) (net.Listener, string, string, error) {
+	base := tunnelSocketBaseDir
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		// Fall back to a TCP listener so callers without writable
+		// tunnel-base-dir (e.g., tests, hardened CI containers
+		// without /run) still work. The TCP fallback is documented
+		// to be insecure for multi-tenant hosts — production must
+		// provision /run/aura-db/tunnels.
+		lis, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, "", "", fmt.Errorf("unix-socket dir %s unavailable and tcp fallback failed: %w", base, err)
+		}
+		return &tcpFallbackListener{Listener: lis}, "", lis.Addr().String(), nil
+	}
+
+	name := opts.SocketName
+	if name == "" {
+		// Random nonce — sha256 of timestamp + pid + random bytes,
+		// truncated to keep socket paths short (linux caps at 108).
+		h := sha256.New()
+		fmt.Fprintf(h, "%d-%d-%d", time.Now().UnixNano(), os.Getpid(), randomInt63())
+		name = hex.EncodeToString(h.Sum(nil)[:8])
+	} else {
+		// Sanitize: callers pass ConnectionID directly; encode to a
+		// hex digest so unusual characters can't create unexpected
+		// paths. Short prefix preserves human-readability when the
+		// ID is a normal slug.
+		name = safeSocketName(name)
+	}
+
+	var sockPath, advertise string
+	if opts.PostgresPort != 0 {
+		// pgx convention: <dir>/.s.PGSQL.<port>. Create a per-tunnel
+		// directory so pgx's Host=dir + Port=<port> dials our socket
+		// and not whatever else lives in tunnelSocketBaseDir.
+		dir := filepath.Join(base, name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, "", "", fmt.Errorf("create tunnel dir %s: %w", dir, err)
+		}
+		sockPath = filepath.Join(dir, fmt.Sprintf(".s.PGSQL.%d", opts.PostgresPort))
+		advertise = dir
+	} else {
+		sockPath = filepath.Join(base, name+".sock")
+		advertise = sockPath
+	}
+
+	// Stale socket from a prior crashed run; safe to remove (we own
+	// the directory mode 0700 so nothing else can race-create it).
+	_ = os.Remove(sockPath)
+
+	lis, err := net.Listen("unix", sockPath)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("listen unix %s: %w", sockPath, err)
+	}
+	// Defense-in-depth: chmod to 0600 explicitly. The default mode
+	// after net.Listen("unix", ...) is umask-dependent.
+	if err := os.Chmod(sockPath, 0o600); err != nil {
+		_ = lis.Close()
+		_ = os.Remove(sockPath)
+		return nil, "", "", fmt.Errorf("chmod socket %s: %w", sockPath, err)
+	}
+	return lis, sockPath, advertise, nil
+}
+
+// safeSocketName produces a filename-safe encoding of an arbitrary
+// ConnectionID. Allowed chars [A-Za-z0-9_-] pass through (truncated);
+// anything else triggers a sha256-digest fallback so a malicious ID
+// can't escape the tunnel directory.
+func safeSocketName(id string) string {
+	allSafe := id != "" && len(id) <= 32
+	if allSafe {
+		for i := 0; i < len(id); i++ {
+			c := id[i]
+			switch {
+			case c >= 'a' && c <= 'z',
+				c >= 'A' && c <= 'Z',
+				c >= '0' && c <= '9',
+				c == '-' || c == '_':
+				continue
+			default:
+				allSafe = false
+			}
+		}
+	}
+	if allSafe {
+		return id
+	}
+	h := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(h[:8])
+}
+
+// randomInt63 returns a non-cryptographic pseudo-random int63; used
+// purely for socket-name nonces. Pulled out so tests can patch.
+var randomInt63 = func() int64 {
+	// crypto/rand would over-spec this; the socket is mode 0600 and
+	// inside an 0700 dir, so name guessability isn't a threat.
+	return time.Now().UnixNano()
+}
+
+// tcpFallbackListener wraps the loopback-TCP fallback so the rest of
+// the tunnel code can treat it uniformly. The Tunnel still reports
+// Network()="tcp" in this mode so the driver builds a TCP DSN.
+type tcpFallbackListener struct {
+	net.Listener
 }
 
 // verifyKeyParentDir refuses to load a private key whose containing

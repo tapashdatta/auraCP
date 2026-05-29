@@ -291,14 +291,15 @@ func (p *Pool) Close() error {
 }
 
 // idleSweeper closes idle Conns past the configured timeout. Runs every
-// IdleTimeout/2 (or 30s, whichever is larger) so a Conn that's idle for
-// just over the timeout doesn't wait the full timeout to be closed.
+// IdleTimeout/2 (or 1s minimum). PR #3.5: floor lowered from 30s to 1s
+// so operators with very-aggressive eviction (IdleTimeout < 60s) get
+// timely closes. The sweep is cheap — one map walk under a brief lock.
 func (p *Pool) idleSweeper() {
 	defer p.tickerW.Done()
 
 	interval := p.opts.IdleTimeout / 2
-	if interval < 30*time.Second {
-		interval = 30 * time.Second
+	if interval < time.Second {
+		interval = time.Second
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

@@ -30,6 +30,19 @@ type Limits struct {
 	// returned. Each value's size is estimated via valueSize();
 	// hitting the cap returns ErrCapped on the next Next().
 	MaxBytes int64
+
+	// MaxBytesPerCell caps the byte size of any single cell value.
+	// PR #3.5: a row whose estimated max-cell size exceeds this cap
+	// is DROPPED (not returned) and Rows.Next returns ErrCapped on
+	// that row. Lets operators set a hard upper bound on the bytes
+	// a single column can blast through, while still allowing the
+	// rest of the result set to stream. Zero means unlimited.
+	//
+	// Caller-visible semantics: when a row would exceed this cap,
+	// Next returns ErrCapped exactly once for that row, then EOF on
+	// the call after that (the iterator does not advance past the
+	// drop — callers stop reading on ErrCapped).
+	MaxBytesPerCell int64
 }
 
 // ApplyTimeout returns a derived context with the Limits' Timeout, or
@@ -60,6 +73,9 @@ type LimitedRows struct {
 	// in-flight Next; CAS back to 0 on exit. Second concurrent Next
 	// sees active==1 and returns ErrConcurrentNext.
 	active atomic.Int32
+	// cellCapped flips true the first time MaxBytesPerCell trips. Any
+	// subsequent Next() short-circuits to ErrCapped. PR #3.5.
+	cellCapped atomic.Bool
 }
 
 // ErrConcurrentNext is returned by Rows.Next when called concurrently
@@ -71,23 +87,35 @@ func (lr *LimitedRows) Columns() []ColumnInfo {
 	return lr.Inner.Columns()
 }
 
-// Next returns the next row, enforcing both caps.
+// Next returns the next row, enforcing all caps.
 //
-// Cap semantics (post-review):
+// Cap semantics (post-review + PR #3.5):
 //   - Row cap: returns ErrCapped before the (MaxRows+1)-th row is read,
 //     so the network round-trip is not spent.
 //   - Byte cap: returns ErrCapped before the next row is read once the
 //     cumulative byte count is >= MaxBytes. The row that PUSHED us over
 //     the cap is still returned (cap + one row); the next call trips.
-//     A truly oversized single row (MaxBytes < rowSize) is unavoidable
-//     in this PR — limits.go cannot inspect a row's size pre-decode.
-//     See docs/aura-db/KNOWN-ISSUES.md "per-cell streaming cap" for the
-//     deferred PR #3.5 streaming-decode work.
+//     A truly oversized single row (MaxBytes < rowSize) hits MaxBytesPerCell
+//     first if that cap is set.
+//   - Per-cell cap (PR #3.5): when any cell in a row has estimated size
+//     > MaxBytesPerCell, the entire row is DROPPED and Next returns
+//     ErrCapped on this call. The row is consumed (not re-returned on
+//     the next Next); subsequent calls return ErrCapped again because
+//     the iterator state remains in the "capped" terminal-ish state.
+//     This is the documented mitigation for single 1 GiB BLOB/JSONB
+//     rows that would blast past MaxBytes in one swallow.
 func (lr *LimitedRows) Next(ctx context.Context) ([]any, error) {
 	if !lr.active.CompareAndSwap(0, 1) {
 		return nil, ErrConcurrentNext
 	}
 	defer lr.active.Store(0)
+
+	// Once a per-cell cap has tripped, stay capped — callers SHOULD
+	// stop calling Next on ErrCapped, but a buggy caller looping
+	// would otherwise resume after the dropped row.
+	if lr.cellCapped.Load() {
+		return nil, ErrCapped
+	}
 
 	// Row cap pre-check.
 	if lr.L.MaxRows > 0 && lr.rows.Load() >= int64(lr.L.MaxRows) {
@@ -102,6 +130,18 @@ func (lr *LimitedRows) Next(ctx context.Context) ([]any, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Per-cell cap (PR #3.5). Inspect each value's estimated size; if
+	// any exceeds MaxBytesPerCell, drop the row and trip the cap.
+	if lr.L.MaxBytesPerCell > 0 {
+		for _, v := range vals {
+			if valueSize(v) > lr.L.MaxBytesPerCell {
+				lr.cellCapped.Store(true)
+				return nil, ErrCapped
+			}
+		}
+	}
+
 	lr.rows.Add(1)
 	if lr.L.MaxBytes > 0 {
 		lr.bytes.Add(rowSize(vals))

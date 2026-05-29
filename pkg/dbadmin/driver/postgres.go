@@ -55,31 +55,67 @@ func (p *postgresDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, cr
 
 	hostPort := net.JoinHostPort(c.Host, fmt.Sprintf("%d", c.Port))
 
-	var tun *Tunnel
-	dialAddr := hostPort
+	// pgPort is the port pgx will dial. For TCP tunnels it's parsed
+	// from LocalAddr; for unix tunnels (PR #3.5 default), we pick a
+	// synthetic port and the tunnel listens on ".s.PGSQL.<port>" so
+	// pgx's "Host=dir, Port=port" convention finds it.
+	var (
+		tun          *Tunnel
+		tHost        string
+		tPortInt     int
+		usingUnixSkt bool
+	)
 	if c.SSHTunnel != nil {
-		t, err := OpenTunnel(ctx, c.SSHTunnel, hostPort, poolSize+2)
+		// Synthetic port for the unix-socket convention. Stays
+		// inside the per-Connection directory so collisions across
+		// connections don't matter; we still pick a non-privileged
+		// number for hygiene.
+		synthPort := uint16(5432)
+		if c.Port > 0 && c.Port < 65536 {
+			synthPort = uint16(c.Port)
+		}
+		t, err := OpenTunnelWithOptions(ctx, c.SSHTunnel, hostPort, poolSize+2, TunnelOptions{
+			SocketName:   string(c.ID),
+			PostgresPort: synthPort,
+			IdleTimeout:  c.QueryIdleTimeout,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("driver/postgres: open tunnel: %w", err)
 		}
 		tun = t
-		dialAddr = t.LocalAddr()
-	}
-
-	tHost, tPort, err := net.SplitHostPort(dialAddr)
-	if err != nil {
-		if tun != nil {
-			_ = tun.Close()
+		switch t.Network() {
+		case "unix":
+			// LocalAddr is the directory; pass it as Host. pgx
+			// detects an absolute path and dials the matching
+			// .s.PGSQL.<port> socket inside.
+			tHost = t.LocalAddr()
+			tPortInt = int(synthPort)
+			usingUnixSkt = true
+		default:
+			// TCP fallback path.
+			h, p, perr := net.SplitHostPort(t.LocalAddr())
+			if perr != nil {
+				_ = tun.Close()
+				return nil, fmt.Errorf("driver/postgres: bad tunnel addr %q: %w", t.LocalAddr(), perr)
+			}
+			tHost = h
+			if _, perr := fmt.Sscanf(p, "%d", &tPortInt); perr != nil || tPortInt == 0 {
+				_ = tun.Close()
+				return nil, fmt.Errorf("driver/postgres: bad tunnel port %q", p)
+			}
 		}
-		return nil, fmt.Errorf("driver/postgres: bad addr %q: %w", dialAddr, err)
-	}
-	tPortInt := 0
-	if _, perr := fmt.Sscanf(tPort, "%d", &tPortInt); perr != nil || tPortInt == 0 {
-		if tun != nil {
-			_ = tun.Close()
+	} else {
+		// Direct: parse the configured host:port.
+		h, p, perr := net.SplitHostPort(hostPort)
+		if perr != nil {
+			return nil, fmt.Errorf("driver/postgres: bad addr %q: %w", hostPort, perr)
 		}
-		return nil, fmt.Errorf("driver/postgres: bad port %q", tPort)
+		tHost = h
+		if _, perr := fmt.Sscanf(p, "%d", &tPortInt); perr != nil || tPortInt == 0 {
+			return nil, fmt.Errorf("driver/postgres: bad port %q", p)
+		}
 	}
+	_ = usingUnixSkt // reserved for future TLS-suppression on unix sockets
 
 	sslMode := strings.ToLower(c.SSLMode)
 	if sslMode == "" {
@@ -168,10 +204,20 @@ func (p *postgresDriverImpl) Open(ctx context.Context, c *dbadmin.Connection, cr
 }
 
 // postgresConn wraps a pgxpool.Pool + optional tunnel.
+//
+// tunnel is typed as an io.Closer-ish interface (tunnelCloser) to keep
+// the Close path testable without standing up a real SSH server. In
+// production this is always a *Tunnel; tests can substitute a stub.
 type postgresConn struct {
 	pool   *pgxpool.Pool
-	tunnel *Tunnel
+	tunnel tunnelCloser
 	conn   *dbadmin.Connection
+}
+
+// tunnelCloser abstracts the Tunnel.Close() interaction so unit tests
+// can substitute an error-returning stub. PR #3.5.
+type tunnelCloser interface {
+	Close() error
 }
 
 func (c *postgresConn) Query(ctx context.Context, limits Limits, sqlText string, args ...any) (Rows, error) {
@@ -210,7 +256,15 @@ func (c *postgresConn) ServerVersion(ctx context.Context) (string, error) {
 func (c *postgresConn) Close() error {
 	var firstErr error
 	if c.pool != nil {
-		c.pool.Close()
+		// PR #3.5: pgxpool.Close has no return today, but if a future
+		// pgx release surfaces shutdown errors (e.g., flushing
+		// outstanding writes failing on a degraded socket) the
+		// closePoolHook below picks it up. The hook is a package-level
+		// var so tests can stub it without instantiating a real
+		// pgxpool.Pool. Mirrors mysqlConn.Close's firstErr ceremony.
+		closePoolHook(&firstErr, func() {
+			c.pool.Close()
+		})
 	}
 	if c.tunnel != nil {
 		if err := c.tunnel.Close(); err != nil && firstErr == nil {
@@ -218,6 +272,15 @@ func (c *postgresConn) Close() error {
 		}
 	}
 	return firstErr
+}
+
+// closePoolHook invokes the real pgxpool.Close (the void closer arg) and
+// gives a future pgx upgrade a single place to capture an error return.
+// Test code can replace closePoolHook with a func that writes a sentinel
+// error into *firstErr to exercise the propagation path. PR #3.5.
+var closePoolHook = func(firstErr *error, closer func()) {
+	closer()
+	// pgxpool.Close() is void today; nothing to write to firstErr.
 }
 
 // postgresRows wraps pgx.Rows with column metadata + a type-aware Next.

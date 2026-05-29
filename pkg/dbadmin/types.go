@@ -262,6 +262,19 @@ type Connection struct {
 	UseSSL    bool
 	SSLMode   string     // engine-specific: "require"/"verify-full"/etc.
 	SSHTunnel *SSHTunnel // optional
+
+	// QueryIdleTimeout caps how long an SSH-tunnel forwarded connection
+	// may sit idle (no Read/Write) before the driver tears it down.
+	// Used as the sliding deadline on idleDeadlineConn. Zero defers to
+	// the engine policy (min(Config.Query.TimeoutMax, 5min)). Operators
+	// with long-running queries that legitimately stall on a slow
+	// backend can raise this per-connection; values exceeding
+	// Config.Query.TimeoutMax are clamped by the engine.
+	//
+	// Added in PR #3.5 (driver hardening). See docs/aura-db/
+	// KNOWN-ISSUES.md "tunnel: data-copy idle timeout enforcement".
+	QueryIdleTimeout time.Duration
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	Owner     string // user ID who created it (for audit)
