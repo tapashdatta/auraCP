@@ -429,6 +429,111 @@ Everything below is deferred to PR #6.5.
 
 ---
 
+## Source: PR #7 adversarial review (workflow run wf_0543ab7a-d75)
+
+The 4-lens review of the query-history layer (`pkg/dbadmin/history/`)
+produced 37 findings (0 critical, 11 high, 13 medium, 10 low, 3 nit).
+Nine were promoted to MUST-FIX and landed in PR #7 itself: LIKE
+ESCAPE clauses, fenced + comma-rejecting tag storage, redacting
+`Entry.Error`, per-Entry dialect for redaction, default-deny on empty
+`UserID`, `Search` honoring `opts.Tag`, JSON wire-format camelCase,
+unexporting `SQLiteStore` (Open now returns `Store`), and deleting
+dead `errors.Is` import-keeper noise. The rest are deferred below.
+
+### Deferred high findings — PR #7.5
+
+#### H4 — RedactSensitiveInline misses non-standard credential forms
+
+`classifier.RedactSensitiveInline` only covers `CREATE/ALTER USER …
+IDENTIFIED BY '<pw>'` and `CREATE/ALTER ROLE … WITH PASSWORD '<pw>'`.
+It does not redact:
+
+- MariaDB `IDENTIFIED VIA <plugin> AS '<hash>'`
+- Postgres `CREATE SUBSCRIPTION … CONNECTION 'postgresql://u:p@…'`
+- `dblink_connect('host=… user=… password=…')`
+- `postgresql://`, `mysql://`, `mongodb://` URIs in any DDL
+- `COPY FROM PROGRAM 'curl -u user:pw https://…'`
+
+Documented in `pkg/dbadmin/history/doc.go` so operators aren't
+surprised; the fix is a classifier upgrade in PR #7.5.
+
+#### H8 — LIKE fallback Search is silent O(n) scan
+
+When the SQLite build lacks FTS5, Search degrades to LIKE without
+telling the caller. At 10⁵ entries the LIKE branch is full-table
+scan; at 10⁶ it stalls the UI. Fix in PR #7.5:
+
+- `OpenOpts{RequireFTS5 bool}` that errors at Open time if FTS5
+  isn't available.
+- `Store.HasFTS() bool` so callers can warn in the UI when the
+  search is running degraded.
+
+#### H9 — No retention enforcement; storage grows unbounded
+
+The package exposes `DeleteOlderThan` but the engine layer doesn't
+call it on a schedule yet. A 90-day-old install can sit on millions
+of rows. Fix in PR #7.5:
+
+- `MaxRows` ceiling enforced at Append time (oldest evicted).
+- `StartRetentionLoop(ctx, period, cutoff)` helper that the engine
+  wires into the panel's periodic-task scheduler.
+- Chunked `DeleteOlderThan` (1000-row batches) so a 365-day-overdue
+  sweep doesn't lock the DB for a multi-second window.
+
+### Deferred medium findings — PR #7.5
+
+- Negative `opts.Offset` in `Search` not validated (`List` validates
+  but Search doesn't).
+- `:memory:` detection is string-equality only —
+  `file::memory:?cache=shared` falls into the WAL branch and
+  produces a malformed DSN.
+- FTS5 quote-wrap doesn't cap input length or strip control bytes.
+- `bm25` raw score on short SQL fragments is degenerate; no
+  deterministic tiebreaker beyond `executed DESC`.
+- `MaxOpenConns=4` + 5s `busy_timeout` can stall the panel UI for
+  the full 5s under contention.
+- FTS5 storage overhead (~1.8× the entries table) is undocumented
+  and there's no opt-out.
+- `ListOpts.IncludeClass` is a workaround for the zero-value
+  `Class` problem; switch to `Class *classifier.QueryClass`.
+- The `tags` column should be normalized to a separate `entry_tags`
+  table with `PRIMARY KEY(tag, entry_id)` to fix the unindexed
+  full-scan on Tag filter at scale.
+- bm25 weights + deterministic tiebreaker (currently `bm25 ASC,
+  executed DESC` — operators may expect explicit weighting).
+- Write semaphore to bound concurrent SQLite writers.
+- Prepared-statement cache for `Append` (current per-call `?`
+  binding doesn't reuse a `*sql.Stmt`).
+- Partial index for admin `OnlyStarred` listings (current index
+  only covers `(user_id, starred, executed DESC) WHERE starred=1`,
+  which isn't usable when admin views run without a user filter).
+- `initSchema` FTS block swallows trigger-creation errors alongside
+  missing-FTS5 errors — should split the probe from the trigger
+  install so the latter surfaces.
+
+### Deferred low + nit findings — PR #7.5
+
+- Concurrency TOCTOU between `closed.Load()` and `db.ExecContext`
+  in every op (acceptable today; the second call returns
+  `sql.ErrConnDone`, but cleaner to lock-and-check).
+- `MaxSQLLength` truncates at byte boundary; can split a UTF-8 rune.
+- `Append`'s `IsZero()` guard doesn't catch `time.Unix(0,0)` or
+  pre-1970 timestamps (caller-supplied junk passes through).
+- Partial starred index `(user_id, starred, executed) WHERE
+  starred=1` unusable for admin-mode listings that scan all users.
+- Append doesn't use a held `*sql.Stmt` — per-conn cache is cold
+  under bursty load.
+- `MaxSQLLength=256KiB` silently truncates 50-statement migrations
+  pasted whole.
+- `doc.go` Concurrency section doesn't mention that `:memory:`
+  databases pin to a single connection.
+- `DeleteOlderThan` returns only the count; an `IDs callback` for
+  audit parity with the panel's existing delete flows is a nit.
+- Error sentinel naming style consistency between `ErrNotFound`,
+  `ErrInvalidInput`, `ErrClosed` — fine as-is; nit (no-op).
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics
