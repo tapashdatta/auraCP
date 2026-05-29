@@ -16,6 +16,7 @@
   import { classifyKind, renderCell } from '../lib/rowgrid/cellRenderers.js'
   import { keyToAction } from '../lib/rowgrid/keyboard.js'
   import { toastBus, dismissToast } from '../lib/rowgrid/toasts.svelte.js'
+  import ExportModal from '../lib/components/ExportModal.svelte'
 
   // Svelte action for autofocus + select-all on edit-input mount. Avoids
   // the autofocus attribute (which Svelte's a11y rules flag) while keeping
@@ -256,6 +257,42 @@
     const idx = grid.view.sortKeys.findIndex((s) => s.col === colName)
     return { dir: k.dir, index: grid.view.sortKeys.length > 1 ? idx + 1 : null }
   }
+
+  // Export modal state + menu state (PR #16).
+  let exportMenuOpen = $state(false)
+  let exportOpen = $state(false)
+  /** @type {'csv'|'ndjson'|'sql'} */
+  let exportFormat = $state('csv')
+  /** @type {HTMLButtonElement|undefined} */
+  let exportBtn = $state(undefined)
+
+  function openExportModal(fmt) {
+    exportFormat = fmt
+    exportMenuOpen = false
+    exportOpen = true
+  }
+
+  // Build the filter / sort payload the export endpoint expects from
+  // the grid's current view state. We translate the grid's filter Map
+  // (col → {raw,op,value,kind,ok}) into the wire shape — only
+  // well-formed filters with a non-empty value are included.
+  const exportFilterPayload = $derived.by(() => {
+    if (!grid) return []
+    const out = []
+    for (const [col, f] of grid.view.filters) {
+      if (!f || !f.ok || f.value == null || f.value === '') continue
+      out.push({ column: col, op: f.op || '=', value: f.value })
+    }
+    return out
+  })
+  const exportSortPayload = $derived.by(() => {
+    if (!grid) return []
+    return grid.view.sortKeys.map((s) => ({ column: s.col, descending: s.dir === 'desc' }))
+  })
+  const exportColumns = $derived.by(() => {
+    if (!grid) return []
+    return grid.meta.columns.map((c) => c.name)
+  })
 </script>
 
 <div
@@ -310,6 +347,37 @@
       {#if grid.view.filters.size > 0}
         <button class="btn btn--ghost btn--sm" onclick={() => grid.clearAllFilters()}>Clear filters</button>
       {/if}
+      <div class="rg-toolbar__export" style="position:relative">
+        <button
+          bind:this={exportBtn}
+          class="btn btn--sm"
+          aria-haspopup="menu"
+          aria-expanded={exportMenuOpen}
+          aria-controls="export-menu"
+          onclick={() => { exportMenuOpen = !exportMenuOpen }}
+          title="Export"
+        >Export ▾</button>
+        {#if exportMenuOpen}
+          <ul
+            id="export-menu"
+            class="export-menu"
+            role="menu"
+            onkeydown={(e) => {
+              if (e.key === 'Escape') { exportMenuOpen = false; exportBtn?.focus() }
+            }}
+          >
+            <li role="none">
+              <button role="menuitem" type="button" class="export-menu__item" onclick={() => openExportModal('csv')}>Download CSV</button>
+            </li>
+            <li role="none">
+              <button role="menuitem" type="button" class="export-menu__item" onclick={() => openExportModal('ndjson')}>Download NDJSON</button>
+            </li>
+            <li role="none">
+              <button role="menuitem" type="button" class="export-menu__item" onclick={() => openExportModal('sql')}>Download SQL</button>
+            </li>
+          </ul>
+        {/if}
+      </div>
     </div>
 
     <!-- Body — single scroller. Header + filter sit inside as sticky-top. -->
@@ -518,6 +586,19 @@
       </select>
       {#if grid.rows.loading}<span class="spinner" aria-label="loading"></span>{/if}
     </div>
+
+    {#if id && schema && table}
+      <ExportModal
+        bind:open={exportOpen}
+        connId={id}
+        schema={schema}
+        table={table}
+        columns={exportColumns}
+        filter={exportFilterPayload}
+        sort={exportSortPayload}
+        defaultFormat={exportFormat}
+      />
+    {/if}
 
     <!-- Toasts — a11y-10: per-toast role + aria-live so errors preempt the
          SR queue (alert/assertive) while info/success stay polite. The

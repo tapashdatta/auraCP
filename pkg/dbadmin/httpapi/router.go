@@ -100,7 +100,23 @@ func (s *server) routes() http.Handler {
 	mux.Handle("DELETE /connections/{id}/saved-queries/{sid}", write(defaultTimeout, handleDeleteSaved(s)))
 
 	// Export/import.
-	mux.Handle("POST /connections/{id}/export", write(queryTimeout, handleExport(s)))
+	//
+	// The export route manages its own deadline via context.WithTimeout
+	// inside the handler (default 1h) — full-table exports of 1M rows
+	// cannot finish under the 60s queryTimeout. We also bump the body
+	// cap to 4 MiB so the structured filter / sort / columns payload
+	// has room (the SQL editor's 1 MiB cap is for raw statements; an
+	// export request can legitimately ship a large filter AST).
+	mux.Handle("POST /connections/{id}/export", chain(handleExport(s),
+		shutdownGate(s),
+		requestID(),
+		recoverer(s),
+		maxBody(4<<20),
+		authn(s),
+		csrf(s),
+		rateLimit(s, rateClassMutating),
+		audit(s),
+	))
 	mux.Handle("POST /connections/{id}/import", chain(handleImport(s),
 		shutdownGate(s),
 		requestID(),

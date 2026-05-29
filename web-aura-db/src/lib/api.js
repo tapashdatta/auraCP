@@ -212,6 +212,158 @@ export class AuraDBClient {
   // Audit
   /** @param {string} id */
   audit(id)                      { return request(`/connections/${enc(id)}/audit`) }
+
+  /**
+   * Stream a table export and trigger a file download via a Blob URL.
+   * Sends a POST with the structured export request — the backend
+   * builds the SELECT server-side from validated identifiers, never
+   * accepts raw SQL. The response body is the file contents
+   * (Content-Disposition: attachment); we read it as a ReadableStream
+   * so progress can be observed without buffering the full file in
+   * memory before the user sees activity.
+   *
+   * @param {string} connId
+   * @param {{
+   *   schema: string,
+   *   table: string,
+   *   format: 'csv'|'ndjson'|'sql',
+   *   columns?: string[],
+   *   filter?: Array<{column:string, op:string, value?:any}>,
+   *   sort?: Array<{column:string, descending?:boolean}>,
+   *   limit?: number,
+   *   includeHeader?: boolean,
+   *   filename?: string,
+   *   signal?: AbortSignal,
+   *   onProgress?: (bytes:number)=>void,
+   * }} opts
+   * @returns {Promise<{filename:string, bytes:number, rowCap:number|null, jobId:string|null, truncated:boolean, serverError:string}>}
+   */
+  async exportTable(connId, opts) {
+    if (!connId || !opts || !opts.schema || !opts.table || !opts.format) {
+      throw new AuraDBError(0, 'invalid-input', 'connId, schema, table, format required')
+    }
+    /** @type {Record<string,any>} */
+    const body = {
+      schema: opts.schema,
+      table: opts.table,
+      format: opts.format,
+    }
+    if (opts.columns) body.columns = opts.columns
+    if (opts.filter) body.filter = opts.filter
+    if (opts.sort) body.sort = opts.sort
+    if (typeof opts.limit === 'number' && opts.limit > 0) body.limit = opts.limit
+    if (typeof opts.includeHeader === 'boolean') body.includeHeader = opts.includeHeader
+    if (opts.filename) body.filename = opts.filename
+
+    const res = await fetch(`${BASE}/connections/${enc(connId)}/export`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrfToken(),
+      },
+      body: JSON.stringify(body),
+      credentials: 'same-origin',
+      signal: opts.signal,
+    })
+    if (res.status === 401) {
+      if (typeof location !== 'undefined') {
+        const ret = '/dbadmin/' + (location.hash || '')
+        location.href = '/login?next=' + encodeURIComponent(ret)
+      }
+      throw new AuraDBError(401, 'unauthenticated', 'session expired')
+    }
+    if (!res.ok) {
+      let env = /** @type {any} */ ({})
+      try { env = await res.json() } catch { /* non-JSON */ }
+      const e = (env && typeof env === 'object' && env.error && typeof env.error === 'object') ? env.error : env
+      throw new AuraDBError(
+        res.status,
+        e.code || env.code || 'unknown',
+        e.message || env.message || res.statusText || 'export failed',
+        e.details !== undefined ? e.details : (e.detail !== undefined ? e.detail : env.detail),
+        e.request_id || env.request_id,
+      )
+    }
+
+    const filename = parseContentDispositionFilename(res.headers.get('content-disposition') || '')
+      || `${opts.table}.${opts.format}`
+    const rowCapHdr = res.headers.get('x-aura-export-rowcap')
+    const rowCap = rowCapHdr ? Number(rowCapHdr) : null
+    const jobId = res.headers.get('x-aura-export-jobid')
+
+    // Read the stream so the UI can show byte progress; chunk into a Blob.
+    /** @type {Uint8Array[]} */
+    const chunks = []
+    let bytes = 0
+    if (res.body && typeof res.body.getReader === 'function') {
+      const reader = res.body.getReader()
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        if (value) {
+          chunks.push(value)
+          bytes += value.byteLength
+          if (opts.onProgress) opts.onProgress(bytes)
+        }
+      }
+    } else {
+      const ab = await res.arrayBuffer()
+      chunks.push(new Uint8Array(ab))
+      bytes = ab.byteLength
+      if (opts.onProgress) opts.onProgress(bytes)
+    }
+
+    const ct = res.headers.get('content-type') || 'application/octet-stream'
+    triggerBlobDownload(chunks, ct, filename)
+
+    // ux-3 + C2/C3 (PR #16): the server surfaces truncation + mid-stream
+    // errors via response trailers (X-Truncated, X-Export-Error). Modern
+    // browsers expose trailers via Response.headers AFTER the body is
+    // fully consumed — so reading them here is well-defined. The values
+    // are surfaced to callers so the UI can render a "file may be
+    // incomplete" warning even when the HTTP status was 200.
+    const truncated = (res.headers.get('x-truncated') || '').toLowerCase() === 'true'
+    const serverError = res.headers.get('x-export-error') || ''
+    return { filename, bytes, rowCap, jobId, truncated, serverError }
+  }
+}
+
+/**
+ * Parse the filename* (RFC 5987) or filename parameter out of a
+ * Content-Disposition header value. Returns '' when neither is set.
+ * @param {string} header
+ * @returns {string}
+ */
+function parseContentDispositionFilename(header) {
+  // filename*= takes priority (handles non-ASCII via UTF-8 encoding).
+  const utf = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)
+  if (utf) {
+    try { return decodeURIComponent(utf[1]) } catch { /* fall through */ }
+  }
+  const plain = header.match(/filename\s*=\s*"?([^";]+)"?/i)
+  if (plain) return plain[1]
+  return ''
+}
+
+/**
+ * Trigger a browser download for the assembled chunks. Uses a Blob URL
+ * + anchor click; revokes the URL on the next tick.
+ * @param {Uint8Array[]} chunks
+ * @param {string} contentType
+ * @param {string} filename
+ */
+function triggerBlobDownload(chunks, contentType, filename) {
+  if (typeof document === 'undefined') return
+  const blob = new Blob(chunks, { type: contentType })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }, 0)
 }
 
 export const api = new AuraDBClient()

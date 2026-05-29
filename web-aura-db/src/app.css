@@ -1356,6 +1356,37 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 .result-grid__cell--head { background: transparent; color: var(--text-1, #e6e6e6); }
 .result-grid__row--streaming { color: var(--accent-copper, #c46a3a); font-style: italic; }
 
+/* ux-2 (PR #16): ResultGrid Export toolbar — per-result-tab client-side
+   CSV/NDJSON export for SqlEditor. */
+.result-grid__toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; position: relative;
+  border-bottom: 1px solid var(--border, rgba(0,0,0,0.08));
+}
+.result-grid__exportBtn {
+  font-size: 0.85em; padding: 2px 8px;
+  background: transparent; border: 1px solid var(--border, rgba(0,0,0,0.15));
+  border-radius: 4px; cursor: pointer; color: inherit;
+}
+.result-grid__exportBtn:hover { background: var(--hover, rgba(0,0,0,0.04)); }
+.result-grid__exportMenu {
+  position: absolute; top: calc(100% + 2px); left: 6px;
+  display: grid; gap: 4px; padding: 8px;
+  background: var(--panel-bg, #fff); color: inherit;
+  border: 1px solid var(--border, rgba(0,0,0,0.15));
+  border-radius: 4px; min-width: 220px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 10;
+}
+.result-grid__exportRow { display: flex; align-items: center; gap: 6px; font-size: 0.9em; }
+.result-grid__exportGo {
+  margin-top: 4px; padding: 4px 8px; cursor: pointer;
+  background: var(--primary, #2563eb); color: #fff;
+  border: none; border-radius: 4px; font-size: 0.85em;
+}
+.result-grid__exportGo[disabled] { opacity: 0.5; cursor: not-allowed; }
+.result-grid__exportNote { font-size: 0.75em; opacity: 0.7; }
+.result-grid__exportMsg { font-size: 0.8em; opacity: 0.75; margin-left: 6px; }
+
 /* MessagePanel */
 .msg {
   padding: 12px 16px;
@@ -1900,3 +1931,35 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 @media (prefers-reduced-motion: reduce) {
   .flame-row__bar { transition: none; }
 }
+
+/* ============================================================
+   Export menu (PR #16) — table-screen toolbar dropdown.
+   Reuses the dropdown look but stacks below the trigger.
+   ============================================================ */
+.export-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--surface-elev);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  padding: 4px 0;
+  z-index: 40;
+  min-width: 180px;
+  list-style: none;
+}
+.export-menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: var(--fs-body);
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.export-menu__item:hover,
+.export-menu__item:focus { background: var(--surface-hover); outline: none; }

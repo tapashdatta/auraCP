@@ -245,6 +245,79 @@ func (o *Operator) Read(ctx context.Context, opts ReadOpts) (*ReadResult, error)
 	return res, nil
 }
 
+// BuildSelectOpts mirrors ReadOpts but is purely a SQL-building input —
+// no Operator state, no row caps, no execution. Used by callers (e.g.
+// the streaming HTTP export handler) that need the rows package's
+// identifier validation + engine-aware quoting but want to drive
+// driver.Conn.Query themselves with their own Limits.
+type BuildSelectOpts struct {
+	Engine  dbadmin.EngineKind
+	Schema  string
+	Table   string
+	Columns []string
+	Filter  []Predicate
+	Sort    []SortKey
+
+	// Limit / Offset are written verbatim into the generated SQL. The
+	// caller is responsible for choosing safe values; the helper does
+	// NOT consult Operator.MaxRows (so streaming exports can request
+	// orders of magnitude more rows than rows.Read allows).
+	Limit  int
+	Offset int
+}
+
+// BuildSelect produces a parameterized SELECT statement + bind args
+// from validated identifier inputs. Identifier safety is enforced here
+// — every schema/table/column name is run through ValidateIdentifier
+// before reaching buildSelect's quoter. Returns ErrInvalidPredicate or
+// schema.ErrInvalidIdentifier on bad input.
+//
+// Callers MUST execute the returned SQL via driver.Conn.Query, never
+// concatenate it with anything else. Values come back via the args
+// slice and are never inlined into the SQL text.
+func BuildSelect(opts BuildSelectOpts) (string, []any, error) {
+	switch opts.Engine {
+	case dbadmin.EngineMariaDB, dbadmin.EnginePostgres:
+		// supported
+	default:
+		return "", nil, fmt.Errorf("rows: unsupported engine %v", opts.Engine)
+	}
+	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
+		return "", nil, err
+	}
+	if err := schema.ValidateIdentifier(opts.Table); err != nil {
+		return "", nil, err
+	}
+	for _, c := range opts.Columns {
+		if err := schema.ValidateIdentifier(c); err != nil {
+			return "", nil, err
+		}
+	}
+	for _, s := range opts.Sort {
+		if err := schema.ValidateIdentifier(s.Column); err != nil {
+			return "", nil, err
+		}
+	}
+	for _, p := range opts.Filter {
+		if err := schema.ValidateIdentifier(p.Column); err != nil {
+			return "", nil, err
+		}
+		if err := validateOp(p.Op); err != nil {
+			return "", nil, err
+		}
+	}
+	if opts.Limit < 0 {
+		return "", nil, fmt.Errorf("rows: Limit must be >= 0 (got %d)", opts.Limit)
+	}
+	if opts.Offset < 0 {
+		return "", nil, fmt.Errorf("rows: offset must be >= 0 (got %d)", opts.Offset)
+	}
+	if len(opts.Columns) == 0 {
+		return "", nil, fmt.Errorf("rows: BuildSelect requires explicit column list")
+	}
+	return buildSelect(opts.Engine, opts.Schema, opts.Table, opts.Columns, opts.Filter, opts.Sort, opts.Limit, opts.Offset)
+}
+
 // Count returns the row count of (Schema, Table) under Filter. Useful
 // for the grid's pagination footer.
 func (o *Operator) Count(ctx context.Context, opts ReadOpts) (int64, error) {

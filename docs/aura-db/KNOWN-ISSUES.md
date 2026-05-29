@@ -1812,6 +1812,236 @@ its onclick). The remaining 37 findings are deferred below.
 
 ---
 
+## Source: PR #16 adversarial review (workflow run wf_0d867403-4ed)
+
+The 4-lens review of the table-data export layer
+(`pkg/dbadmin/export/` CSV / NDJSON / SQL encoders + handler,
+`internal/api/dbadmin/handlers_export.go` streaming pipeline +
+per-user export semaphore + 1 GiB / 1M-row caps + audit START /
+FINISH emit, `web-aura-db/` ExportModal + api.exportTable +
+TableScreen wiring, BUILD-PLAN §PR #16 acceptance criteria) produced
+46 findings (0 critical, 9 high, 16 medium, 13 low, 8 nit) across
+SECURITY, CORRECTNESS, INTEGRATION_UX, and DESIGN_COHERENCE lenses.
+After dedupe + triage: 9 must-fix items landed in PR #16 itself —
+SEC-1 (CSV formula-injection prefix-quote in `csvCell` for cells
+starting with `=`/`+`/`-`/`@`/tab/CR per the OWASP cheatsheet),
+SEC-2 (denial-path audit emission: `suppressAudit` moved AFTER
+validation + authz so identifier-fuzzing / 403-probe paths leave an
+`export-denied` trace per SECURITY.md §9.1), C1 (encoder Flush()
+exposed on csv / ndjson / sql + called before the cw.BytesWritten()
+probe AND before flushPair's http.Flusher; dead `_ = enc.Close`
+method-value removed — bytes now actually reach the wire mid-stream
+and the 1 GiB cap reads accurate counts), C2 (CSV truncation marker
+no longer a `# truncated…` row that breaks RFC 4180 parsers; surfaced
+via `X-Aura-Export-Truncated` response header + audit outcome flag
+instead; SQL `-- truncated…` and NDJSON `{"$truncated":true}` retained
+because they're valid in those formats), C3 (audit outcome event now
+carries `truncated bool` — operators can distinguish a 1M-row
+runaway-truncation from a 1M-row clean completion), C4 (audit FINISH
+now uses `context.WithoutCancel(r.Context())` + 5s deadline so SQLite
+/ http audit sinks don't drop the record on timeout-during-emit; START
+emit gets the same treatment), ux-1 (ExportModal AbortController
+wired into api.exportTable's existing signal opt; Escape / backdrop
+on the inner Modal now triggers aborter.abort() and an AbortError
+surfaces as `cancelled` rather than a hard error; "Close" relabels
+to "Cancel" while busy so the per-user semaphore is released
+promptly), ux-2 (SqlEditor result-panel export button reusing
+ExportModal with the editor's resolved schema/table/columns — closes
+the BUILD-PLAN §PR #16 acceptance gap for "export from any grid or
+query result"), ux-3 (mid-stream server errors now emit a per-format
+error trailer line — CSV header-suppressed sentinel row, NDJSON
+`{"$error":"<code>"}`, SQL `-- ERROR: <code>` — AND set the
+`X-Aura-Export-Error` HTTP trailer declared via `w.Header().Add(
+"Trailer", ...)` before WriteHeader; api.js scans the tail for the
+sentinel and routes via toastBus, ending the "200 OK + half a CSV
+displayed as success" silent-corruption window). The remaining 37
+findings are deferred below.
+
+### Deferred medium findings — PR #16.5
+
+- **SEC-3 / ux-4** — Content-Disposition `filename*` is not RFC 5987
+  percent-encoded; reason: medium-severity spec violation reinforced
+  across SECURITY, INTEGRATION_UX, and DESIGN lenses (3-lens
+  reinforcement) but no exploit path today because `SanitizeFilename`
+  strips dangerous characters before the header is emitted. Bundle
+  the three duplicate ids into one deferral. **Target:** PR #16.5
+  (RFC 5987 `filename*=UTF-8''<pct-encoded>` per the cheatsheet).
+- **SEC-4** — `exportLockManager.slots` map grows without bound;
+  reason: medium-severity limits issue only material under churning
+  user IDs (federated IdP rotating subjects); single-lens. Stable-ID
+  deployments are unaffected. **Target:** PR #16.5 (TTL eviction or
+  LRU cap on the slots map).
+- **SEC-5** — Byte-cap enforced post-row → exports can exceed 1 GiB
+  by one row + truncation marker; reason: medium-severity overshoot
+  bounded by single-row width. Tightens automatically once C1 (flush
+  no-op) is applied because `cw.BytesWritten()` then reads accurate
+  counts. **Target:** PR #16.5 (doc + tighten the check to fire
+  before the row write rather than after).
+- **C5** — Start and outcome audit events lack a stable correlation
+  ID; reason: medium forensic-linkage gap — operators must text-match
+  on Statement to pair the START with its FINISH. Single-lens
+  CORRECTNESS finding. **Target:** PR #16.5 (mint a per-export ULID
+  at handler entry; include in both audit emit calls).
+- **C6** — CSV `+Inf` / `-Inf` / `NaN` floats emit invalid cell text;
+  reason: medium-severity format inconsistency — CSV consumers
+  expect either a quoted string or an empty cell, not the literal
+  `+Inf`. No data corruption for finite floats (the common case).
+  Single-lens. **Target:** PR #16.5 (emit empty for NaN / `"Infinity"`
+  string and document the convention).
+- **C7** — NDJSON `$truncated` sentinel collides with a column named
+  `$truncated`; reason: medium-severity edge case with very low
+  likelihood (column names starting with `$` are rare and often
+  disallowed). Single-lens CORRECTNESS finding. **Target:** PR #16.5
+  (namespace as `__auracp_truncated` or move to a separate trailing
+  metadata line).
+- **C8** — Postgres SQL preamble is missing `standard_conforming_strings
+  = on`; reason: medium-severity portability issue — modern Postgres
+  defaults to `on` so the export typically replays correctly, but a
+  legacy 9.0-era target would mis-interpret backslash escapes.
+  Trivial one-line fix; single-lens. **Target:** PR #16.5.
+- **ux-5** — 409 export-in-progress shown as raw error string, no
+  `Retry-After` handling; reason: medium UX polish — functional but
+  ugly. The per-user semaphore returns a clear error envelope but
+  the modal renders the raw text. Single-lens. **Target:** PR #16.5
+  (parse `Retry-After`, render a "another export is running" banner
+  with a countdown).
+- **ux-6** — Empty-result export silently produces a header-only
+  file; reason: medium UX trust issue — not incorrect, but a user
+  who filtered to zero rows gets a CSV with just a header line and
+  no signal that the filter matched nothing. Single-lens. **Target:**
+  PR #16.5 (pre-flight count probe + "0 rows match" confirmation).
+- **ux-7** — Progress meter only shows bytes, no rows / ETA / cancel;
+  reason: medium UX polish — mostly subsumed once ux-1 cancel wiring
+  lands (the must-fix already added the cancel control); rows + ETA
+  on top. Single-lens. **Target:** PR #16.5 (extend the streaming
+  progress event with `rowsWritten` so the modal can render
+  N rows / ~ETA).
+- **ux-8** — ExportModal bundled into the main chunk instead of
+  lazy-loaded; reason: medium perf regression — +3KB gzipped on the
+  initial bundle. Single-lens, doesn't block correctness. **Target:**
+  PR #16.5 (dynamic import + `await import()` in the toolbar handler).
+- **DC-1** — Footer "Close" button is misleading after export
+  completes; reason: medium UX polish — CTA stays "Start export"
+  after success rather than collapsing into a "Done" / auto-close.
+  Single-lens DESIGN finding. **Target:** PR #16.5.
+- **DC-2** — Three menu items open the SAME modal — the format menu
+  is decorative; reason: medium UX confusion — "Export as CSV" /
+  "Export as JSON" / "Export as SQL" all open the same modal where
+  format is selected again. Single-lens design call. **Target:**
+  PR #16.5 (either pre-select the format from the menu, or collapse
+  to one "Export…" entry).
+- **DC-3** — Export trigger uses a Unicode caret inconsistent with
+  the rest of the toolbar; reason: medium visual-consistency issue —
+  the other toolbar dropdowns use the shared `Caret` SVG. Single-lens.
+  **Target:** PR #16.5.
+- **DC-4** — Filter / sort silently apply with no preview in the
+  modal; reason: medium UX surprise — the modal inherits the grid's
+  current filter + sort but doesn't show them, so users can't tell
+  whether a filter is in effect. Single-lens design call, not a
+  correctness gap. **Target:** PR #16.5 (render a "Includes filter:
+  X" pill + a "clear filter" toggle).
+- **DC-5** — No row-count estimate or 1M-cap signalling pre-flight;
+  reason: medium UX gap — related to ux-7 (progress) but distinct in
+  that this is about *before* the export starts. Single-lens design
+  polish. **Target:** PR #16.5 (pre-flight COUNT(*) capped at 1M+1
+  with a "1M+ rows, will truncate" warning).
+
+### Deferred low findings — PR #16.5
+
+- **SEC-6** — JSON columns ambiguously encoded as base64 in NDJSON;
+  reason: low-severity data-integrity surprise, not a security
+  defect — operators inspecting JSONB columns in an NDJSON export
+  see base64 instead of the nested JSON. Single-lens. **Target:**
+  PR #16.5 (passthrough JSON columns as nested objects when the
+  driver returns them typed).
+- **C10** — SQL trailer ordering with `-- end` followed by
+  `-- truncated` is misleading; reason: low cosmetic — readers can
+  still infer truncation from the markers. **Target:** PR #16.5
+  (reverse the order so the truncation marker precedes `-- end`).
+- **C11 / SEC-7** — Per-user lock is a no-op for empty `userID`;
+  reason: low / defense-in-depth — reinforced across two lenses but
+  both rated low / nit and no current exploit path because authn
+  rejects empty IDs upstream. Bundle the duplicate ids. **Target:**
+  PR #16.5 (panic or `return ErrInternal` on empty userID rather
+  than silently bypassing the cap).
+- **C12** — NDJSON trailing-newline guarantee on an empty result
+  set; reason: low — most NDJSON consumers tolerate a zero-byte
+  file. Doc-only clarification. **Target:** PR #16.5 (document the
+  empty-result contract in `pkg/dbadmin/export/doc.go`).
+- **ux-9** — Filename input lets the user submit names the server
+  silently overrides; reason: low UX surprise — the client accepts
+  arbitrary names but `SanitizeFilename` rewrites them server-side,
+  so the downloaded file's name differs from what the user typed.
+  **Target:** PR #16.5 (mirror the sanitiser client-side so the
+  preview matches what ships).
+- **ux-10** — Two timestamped exports in the same second produce
+  identical filenames; reason: low edge case — second download
+  overwrites the first in the browser's default download dir.
+  **Target:** PR #16.5 (millisecond precision or a short random
+  suffix when the second-resolution timestamp collides).
+- **ux-11** — `onClose` prop wired but `TableScreen` does not pass
+  one; reason: low — no functional bug today because the inner Modal
+  has its own close path; will become a real bug if a future caller
+  expects the prop to fire. **Target:** PR #16.5 (drop the unused
+  prop or pass it through correctly).
+- **DC-7** — Filename input accepts the wrong extension and submits
+  as-is; reason: low UX surprise — typing `foo.txt` for a CSV
+  export ships a `.txt` file with CSV content. **Target:** PR #16.5
+  (auto-correct the extension to match the selected format).
+- **DC-8** — Status region collapses three states (idle / running /
+  done) into identical text; reason: low UX polish — existing
+  `Spinner` / pill components are ready to reuse. **Target:**
+  PR #16.5.
+- **DC-9** — "Include header" CSV-only toggle framing is ambiguous;
+  reason: low UX — the toggle only affects CSV but is rendered at
+  the top of the modal regardless of selected format, suggesting it
+  applies to JSON / SQL too. **Target:** PR #16.5 (show only when
+  format=CSV).
+- **DC-10** — No limit input in the UI despite API support; reason:
+  low capability gap — power users who want a 1000-row preview
+  export must hit the JSON API directly. **Target:** PR #16.5 (add
+  a "Limit" number input).
+- **DC-11** — Column-checkbox grid lacks search / virtualization for
+  wide tables; reason: low — affects 100+ column tables only.
+  **Target:** PR #16.5.
+
+### Deferred nit findings — PR #16.5
+
+- **SEC-8** — Refutation: Audit FINISH event uses cancelled
+  `streamCtx`; reason: nit per the SECURITY lens but reinforced by
+  CORRECTNESS C4 as high — see the C4 must-fix above. This
+  duplicate id is deferred in favor of C4 and exists as a regression
+  guard. **Target:** none (closed by C4).
+- **SEC-9** — Refutation: CSV truncation marker is not RFC 4180
+  valid; reason: nit per the SECURITY lens but reinforced by
+  CORRECTNESS C2 as high — see the C2 must-fix above. Duplicate id
+  deferred. **Target:** none (closed by C2).
+- **C13** — `csv.go` dead-branch from removed `IncludeHeader`
+  plumbing; reason: nit — misleading comment but no functional bug
+  for current callers. **Target:** PR #16.5 (delete the branch +
+  update the doc comment).
+- **C14** — `countingWriter` is not thread-safe; reason: nit — latent
+  only, the current handler is single-goroutine. No observable bug
+  today, but a future fanout would race. **Target:** PR #16.5 (atomic
+  counter or document the single-goroutine invariant).
+- **ux-12** — BUILD-PLAN promised Markdown format; not shipped;
+  reason: nit — doc drift between BUILD-PLAN §PR #16 and the
+  implementation (CSV / NDJSON / SQL ship; Markdown does not).
+  Deferral note in PR-TRACKER suffices. **Target:** PR #16.5
+  (either add the Markdown encoder or strike from BUILD-PLAN).
+- **ux-13** — Direct streaming chosen over the signed-URL handoff
+  pattern is undocumented; reason: nit — architectural deviation
+  from the original SDK §7.3 sketch needs only a BUILD-PLAN note
+  explaining why streaming was preferred for v0.3.0. **Target:**
+  PR #16.5 (BUILD-PLAN explanatory note).
+- **DC-12** — "Start export" label is two words where its neighbours
+  use one; reason: nit copy polish. **Target:** PR #16.5.
+- **DC-13** — ExportModal uses raw `<button>` rather than the shared
+  `Btn` component; reason: nit abstraction drift. **Target:**
+  PR #16.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

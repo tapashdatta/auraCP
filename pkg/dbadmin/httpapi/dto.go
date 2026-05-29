@@ -87,9 +87,32 @@ type classifyRequest struct {
 	Statement string `json:"statement"`
 }
 
+// exportRequest drives POST /connections/{id}/export. The endpoint
+// builds the SELECT server-side from validated identifier inputs; it
+// does NOT accept raw SQL. Format selects the on-wire serialization.
 type exportRequest struct {
-	Statement string `json:"statement"`
-	Format    string `json:"format"`
+	Schema        string             `json:"schema"`
+	Table         string             `json:"table"`
+	Columns       []string           `json:"columns,omitempty"`
+	Filter        []exportPredicate  `json:"filter,omitempty"`
+	Sort          []exportSortKey    `json:"sort,omitempty"`
+	Format        string             `json:"format"`
+	Limit         int                `json:"limit,omitempty"`
+	IncludeHeader *bool              `json:"includeHeader,omitempty"` // CSV only
+	Filename      string             `json:"filename,omitempty"`
+}
+
+// exportPredicate mirrors rows.Predicate on the wire.
+type exportPredicate struct {
+	Column string `json:"column"`
+	Op     string `json:"op"`
+	Value  any    `json:"value,omitempty"`
+}
+
+// exportSortKey mirrors rows.SortKey on the wire.
+type exportSortKey struct {
+	Column     string `json:"column"`
+	Descending bool   `json:"descending,omitempty"`
 }
 
 type stepUpInitiateRequest struct {
@@ -341,12 +364,6 @@ type savedQueryDTO struct {
 	Statement string    `json:"statement"`
 	Tags      []string  `json:"tags"`
 	CreatedAt time.Time `json:"createdAt"`
-}
-
-type exportResponse struct {
-	SignedURL string    `json:"signedUrl"`
-	Expires   time.Time `json:"expires"`
-	JobID     string    `json:"jobId"`
 }
 
 type importResponse struct {
