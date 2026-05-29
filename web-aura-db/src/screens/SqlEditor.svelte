@@ -18,7 +18,7 @@
   // it). sql-formatter is dynamically imported only when Format is hit.
 
   import { onMount, onDestroy } from 'svelte'
-  import { routeState } from '../lib/router.svelte.js'
+  import { routeState, navigate } from '../lib/router.svelte.js'
   import { api } from '../lib/api.js'
   import { connections } from '../lib/connections.svelte.js'
   import { sqlStream } from '../lib/sqlStream.js'
@@ -336,6 +336,36 @@
     }
   }
 
+  // PR #14: hand off the cursor statement to the EXPLAIN inspector. The
+  // statement travels via sessionStorage (not the URL — explain payloads
+  // can exceed URL length limits + don't need to be shareable yet); the
+  // route push is a clean #/connections/{id}/explain.
+  function openExplain(_view, cursorOverride) {
+    if (!conn) return
+    const stmt = resolveStatement(cursorOverride)
+    if (!stmt) { statusMsg = 'no statement under cursor'; return }
+    let klass = currentClass
+    const p = classifier?.state.parsed
+    if (p) {
+      const m = p.statements.find((st) => st.offset === stmt.start)
+      if (m) klass = m.class
+    }
+    if (klass === 'forbidden') {
+      statusMsg = 'statement is forbidden — refusing'
+      return
+    }
+    try {
+      sessionStorage.setItem('explain:pending', JSON.stringify({
+        connId: id,
+        stmt: stmt.trimmedText,
+        klass,
+        analyze: false,
+        fromHash: typeof location !== 'undefined' ? location.hash : '',
+      }))
+    } catch { /* ignore */ }
+    navigate('/connections/' + encodeURIComponent(id) + '/explain')
+  }
+
   function cancelStillRunning() {
     // EXEC-3: cancel any tab whose exec is still in flight so a
     // rapid double-Execute doesn't race two queries to the server.
@@ -476,6 +506,9 @@
       <Btn variant="primary" onclick={execCurrent} disabled={connLoading || isForbidden}>
         Execute <span class="sql-editor__kbd">⌘↵</span>
       </Btn>
+      <Btn variant="ghost" onclick={openExplain} disabled={connLoading || isForbidden || !currentStatement}>
+        Explain <span class="sql-editor__kbd">⌘E</span>
+      </Btn>
       {#if anyExecuting}
         <Btn variant="danger" onclick={cancelCurrent}>Cancel</Btn>
       {/if}
@@ -500,6 +533,7 @@
             onCursor={(p) => { cursorPos = p }}
             onExecute={(v, pos) => execCurrent(v, pos)}
             onExecuteAll={() => execAll()}
+            onExplain={(v, pos) => openExplain(v, pos)}
             onCancel={cancelCurrent}
             onFormat={formatDoc}
             onSave={saveQuery}

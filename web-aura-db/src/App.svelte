@@ -40,6 +40,25 @@
     if (routeState.name === 'query') ensureSqlEditor()
   })
 
+  // PR #14: ExplainInspectorScreen is lazy-loaded into its own chunk so
+  // the SVG flame-tree + helpers don't bloat the main bundle.
+  /** @type {any} */
+  let ExplainInspectorComp = $state(null)
+  let explainLoading = $state(false)
+  async function ensureExplainInspector() {
+    if (ExplainInspectorComp || explainLoading) return
+    explainLoading = true
+    try {
+      const mod = await import('./screens/ExplainInspectorScreen.svelte')
+      ExplainInspectorComp = mod.default
+    } finally {
+      explainLoading = false
+    }
+  }
+  $effect(() => {
+    if (routeState.name === 'explain') ensureExplainInspector()
+  })
+
   onMount(() => {
     if (!session.hasCookie) {
       navigate('/401')
@@ -73,6 +92,12 @@
         <SqlEditorComp />
       {:else}
         <div style="padding:24px;color:var(--text-mute,#888)">Loading SQL editor…</div>
+      {/if}
+    {:else if routeState.name === 'explain'}
+      {#if ExplainInspectorComp}
+        <ExplainInspectorComp />
+      {:else}
+        <div style="padding:24px;color:var(--text-mute,#888)">Loading EXPLAIN inspector…</div>
       {/if}
     {:else if routeState.name === 'history'}
       <HistoryView />

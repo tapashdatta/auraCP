@@ -150,8 +150,18 @@ export class AuraDBClient {
   // Queries (PR #13)
   /** @param {string} id @param {string} sql @param {unknown[]} [params] */
   runQuery(id, sql, params)      { return request(`/connections/${enc(id)}/query`, { method: 'POST', body: { statement: sql, parameters: params } }) }
-  /** @param {string} id @param {string} sql */
-  explain(id, sql)               { return request(`/connections/${enc(id)}/explain`, { method: 'POST', body: { statement: sql } }) }
+  /**
+   * Issue an EXPLAIN. Returns `{ plan: Plan }`. Pass `{ analyze: true }`
+   * for EXPLAIN ANALYZE; the server re-classifies and rejects analyze on
+   * non-read statements with 422 forbidden_statement.
+   * @param {string} id @param {string} sql @param {{analyze?:boolean}} [opts]
+   */
+  explain(id, sql, opts = {}) {
+    /** @type {{statement:string, analyze?:boolean}} */
+    const body = { statement: sql }
+    if (opts && opts.analyze) body.analyze = true
+    return request(`/connections/${enc(id)}/explain`, { method: 'POST', body })
+  }
   /**
    * Server-side classifier preview (UX only — NEVER a security boundary,
    * the actual security re-classify happens inside handleQuery before

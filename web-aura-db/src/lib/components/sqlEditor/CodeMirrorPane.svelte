@@ -10,11 +10,12 @@
    *   onCursor?: (pos:number)=>void,
    *   onExecute?: (view:any, pos:number)=>void,
    *   onExecuteAll?: (view:any)=>void,
+   *   onExplain?: (view:any, pos:number)=>void,
    *   onCancel?: ()=>void,
    *   onFormat?: ()=>void,
    *   onSave?: ()=>void,
    * }} */
-  let { doc = '', engine, connId, onChange, onCursor, onExecute, onExecuteAll, onCancel, onFormat, onSave } = $props()
+  let { doc = '', engine, connId, onChange, onCursor, onExecute, onExecuteAll, onExplain, onCancel, onFormat, onSave } = $props()
 
   /** @type {HTMLDivElement|undefined} */
   let host = $state(undefined)
@@ -32,6 +33,7 @@
       onCursor,
       onExecute,
       onExecuteAll,
+      onExplain,
       onCancel,
       onFormat,
       onSave,

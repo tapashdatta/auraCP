@@ -1417,6 +1417,197 @@ tightened with a separate `sqlEditor-*` chunk assertion). The remaining
 
 ---
 
+## Source: PR #14 adversarial review (workflow run wf_a73c150e-d26)
+
+The 4-lens review of the EXPLAIN inspector (`web-aura-db/`
+ExplainInspectorScreen + FlameTree/LeftTree, NodeDetail panel,
+MetricsRibbon, AnalyzeToggle confirm-gate, RawPlanView, WarningBanner,
+plan-store + cost/step classification helpers, editor ⇄ inspector
+sessionStorage handoff) produced 48 findings (1 critical, 8 high, 18
+medium, 17 low, 2 nit) across CORRECTNESS, A11Y, DESIGN COHERENCE, and
+INTEGRATION lenses. After dedupe + triage: 10 must-fix items landed in
+PR #14 itself — A11Y-1 (critical: AnalyzeToggle typed-confirm input
+moved INTO the ConfirmDialog body so the destructive-statement gate is
+reachable inside the focus trap; Confirm now `disabled` until the
+operator types `ANALYZE`, with inline case-mismatch error instead of a
+silent return), A11Y-2 (dual-control bypass removed — single
+`role=switch` button owns the toggle; Space on the visual control now
+routes through `onToggle` and the confirm gate, killing the silent
+analyze-prop desync), CORR-1 (MetricsRibbon renders em-dash for
+`executionTimeMs===0` when `analyzed=false` and for MariaDB
+`planningTimeMs===0` so the documented "not measured ≠ zero" wire
+contract holds end-to-end; `fmtMsOrDash(v, { zeroIsMissing: true })`
+added to `explainFormat.js`), CORR-2 (collapsed-parent selection
+orphan: `toggleExpand` now walks `selectedId` upward to the nearest
+visible ancestor on collapse so NodeDetail and aria-activedescendant
+stay in sync with the visible tree), CORR-3 (PG `loops=0`
+never-executed branches render `rowsActual` / `timeTotalMs` / buffers as
+em-dash with a "not executed" tag and are excluded from
+share-of-total denominators — server-side `executed bool` carried on
+Metrics), A11Y-3 (FlameTree drops the wrapper `<g id=flame-node-${id}>`
+and passes the id to FlameNodeBar's root `<g role=treeitem>` so
+aria-activedescendant resolves to the labeled treeitem, fixing NVDA /
+JAWS / VoiceOver row announcements), A11Y-4 (light-theme per-step fg
+overrides extended to cover `.flame-row__relation`, `__index`,
+`__tail`, and `__pct` — not just `__kind` — so the cost-pct chip the
+design relies on as the WCAG-1.4.1 non-color signal stays legible on
+step-4/5 bars), A11Y-6 (ArrowLeft handler restructured to match the
+WAI-ARIA tree pattern: collapse-if-expanded, else select parent —
+collapsed parents no longer re-expand on ArrowLeft), INT-1 (Inspector
+validates `sessionStorage['explain:pending'].connId` against
+`routeState.params.id` on mount and treats a mismatch as "no pending"
+— closes the cross-connection statement-leak path where conn-A's
+statement could run against conn-B's database), INT-2
+(`<ExplainInspectorComp />` wrapped under `{#key routeState.params.id}`
+in App.svelte, mirroring the SqlEditor pattern from PR #13, so
+A→B navigation force-remounts and the breadcrumb can no longer
+mis-attribute a stale plan). The remaining 38 findings are deferred
+below.
+
+### Deferred high findings — PR #14.5
+
+- **DC-1** — Color ramp: copper bleeds across steps 3-5; reason: design
+  coherence — the ordinal ramp under-sells the hottest step but does
+  not cause data misinterpretation; numeric pct chip remains the
+  load-bearing signal. Tune alongside the log-bucket change in
+  CORR-8. **Target:** PR #14.5.
+
+### Deferred medium findings — PR #14.5
+
+- **CORR-7** — `WarningBanner` does not distinguish critical from
+  informational warnings; reason: UI polish — server warnings flow
+  through without a severity field, so the MariaDB no-ANALYZE caveat
+  renders identically to a routine estimate-mismatch note. Cosmetic
+  severity-styling concern; does not corrupt data. Wire-contract
+  change needed (severity field). **Target:** PR #14.5 (pair with
+  A11Y-12).
+- **CORR-8** — `costStep` buckets are linear — collapse to ~2 colors
+  in real plans; reason: design tuning of the color ramp. Tree still
+  functions; numeric pct chip remains the load-bearing signal. Pairs
+  with DC-1. **Target:** PR #14.5.
+- **CORR-9** — `AnalyzeToggle.currentClass` hydrated once and never
+  re-classified; reason: server still enforces the security gate, so
+  this is UX-only. Worst case is a 422 from the server on a
+  deeplinked-then-toggled flow. **Target:** PR #14.5.
+- **DC-2** — Flame `ROW_H=22` breaks the 24px tree grid; reason:
+  visual cadence drift between LeftTree (24px) and FlameTree (22px).
+  Token cleanup. **Target:** PR #14.5.
+- **DC-3** — `HotspotChip` `--estimate` vs `--loops` modifiers have no
+  CSS; reason: two hotspot kinds render identically — operator can
+  read the chip label; pre-attentive distinction is a polish
+  enhancement. **Target:** PR #14.5 (pair with A11Y-14).
+- **DC-5** — Initial `onMount` fetch shows blank screen — no Spinner
+  branch; reason: loading UX — first paint on deeplink is blank for up
+  to 60s. Real gap but isolated; pair with the timeout-UX work in
+  INT-7. **Target:** PR #14.5.
+- **A11Y-5** — `NodeDetail` region `aria-label` is static instead of
+  `aria-labelledby` to selected kind; reason: landmark-rotor
+  announcement polish; `aria-live` atomic already announces selection.
+  **Target:** PR #11.5 (a11y polish pass).
+- **A11Y-7** — Body grid has no narrow-viewport stack; reason:
+  phone/tablet usability gap; inspector is desktop-targeted today.
+  Pair with DC-9. **Target:** PR #11.5 (responsive a11y pass).
+- **A11Y-8** — Truncated bar text has no `title=` for hover reveal;
+  reason: long table-name UX gap; detail panel already shows full
+  text. **Target:** PR #11.5 (a11y polish pass).
+- **A11Y-9** — `MetricsRibbon` warnings popover claims `role=dialog`
+  but lacks trap / Esc / focus restore; reason: either downgrade to
+  disclosure or wrap in Modal. Polish. **Target:** PR #11.5 (Modal
+  pattern reuse).
+- **A11Y-10** — `Cmd+E` is CM6-scoped — no `aria-keyshortcuts`,
+  fallthrough outside editor; reason: discoverability +
+  browser-default conflict (Firefox/Edge address bar). Pair with
+  INT-10. **Target:** PR #14.5.
+- **A11Y-11** — `ExplainInspector` has no `<main>` landmark or skip
+  link; reason: landmark polish — carve into the broader landmark
+  pass for the SPA. **Target:** PR #11.5 (a11y landmark pass).
+- **A11Y-12** — `WarningBanner` `role=status` for all warnings —
+  critical warnings may not be announced; reason: wire-contract change
+  needed (severity field) or one-shot alert escalation. Pair with
+  CORR-7. **Target:** PR #14.5.
+- **INT-3** — `explain:return` `sessionStorage` write is dead code;
+  reason: either remove the write or implement the editor-side read.
+  Polish; current Open-in-Editor button still navigates. **Target:**
+  PR #14.5.
+- **INT-5** — `document.title` not updated on inspector mount; reason:
+  multi-tab UX gap; broader SPA-wide pass. **Target:** PR #14.5.
+- **INT-6** — Browser-back from inspector loses editor `docText`;
+  reason: UX regression for edit-explain-tweak loops; significant but
+  tracked separately. Solving INT-3 (`explain:return`) gets most of
+  the benefit. **Target:** PR #14.5.
+- **INT-7** — No abort/timeout indicator on 60s `api.explain`; reason:
+  loading UX gap; pair with DC-5 (no Spinner branch on initial fetch).
+  **Target:** PR #14.5.
+- **INT-8** — Bare `h` / `r` shortcuts collide with typing & lack
+  discoverability; reason: add modifier or scope to focus; not
+  data-corrupting. **Target:** PR #14.5.
+
+### Deferred low findings — PR #14.5
+
+- **CORR-10** — `fmtRows` boundary at 10,000 vs convention 1,000;
+  reason: cosmetic — document or flip; not blocking. **Target:**
+  PR #14.5.
+- **CORR-11** — `RawPlanView` renders 1MB+ in a single `<pre>`;
+  reason: large-plan polish — lazy-mounted already; freeze only on
+  tab open. **Target:** PR #14.5.
+- **CORR-12** — No inline "tree truncated" marker; reason: banner
+  already mentions truncation; inline marker is enhancement.
+  **Target:** PR #14.5.
+- **CORR-13** — Search input does not highlight matches inline;
+  reason: match-or-dim already works; `<mark>` highlight is
+  enhancement. Also blocked by A11Y-13 (no search UI exists yet).
+  **Target:** PR #14.5.
+- **DC-6** — Unicode chevrons / copy glyph diverge from SVG icon
+  family; reason: cross-platform glyph rendering inconsistency.
+  Polish. **Target:** PR #14.5.
+- **DC-7** — `WarningBanner` dismiss model is per-instance, not
+  per-session; reason: behavioral ambiguity — pick one model; not
+  blocking. **Target:** PR #14.5.
+- **DC-8** — `RAW` is a toggle button, not a TabBar; reason:
+  convention divergence with DataGrip / pgMustard. Affordance polish.
+  **Target:** PR #14.5.
+- **DC-9** — Detail panel fixed 360px — no resize / responsive
+  collapse; reason: width-token cleanup and ResizeHandle reuse. Also
+  partially overlapping with A11Y-7's narrow-viewport need.
+  **Target:** PR #14.5.
+- **DC-10** — Hot? column mostly empty in NodeDetail metrics table;
+  reason: density polish. **Target:** PR #14.5.
+- **A11Y-13** — No `/` search shortcut and no search input UI; reason:
+  search infra is wired in the store but no UI exists. Either build
+  the UI or guard the prop. Follow-up feature. **Target:** PR #14.5.
+- **A11Y-14** — `HotspotChip` relies on `title=` and terse labels;
+  reason: label-quality polish; pair with DC-3. **Target:** PR #11.5
+  (a11y polish pass).
+- **A11Y-15** — Dead `onkeydown` on a `role=presentation` div in
+  `FlameNodeBar`; reason: lint / cleanup — selection-by-keyboard is
+  already owned by the tree handler. **Target:** PR #11.5 (a11y
+  cleanup pass).
+- **A11Y-16** — Enter on a tree leaf is a no-op; reason: minor parity
+  with click model — selection already happens on Arrow. **Target:**
+  PR #11.5 (a11y polish pass).
+- **INT-4** — `fromHash` field in `explain:pending` is unused; reason:
+  dead payload field — delete or honor in `onClose`. **Target:**
+  PR #14.5.
+- **INT-9** — No integration tests for SqlEditor → Inspector handoff;
+  reason: test-debt — locks in fixes for INT-1 / INT-2 once those are
+  addressed. **Target:** PR #14.5.
+- **INT-10** — `Cmd+E` global fallthrough undocumented; reason:
+  tooltip / scope clarification; pair with A11Y-10. **Target:**
+  PR #14.5.
+- **INT-11** — `RawPlanView` double-decode fallback hides wire-shape
+  mismatch; reason: dead code paths + misleading comment; confirm
+  with backend and simplify. **Target:** PR #14.5.
+
+### Deferred nit findings — PR #14.5
+
+- **CORR-14** — `fmtMs` accepts negatives; `fmtCost` vs `fmtRows`
+  separator asymmetry; reason: cosmetic. **Target:** PR #14.5.
+- **DC-11** — Engine pill style duplicated in two CSS rules; reason:
+  drift risk — extract to a shared class or use `EngineGlyph`.
+  **Target:** PR #14.5.
+
+---
+
 ## Open issues — not yet scheduled
 
 ### LimitedRows concurrent-Next semantics

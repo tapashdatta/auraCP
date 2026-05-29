@@ -34,6 +34,7 @@ import { makeCompletions } from './completions.js'
  * @param {(pos:number)=>void} [opts.onCursor]            cursor / selection moved
  * @param {(view:EditorView, pos:number)=>void} [opts.onExecute]       Cmd+Enter
  * @param {(view:EditorView)=>void} [opts.onExecuteAll]    Cmd+Shift+Enter
+ * @param {(view:EditorView, pos:number)=>void} [opts.onExplain]       Cmd+E
  * @param {(view:EditorView)=>void} [opts.onCancel]        Cmd+.
  * @param {(view:EditorView)=>void} [opts.onFormat]        Cmd+Shift+F
  * @param {(view:EditorView)=>void} [opts.onSave]          Cmd+S
@@ -64,6 +65,15 @@ export function createEditorView(opts) {
       key: 'Mod-Shift-Enter',
       preventDefault: true,
       run: (v) => { opts.onExecuteAll?.(v || view); return true },
+    },
+    {
+      key: 'Mod-e',
+      preventDefault: true,
+      run: (v) => {
+        const head = (v?.state?.selection?.main?.head) ?? view.state.selection.main.head
+        opts.onExplain?.(v || view, head)
+        return true
+      },
     },
     {
       key: 'Mod-.',

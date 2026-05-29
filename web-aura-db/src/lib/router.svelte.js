@@ -56,6 +56,7 @@ function parseHash() {
 route('rows',        '/connections/:id/schemas/:schema/tables/:table/rows')
 route('table',       '/connections/:id/schemas/:schema/tables/:table')
 route('schema',      '/connections/:id/schemas/:schema')
+route('explain',     '/connections/:id/explain')
 route('query',       '/connections/:id/query')
 route('conn.detail', '/connections/:id')
 route('conn.new',    '/connections/new')
