@@ -616,8 +616,9 @@ PRs without their tests are blocked at review. We do not retroactively
 | 3.5 | Driver hardening follow-up             | deferred |              |
 | 4   | Schema readers                         | ✓ done   | da65065      |
 | 4.5 | Schema reader follow-up                | deferred |              |
-| 5   | Row operations                         | pending  |              |
-| 6   | EXPLAIN normalization                  | pending  |              |
+| 5   | Row operations                         | ✓ done   | 4921bdb      |
+| 5.5 | Row ops engine-parity + limits         | deferred |              |
+| 6   | EXPLAIN normalization                  | next     |              |
 | 7   | Query history                          | pending  |              |
 | 8   | HTTP handler                           | pending  |              |
 | 9   | Standalone implementations + cmd       | pending  |              |
