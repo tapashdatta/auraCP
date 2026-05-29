@@ -135,7 +135,22 @@ func (s *Server) createSiteViaNewPipeline(ctx context.Context, in createSiteInpu
 			DBName:     cspec.WPDBName,
 			DBUser:     cspec.WPDBUser,
 			DBPass:     cspec.WPDBPass,
-			URL:        "https://" + cspec.Domain,
+			// v0.2.60: install with http://, not https://. The cert is
+			// issued async AFTER this install runs, so at install time
+			// the site is HTTP-only. Pinning siteurl to https:// here
+			// then makes WordPress's canonical-URL hook 301 to https
+			// on every request — and pre-cert that 301 lands on the
+			// nginx :443 catch-all (`ssl_reject_handshake`), which
+			// browsers render as a connection error.
+			//
+			// The dynamic WP_HOME / WP_SITEURL block in our wp-config.php
+			// (v0.2.60 too) overrides the DB-stored value at runtime
+			// based on the current request scheme, so this URL value
+			// only matters for content WordPress hard-codes during
+			// the install wizard. http:// keeps that content scheme-
+			// neutral; visitors on https get https links via the
+			// dynamic override, visitors on http get http links.
+			URL:        "http://" + cspec.Domain,
 			Title:      cspec.WPTitle,
 			AdminUser:  cspec.WPAdminUser,
 			AdminPass:  cspec.WPAdminPass,

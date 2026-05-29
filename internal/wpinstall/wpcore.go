@@ -100,6 +100,22 @@ func downloadAndExtract(ctx context.Context, r *system.Runner, docroot, siteUser
 		return count, err
 	}
 
+	// v0.2.60: belt-and-suspenders. The tar walk reports `count` files
+	// written, but the operator-facing failure mode "site shows 404
+	// after a successful create" can also come from a partial extract
+	// (gzip ended early, file system out of inodes mid-stream, etc.).
+	// Hard-assert the two files we absolutely need before declaring
+	// success: index.php (front controller) and wp-includes/version.php
+	// (loaded on every WP request). If either is missing, surface a
+	// clear error so the API layer rolls the create back rather than
+	// leaving the site half-done and serving 404s.
+	for _, must := range []string{"index.php", "wp-includes/version.php", "wp-load.php"} {
+		p := filepath.Join(docroot, must)
+		if _, err := os.Stat(p); err != nil {
+			return count, fmt.Errorf("post-extract verification: %s missing at %s (only %d files extracted — tarball truncated or extraction interrupted)", must, p, count)
+		}
+	}
+
 	// chown -R via the runner so the audit log captures it.
 	if _, err := r.Run(ctx, "chown", "-R", siteUser+":"+siteUser, docroot); err != nil {
 		return count, fmt.Errorf("chown docroot: %w", err)

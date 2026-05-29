@@ -341,7 +341,13 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 			"adminUser":  in.WPAdminUser,
 			"adminPass":  in.WPAdminPass,
 			"adminEmail": in.WPAdminEmail,
-			"loginUrl":   "https://" + in.Domain + "/wp-admin/",
+			// v0.2.60: surface http:// in the post-create modal. Cert
+			// issues async; pre-cert the login button on the modal
+			// shouldn't 301 the operator into a TLS reject loop. WP's
+			// dynamic WP_HOME/SITEURL block (wpconfig.go v0.2.60)
+			// upgrades the displayed URL to https once a request
+			// arrives over TLS.
+			"loginUrl":   "http://" + in.Domain + "/wp-admin/",
 			"dbName":     in.WPDBName,
 			"dbUser":     in.WPDBUser,
 			"dbPass":     in.WPDBPass,

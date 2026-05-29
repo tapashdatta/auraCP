@@ -85,6 +85,35 @@ $table_prefix = '{{.DBPrefix}}';
  */
 define( 'WP_DEBUG', false );
 
+/**
+ * Dynamic site URL — auraCP v0.2.60.
+ *
+ * Resolves WP_HOME / WP_SITEURL from the actual request scheme + host
+ * instead of pinning them at install time. Fixes the most common
+ * fresh-install 404 / redirect-loop class:
+ *   - Visitor hits http://<domain>/ before the LE cert lands.
+ *   - With a pinned https:// siteurl, WordPress's canonical-URL hook
+ *     either 301s to https (browser then trips the no-cert handshake
+ *     reject and shows a connection error), OR — when WP's host check
+ *     decides the hostname doesn't match — renders a themed 404 page.
+ *   - With the dynamic block below, WP uses whichever scheme + host
+ *     the request actually arrived on, so http works pre-cert, https
+ *     works post-cert, both without operator intervention.
+ *
+ * Trusts the X-Forwarded-Proto header set by nginx's reverse-proxy
+ * blocks for cases where a load balancer terminates TLS upstream.
+ */
+if ( ! defined( 'WP_HOME' ) ) {
+    $scheme = 'http';
+    if ( ( ! empty( $_SERVER['HTTPS'] ) && $_SERVER['HTTPS'] !== 'off' )
+      || ( ! empty( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https' ) ) {
+        $scheme = 'https';
+    }
+    $host = ! empty( $_SERVER['HTTP_HOST'] ) ? $_SERVER['HTTP_HOST'] : '{{.Domain}}';
+    define( 'WP_HOME',    $scheme . '://' . $host );
+    define( 'WP_SITEURL', $scheme . '://' . $host );
+}
+
 /* That's all, stop editing! Happy publishing. */
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -106,6 +135,7 @@ type wpConfigData struct {
 	DBHost       string
 	DBPrefix     string
 	Salts        string
+	Domain       string // v0.2.60: fallback for the dynamic WP_HOME/SITEURL block
 }
 
 // writeWPConfig renders wp-config.php with the given DB credentials
@@ -129,7 +159,7 @@ func writeWPConfig(ctx context.Context, r *system.Runner, docroot, siteUser stri
 	}
 
 	data := wpConfigData{
-		PanelVersion: "0.2.50",
+		PanelVersion: "0.2.60",
 		GeneratedAt:  time.Now().UTC().Format(time.RFC3339),
 		DBName:       s.DBName,
 		DBUser:       s.DBUser,
@@ -137,6 +167,7 @@ func writeWPConfig(ctx context.Context, r *system.Runner, docroot, siteUser stri
 		DBHost:       s.DBHost,
 		DBPrefix:     "wp_",
 		Salts:        strings.TrimSpace(salts),
+		Domain:       s.Domain,
 	}
 
 	tmpl, err := template.New("wp-config").Parse(wpConfigTemplate)
