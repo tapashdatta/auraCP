@@ -61,40 +61,76 @@ on.
 
 ---
 
-### PR #2 — Classifier (the security-critical piece)
+### PR #2 — Classifier (tokenizer-based first cut)
 
-**Goal:** every SQL statement gets parsed and classified before
+**Goal:** every SQL statement gets lexed and classified before
 execution. Forbidden statements never reach a driver.
+
+**Strategy chosen:** ship a hand-written SQL tokenizer + token-sequence
+matcher rather than pull in Vitess (~100 MB transitive) or pg_query_go
+(cgo) up front. The tokenizer is **not regex** — it's proper lexical
+analysis that handles string literals, line + block comments, quoted
+identifiers, dollar-quoting (Postgres), and `;`-separated multi-
+statement queries correctly. The forbidden detector walks token
+sequences (not raw text), so `'/* SELECT */ LOAD_FILE(...`-style
+bypasses don't work against it.
 
 **Delivers:**
 
 - `pkg/dbadmin/classifier/classifier.go` — top-level Classify(engine,
-  sql) → ParsedQuery.
-- `pkg/dbadmin/classifier/mysql.go` — Vitess-backed MySQL/MariaDB
-  classifier.
-- `pkg/dbadmin/classifier/postgres.go` — pg_query_go-backed Postgres
-  classifier.
-- `pkg/dbadmin/classifier/forbidden.go` — the hard-forbidden list.
+  sql) → ParsedQuery. Parser interface (pluggable so PR #2.5 can drop
+  in Vitess + pg_query_go for AST-level work).
+- `pkg/dbadmin/classifier/lexer.go` — production-grade SQL tokenizer.
+- `pkg/dbadmin/classifier/mysql.go` — MySQL/MariaDB statement-class
+  detector + forbidden patterns.
+- `pkg/dbadmin/classifier/postgres.go` — Postgres equivalent.
+- `pkg/dbadmin/classifier/forbidden.go` — the hard-forbidden patterns
+  (shared types + multi-token matcher).
+- `pkg/dbadmin/classifier/redact.go` — sensitive parameter redaction
+  for audit (CREATE USER ... IDENTIFIED BY, etc.).
 - `pkg/dbadmin/classifier/testdata/forbidden/` — CVE corpus
-  (LOAD_FILE, INTO OUTFILE, COPY FROM PROGRAM, pg_read_file, etc.).
-- `pkg/dbadmin/classifier/classifier_test.go` — table-driven tests
-  asserting every CVE-corpus entry is correctly classified.
-- `pkg/dbadmin/classifier/fuzz_test.go` — fuzz harness ensuring
-  forbidden statements are never reclassified as `read`/`write-row`.
+  (LOAD_FILE, INTO OUTFILE, COPY FROM PROGRAM, pg_read_file,
+  plpythonu, etc.) with attack variants (comment-obfuscated,
+  whitespace-padded, case-mixed, string-concat).
+- `pkg/dbadmin/classifier/classifier_test.go` — table-driven tests.
+- `pkg/dbadmin/classifier/lexer_test.go` — tokenizer tests.
+- `pkg/dbadmin/classifier/fuzz_test.go` — fuzz harness.
 
-**Verifies:** SECURITY.md §6.3 is enforced in code. The classifier is
-the single most security-critical component; this PR is where its
-correctness is established and locked in by tests.
+**Verifies:** SECURITY.md §6.3 is enforced in code. CVE corpus is
+covered. Fuzzing finds no statement that gets reclassified down from
+forbidden to read/write.
 
-**LOC budget:** ~2,000 Go (most of it tests).
+**Known limitations (covered in PR #2.5):**
+
+- No AST. Aliased function calls and semantically-equivalent rewrites
+  that the corpus doesn't cover may slip through token-sequence
+  matching. Token-sequence matching is the same defense pgAdmin and
+  DBeaver use for their pre-execution filters; it has held up well in
+  practice but is acknowledged as second-best to a full AST walk.
+- ParsedStatement.Tables (the list of objects each statement touches)
+  is left empty in this PR. The handler can't yet enforce per-table
+  authorization (only per-connection); per-table grants are deferred.
+- Postgres-only function-language denylist (plpythonu, plperlu, etc.)
+  matches by token sequence in `LANGUAGE` clauses; future AST work
+  can verify the language directly from the parsed CREATE FUNCTION
+  node.
+
+**LOC budget:** ~2,000 Go (lexer ~600, classifier ~400, forbidden
+~300, tests ~700).
 
 **Dependencies:** PR #1.
 
-**Open decision:** how to handle cgo fallback when `pg_query_go` is
-unavailable. Default plan: cgo required for full Postgres support;
-ship a `-tags=nocgo` build that returns `ErrPostgresClassifierUnavailable`
-for any Postgres query. The standalone .deb requires cgo; the panel
-.deb requires cgo. We'll re-evaluate if there's demand for cgo-disabled.
+### PR #2.5 — Classifier AST upgrade (deferred)
+
+**Goal:** swap the tokenizer-based statement detection for full AST
+classification using Vitess (MySQL) + pg_query_go (Postgres). The
+forbidden-token matcher stays — it's belt-and-braces.
+
+Scheduled after the v0.3.0 cutover proves the design holds. If real
+operators report classification edge cases we can't catch with the
+tokenizer, this PR moves earlier. If not, it ships in v0.3.1.
+
+**Dependencies:** PR #2 + production feedback.
 
 ---
 
