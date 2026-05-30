@@ -117,7 +117,7 @@ pkg/dbadmin/                          (public, importable)
   ├─ history.go                       query history (SQLite-backed)
   ├─ export.go                        CSV / JSON / SQL / Markdown emitters
   └─ standalone/
-      ├─ auth.go                      argon2id + WebAuthn impl of dbadmin.Auth
+      ├─ auth.go                      argon2id + TOTP impl of dbadmin.Auth
       ├─ store.go                     SQLite impl of dbadmin.ConnectionStore
       └─ audit.go                     file+chain impl of dbadmin.AuditSink
 
@@ -289,7 +289,6 @@ No state library beyond Svelte runes.
 
 - SQLite via `modernc.org/sqlite` (pure Go, no cgo). Schema:
   - `users` (id, username, password_hash, mfa_secret, recovery_codes, …)
-  - `webauthn_credentials` (user_id, credential_id, public_key, …)
   - `connections` (id, name, engine, host, port, database, username,
     creds_enc, tags, created_at, …)
   - `connection_grants` (user_id, connection_id, role)
@@ -325,7 +324,6 @@ sitting beside them.
 - Panel `users` table = Aura DB users. No second user database.
 - Aura DB grants stored in a new `dbadmin_grants` table joined on
   `users.id` + `connections.id`.
-- WebAuthn enrolled in the panel is available in Aura DB instantly.
 - Step-up uses the panel's existing MFA verification flow.
 
 ### 5.2 Connection discovery
@@ -408,8 +406,8 @@ sitting beside them.
 - Default listener: `0.0.0.0:8090` (HTTPS only, lego-managed cert by
   default; operator can supply PEM files).
 - First-run wizard at `https://<host>:8090/setup`:
-  1. Create owner account (username, password, mandatory WebAuthn or
-     TOTP enrollment).
+  1. Create owner account (username, password, mandatory TOTP
+     enrollment).
   2. Optional: paste a panel-domain to auto-issue an LE cert.
   3. Optional: configure audit forwarding.
   4. Single-use setup token printed to stdout on first launch; required
@@ -449,7 +447,7 @@ sitting beside them.
   reduction.
 - **Security improvement.** Aura DB has a defined threat model
   (SECURITY.md); Adminer has CVE history we inherit. Modern controls
-  (WebAuthn, step-up, classifier, audit chain) raise the floor.
+  (step-up, classifier, audit chain) raise the floor.
 - **New product surface.** Standalone Aura DB is a sellable / shareable
   thing in its own right. Many shops want a CloudBeaver alternative
   without the JVM cost.

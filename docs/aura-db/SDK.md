@@ -170,8 +170,8 @@ type Auth interface {
     // baseline; implementations may be more aggressive but not less.
     StepUpRequired(Action) bool
 
-    // VerifyStepUp validates a step-up assertion (WebAuthn / TOTP /
-    // recovery code) embedded in the request. Returns the action class
+    // VerifyStepUp validates a step-up factor (TOTP / recovery code)
+    // embedded in the request. Returns the action class
     // the user has just stepped up for (so the engine knows which
     // action-class TTL to apply) and the TTL duration.
     //
@@ -217,7 +217,6 @@ import (
 type StandaloneAuth struct {
     DB         *sql.DB         // SQLite, holds users + sessions + step-up flags
     Argon2     argon2.Params   // tuned per release
-    WebAuthn   *webauthn.Config
     Clock      func() time.Time
 }
 
@@ -257,7 +256,7 @@ func (a *StandaloneAuth) StepUpRequired(action dbadmin.Action) bool {
 }
 
 func (a *StandaloneAuth) VerifyStepUp(r *http.Request) (dbadmin.Action, time.Duration, error) {
-    // Read WebAuthn assertion / TOTP code from the request body.
+    // Read the TOTP code / recovery code from the request body.
     // Validate against the user's enrolled factors.
     // On success, store a step-up flag in the sessions DB with the
     // action class and TTL per SECURITY.md §5.5.
@@ -726,7 +725,7 @@ type StepUpHook interface {
 
 type StepUpChallenge struct {
     JTI         string
-    DeliveredBy string  // "webauthn" / "totp" / "push" / "out-of-band"
+    DeliveredBy string  // "totp" / "push" / "out-of-band"
     Payload     map[string]any
 }
 ```

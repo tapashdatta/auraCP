@@ -29,14 +29,6 @@
 //     records directly; DEK split is reserved for v0.4 when per-tenant
 //     encryption-at-rest separation is requested.
 //
-// WebAuthn / FIDO2 step-up (v0.3.2-D) is supported via
-// github.com/go-webauthn/webauthn. Enable by setting
-// auth.mfa.webauthn_enabled=true plus auth.mfa.webauthn.{rp_id,
-// rp_origins, rp_display_name}; the schema gains webauthn_credentials
-// and webauthn_challenges tables in migration v4. See
-// mfa_webauthn.go for the library glue and auth_webauthn.go for the
-// step-up branch wired into Auth.VerifyStepUp / Auth.Login.
-//
 // Documented design decisions (with rationales):
 //
 //  1. Random 12-byte GCM nonces. Coordination-free, secure under
@@ -59,11 +51,7 @@
 //  5. No JWT for sessions. Server-side state in the sessions table;
 //     revocation is "DELETE FROM sessions WHERE token_hash = ?".
 //
-//  6. Multi-factor: TOTP, recovery codes, and WebAuthn. VerifyStepUp
-//     accepts a discriminator in the JSON body ("totp", "recovery_code",
-//     or "webauthn"); the engine wire contract stays stable across
-//     factors. WebAuthn (added in v0.3.2-D) registers credentials at
-//     /webauthn/register/* and verifies assertions either inline in
-//     the /step-up/verify body (factor = webauthn) or via a dedicated
-//     /webauthn/login/* ceremony for password-less login.
+//  6. Multi-factor: TOTP and recovery codes. VerifyStepUp accepts a
+//     discriminator in the JSON body ("totp" or "recovery_code"); the
+//     engine wire contract stays stable across factors.
 package standalone

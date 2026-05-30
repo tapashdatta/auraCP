@@ -218,14 +218,9 @@ integrated and standalone implementations differ only in the backing store.
 
 Supported factors:
 
-- **WebAuthn / passkeys** (primary). Resident keys preferred; non-resident
-  accepted.
-- **TOTP** (fallback). 30-second window, 6 digits, ±1 step tolerance.
+- **TOTP** (primary). 30-second window, 6 digits, ±1 step tolerance.
 - **Recovery codes**. 8 single-use codes generated at enrollment, displayed
-  once. Used only when both WebAuthn and TOTP are unavailable.
-
-Hardware tokens (U2F over CTAP1) are accepted via WebAuthn's compatibility
-mode.
+  once. Used when TOTP is unavailable.
 
 ### 5.4 Sessions
 
@@ -843,7 +838,6 @@ aura_db:
 
   mfa:
     required_for: [writer, dba, owner]
-    webauthn_enabled: true
     totp_enabled: true
     recovery_codes: 8
 
@@ -902,7 +896,6 @@ release indicated.
 | Just-in-time database accounts (Hashicorp Boundary-style) | v0.4.0 | Ephemeral DB users per Aura DB session.            |
 | Differential privacy on aggregate queries       | not planned    | Documented here as explicitly out of scope.             |
 | WASM sandboxing for client-side query plan visualisation | v0.4.0 | Run untrusted explainers (e.g. third-party plan renderers) in WASM. |
-| Hardware-backed WebAuthn enforcement (no software authenticators) | v0.3.2 | Configurable per-tenant. |
 | Detection: anomalous query patterns per user    | v0.4.0         | Heuristic baseline + flag deviations. |
 
 ---

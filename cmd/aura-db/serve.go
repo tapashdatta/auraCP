@@ -80,11 +80,6 @@ func runServe(g globalFlags, args []string) error {
 	handler := httpapi.NewWithOptions(app.Engine, httpapi.Options{
 		SavedStore: app.Saved,
 	})
-	// v0.3.2-D: WebAuthn /webauthn/* routes live in this binary
-	// (not the engine surface) because they need direct access to
-	// app.Auth + app.Store. webAuthnMux is a no-op when WebAuthn is
-	// disabled in config — the engine handler is returned unchanged.
-	handler = webAuthnMux(app, handler)
 	handler = withRequestID(handler)
 	handler = withAccessLog(handler, app.Logger)
 

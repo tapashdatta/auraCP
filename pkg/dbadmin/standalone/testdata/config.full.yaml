@@ -32,7 +32,6 @@ auth:
   mfa:
     required_for: ["writer", "dba", "owner"]
     totp_enabled: true
-    webauthn_enabled: false
     recovery_codes: 8
 rate_limits:
   login_per_ip_15m: 10

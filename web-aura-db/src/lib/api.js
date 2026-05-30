@@ -222,16 +222,6 @@ export class AuraDBClient {
   /** @param {object} body */
   stepUpVerify(body)             { return request('/step-up/verify', { method: 'POST', body }) }
 
-  // WebAuthn (v0.3.2-D). Begin endpoints return options + a
-  // challenge_id round-tripped to the matching Finish call.
-  webauthnRegisterBegin()        { return request('/webauthn/register/begin', { method: 'POST', body: {} }) }
-  /** @param {object} body */
-  webauthnRegisterFinish(body)   { return request('/webauthn/register/finish', { method: 'POST', body }) }
-  /** @param {string} username */
-  webauthnLoginBegin(username)   { return request('/webauthn/login/begin', { method: 'POST', body: { username } }) }
-  /** @param {object} body */
-  webauthnLoginFinish(body)      { return request('/webauthn/login/finish', { method: 'POST', body }) }
-
   // Audit
   /** @param {string} id */
   audit(id)                      { return request(`/connections/${enc(id)}/audit`) }

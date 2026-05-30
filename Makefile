@@ -2,7 +2,7 @@
 # classifier (PR #2.5) pulls libpg_query through pg_query_go/v5 which
 # requires cgo for the AST path. CGO_ENABLED=0 builds remain valid —
 # they degrade Postgres to the PR #2 tokenizer fallback.
-VERSION ?= 0.3.5
+VERSION ?= 0.3.6
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
 
@@ -49,7 +49,7 @@ build: ui-dbadmin
 ## v0.3.2: aura-db standalone binary joins auracpd + auracp. CGO_ENABLED=0
 ## degrades the Postgres AST classifier to the tokenizer fallback (per PR
 ## #2.5 contract) — acceptable for the cross-compile path; the audit-verify
-## tooling + MFA + WebAuthn paths are all pure Go.
+## tooling + MFA (TOTP/recovery) paths are all pure Go.
 dist: ui
 	@mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/auracpd-linux-amd64 ./cmd/auracpd

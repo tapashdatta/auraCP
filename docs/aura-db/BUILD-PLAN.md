@@ -317,7 +317,7 @@ works.
 
 **Delivers:**
 
-- `pkg/dbadmin/standalone/auth.go` — argon2id + WebAuthn + TOTP +
+- `pkg/dbadmin/standalone/auth.go` — argon2id + TOTP +
   recovery codes. Sessions table. Session binding. Step-up flags.
 - `pkg/dbadmin/standalone/conns.go` — SQLite + secret-box encryption.
 - `pkg/dbadmin/standalone/audit.go` — file-backed chain-signed sink.
@@ -671,8 +671,8 @@ This table is the single source of truth for v0.3.0 progress.
 Combined v0.3.1 hardening + v0.3.2 feature release. See CHANGELOG.md
 for the full breakdown. v0.3.1 closed the 14 `.5` follow-up PRs
 (309 deferred items). v0.3.2 added saved-queries persistence,
-per-table grants, slow-log streaming endpoint, WebAuthn step-up,
-CSV/NDJSON import, and the MongoDB driver.
+per-table grants, slow-log streaming endpoint, WebAuthn step-up
+(later removed in v0.3.6), CSV/NDJSON import, and the MongoDB driver.
 
 | PR  | Title                                  | Status   | Merge commit |
 | --- | -------------------------------------- | -------- | ------------ |
@@ -694,7 +694,7 @@ CSV/NDJSON import, and the MongoDB driver.
 | A   | Saved queries persistence              | ✓ done   | 2195609      |
 | B   | Per-table grants                       | ✓ done   | af807ce      |
 | C   | Slow-log streaming endpoint            | ✓ done   | 71c3344      |
-| D   | WebAuthn step-up                       | ✓ done   | fbb8e25      |
+| D   | WebAuthn step-up                       | removed v0.3.6 | fbb8e25 |
 | E   | CSV/NDJSON import                      | ✓ done   | 175823e      |
 | F   | MongoDB driver                         | ✓ done   | ebdc3d7      |
 | —   | Installer / uninstaller / Makefile     | ✓ done   | (this commit)|

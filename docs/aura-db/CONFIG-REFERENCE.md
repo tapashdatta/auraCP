@@ -42,7 +42,6 @@ auth:
   mfa:
     required_for: ["writer", "dba", "owner"]
     totp_enabled: true
-    webauthn_enabled: false  # PR #9 stub
     recovery_codes: 8
 
 rate_limits:

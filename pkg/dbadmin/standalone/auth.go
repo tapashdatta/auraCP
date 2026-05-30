@@ -61,22 +61,6 @@ type AuthRuntimeConfig struct {
 	LoginPerUser15m int
 	Escalation      []time.Duration
 	StepUpTTL       map[dbadmin.Action]time.Duration
-
-	// WebAuthnEnabled gates the Auth.VerifyStepUp WebAuthn branch and
-	// the /webauthn/* routes wired in cmd/aura-db. When false the
-	// rest of WebAuthn is dormant (no challenges issued, no
-	// assertions accepted).
-	WebAuthnEnabled bool
-
-	// WebAuthn carries the Relying Party identity passed straight
-	// through to github.com/go-webauthn/webauthn. Empty when
-	// WebAuthnEnabled is false.
-	WebAuthn WebAuthnConfig
-
-	// WebAuthnChallengeTTL bounds how long a Begin* challenge stays
-	// valid before Finish* refuses to redeem it. Defaults to 5
-	// minutes inside NewAuth.
-	WebAuthnChallengeTTL time.Duration
 }
 
 // DefaultStepUpTTL returns the per-action step-up window table.
@@ -109,9 +93,6 @@ func NewAuth(store *Store, kek *KEK, cfg AuthRuntimeConfig) *Auth {
 			24 * time.Hour,
 		}
 	}
-	if cfg.WebAuthnChallengeTTL == 0 {
-		cfg.WebAuthnChallengeTTL = 5 * time.Minute
-	}
 	return &Auth{
 		store:             store,
 		kek:               kek,
@@ -120,21 +101,6 @@ func NewAuth(store *Store, kek *KEK, cfg AuthRuntimeConfig) *Auth {
 		sessionTokenIndex: make(map[string][]byte),
 	}
 }
-
-// WebAuthnEnabled reports whether the WebAuthn step-up branch and
-// /webauthn/* HTTP routes are active for this Auth instance. Wiring
-// in cmd/aura-db checks this before mounting the routes so a
-// disabled deployment returns 404 instead of 405.
-func (a *Auth) WebAuthnEnabled() bool { return a.cfg.WebAuthnEnabled }
-
-// WebAuthnConfig exposes the Relying Party identity to HTTP handlers
-// in pkg/dbadmin/httpapi (and to tests).
-func (a *Auth) WebAuthnConfig() WebAuthnConfig { return a.cfg.WebAuthn }
-
-// Store returns the underlying SQLite store. Used by the HTTP
-// WebAuthn handlers which need direct access to the credentials /
-// challenges tables.
-func (a *Auth) Store() *Store { return a.store }
 
 // rememberToken indexes the truncated session_id -> full token hash
 // mapping used by step-up lookups. user-attrs-leak-token-hash: this

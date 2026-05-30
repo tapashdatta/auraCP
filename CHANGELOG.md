@@ -2,6 +2,42 @@
 
 All notable changes to auraCP.
 
+## v0.3.6 — 2026-05-30
+
+Remove WebAuthn / FIDO2 entirely. It was speculative scope: redundant
+with the existing TOTP + recovery-code MFA, never enabled in any shipped
+artifact (the released `.deb` is `CGO_ENABLED=0`, so WebAuthn was always
+off), and it dragged in `go-webauthn` → `google/go-tpm` — a cgo
+dependency that repeatedly broke the static cross-compile and produced
+the recurring `undefined: webAuthnMux` CI failure. Off-motto: auraCP is
+lightweight, secure, and fully-featured without it, so it's gone.
+
+Removed:
+  - Deleted `pkg/dbadmin/standalone/{mfa_webauthn,mfa_webauthn_nocgo,
+    auth_webauthn,users_webauthn,mfa_webauthn_test}.go` and
+    `cmd/aura-db/{webauthn,webauthn_nocgo}.go`.
+  - Dropped the `webauthn` step-up / login branches from `auth_stepup.go`
+    and `auth_login.go`; step-up + login now accept only `totp` and
+    `recovery_code`. TOTP is the primary MFA factor.
+  - Dropped `MFAConfig.{WebAuthnEnabled,WebAuthn}`, the `WebAuthnConfig`
+    type, and the `AuthRuntimeConfig` WebAuthn fields + helper methods.
+  - Dropped migration v4 (`webauthn_credentials` + `webauthn_challenges`);
+    latest schema version is now 3. No shipped binary ever ran v4, so no
+    data migration is required.
+  - Frontend: deleted `webauthn.js` + `WebAuthnPrompt.svelte` and the
+    four `webauthn*` API methods (all orphaned — no caller).
+  - `go mod tidy` dropped `go-webauthn`, `go-webauthn/x`, `go-tpm`, and
+    `fxamacker/cbor` (−9 lines go.mod, −22 go.sum). The only remaining
+    cgo dependency is `pg_query_go` (the Postgres AST classifier), which
+    degrades gracefully to the tokenizer under `CGO_ENABLED=0`.
+  - Docs (SECURITY, CONFIG-REFERENCE, ADR-001, SDK, BUILD-PLAN) updated;
+    `webauthn_enabled` removed from config examples (the loader uses
+    strict decoding and would now reject the unknown key).
+
+Verified: native + `CGO_ENABLED=0` `go build ./...`, amd64/arm64 static
+cross-compile (zero go-webauthn symbols in the binary), full
+`go test ./...`, and 317 frontend tests — all green.
+
 ## v0.3.5 — 2026-05-30
 
 Fix `undefined: webAuthnMux` build failure on CI (Linux,

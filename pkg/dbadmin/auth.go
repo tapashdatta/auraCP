@@ -40,8 +40,8 @@ import (
 //     with a TTL).
 //
 //   - VerifyStepUp is the bridge from "operator clicked 'verify'" to
-//     "step-up flag exists." It validates a WebAuthn assertion / TOTP
-//     code / recovery code embedded in the request body and persists the
+//     "step-up flag exists." It validates a TOTP code / recovery code
+//     embedded in the request body and persists the
 //     step-up flag with the returned TTL. The engine then has the
 //     authorized window during which HasSteppedUp returns true for the
 //     returned Action class.
@@ -114,9 +114,9 @@ type Auth interface {
 	// the TTL of the step-up flag. The engine uses the returned class
 	// to scope HasSteppedUp checks for the rest of the action.
 	//
-	// Implementations MUST validate the assertion against the user's
-	// enrolled MFA factors (WebAuthn credential, TOTP secret, recovery
-	// code) and reject anything unrecognized.
+	// Implementations MUST validate the supplied factor against the
+	// user's enrolled MFA factors (TOTP secret, recovery code) and
+	// reject anything unrecognized.
 	VerifyStepUp(*http.Request) (Action, time.Duration, error)
 
 	// HasSteppedUp reports whether the user holds a valid, unexpired

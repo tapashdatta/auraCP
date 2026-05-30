@@ -17,21 +17,12 @@ var ErrInvalidCredentials = errors.New("standalone: invalid credentials")
 var ErrLockedOut = errors.New("standalone: locked out")
 
 // LoginRequest carries the parameters Login needs. We model it as a
-// struct to keep the signature stable as fields are added (WebAuthn
-// assertion, recovery code, etc.).
+// struct to keep the signature stable as fields are added (recovery
+// code, etc.).
 type LoginRequest struct {
 	Username string
 	Password string
 	TOTPCode string // optional; required when user.MFARequired
-
-	// WebAuthnChallengeID + WebAuthnAssertion drive the WebAuthn /
-	// FIDO2 login factor (v0.3.2-D). When set, Login uses them in
-	// place of TOTPCode and Auth.cfg.WebAuthnEnabled must be true.
-	// The assertion bytes are the raw browser JSON
-	// (navigator.credentials.get → { id, rawId, response, ... })
-	// passed straight to protocol.ParseCredentialRequestResponseBody.
-	WebAuthnChallengeID string
-	WebAuthnAssertion   []byte
 
 	IPClass string
 	UAHash  string
@@ -92,21 +83,6 @@ func (a *Auth) Login(ctx context.Context, req LoginRequest) (*LoginResult, error
 	var matchedTOTPStep int64
 	if user.MFARequired {
 		switch {
-		case a.cfg.WebAuthnEnabled && len(req.WebAuthnAssertion) > 0:
-			// v0.3.2-D: WebAuthn login. We pass matchedTOTPStep=0 to
-			// the session creator so the TOTP replay watermark
-			// (SEC-02) is not advanced — the WebAuthn factor uses its
-			// own per-credential sign_count counter, which the
-			// verifyWebAuthnAssertion helper advanced via
-			// Store.UpdateWebAuthnSignCount.
-			assert := &webAuthnAssert{
-				ChallengeID: req.WebAuthnChallengeID,
-				Assertion:   req.WebAuthnAssertion,
-			}
-			if verr := a.verifyWebAuthnAssertion(ctx, user, assert); verr != nil {
-				a.recordLoginFailure(ctx, req)
-				return nil, ErrInvalidCredentials
-			}
 		case req.TOTPCode != "":
 			if len(user.MFASecretEnc) == 0 {
 				// User flagged required but no secret enrolled — admin error.

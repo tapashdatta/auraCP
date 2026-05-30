@@ -13,25 +13,12 @@ import (
 )
 
 // stepUpRequest is the body shape the engine accepts at the step-up
-// endpoint. v0.3.2-D extends the v0.3.0 contract with a "webauthn"
-// branch: clients send {action, webauthn:{challenge_id, assertion}}
-// to verify a FIDO2 / passkey assertion. The TOTP and recovery_code
-// branches are unchanged.
+// endpoint. Clients send {action, totp} or {action, recovery_code}
+// to satisfy the step-up challenge for the requested action class.
 type stepUpRequest struct {
-	Action       string          `json:"action"`
-	TOTP         string          `json:"totp,omitempty"`
-	RecoveryCode string          `json:"recovery_code,omitempty"`
-	WebAuthn     *webAuthnAssert `json:"webauthn,omitempty"`
-}
-
-// webAuthnAssert carries the WebAuthn assertion finish payload.
-// challenge_id MUST match a row previously minted by AssertionBegin
-// (single-use, TTL-bounded). assertion is the raw JSON the browser
-// returned from navigator.credentials.get — passed through to
-// protocol.ParseCredentialRequestResponseBody unchanged.
-type webAuthnAssert struct {
-	ChallengeID string          `json:"challenge_id"`
-	Assertion   json.RawMessage `json:"assertion"`
+	Action       string `json:"action"`
+	TOTP         string `json:"totp,omitempty"`
+	RecoveryCode string `json:"recovery_code,omitempty"`
 }
 
 // VerifyStepUp implements dbadmin.Auth.
@@ -90,21 +77,6 @@ func (a *Auth) VerifyStepUp(r *http.Request) (dbadmin.Action, time.Duration, err
 
 	var matchedTOTPStep int64
 	switch {
-	case body.WebAuthn != nil:
-		// v0.3.2-D: WebAuthn / FIDO2 step-up. The task spec calls for
-		// "WebAuthn first if any credentials enrolled, falls back to
-		// TOTP" — the wire-level signal that the client wants the
-		// WebAuthn branch is the presence of body.WebAuthn (the
-		// frontend's webauthn.js sends body.totp instead when the
-		// user typed a code into the TOTP modal). The TOTP and
-		// recovery cases below stay unchanged so an existing
-		// TOTP-only deployment is untouched.
-		if !a.cfg.WebAuthnEnabled {
-			return "", 0, dbadmin.ErrUnauthenticated
-		}
-		if verr := a.verifyWebAuthnAssertion(ctx, user, body.WebAuthn); verr != nil {
-			return "", 0, dbadmin.ErrUnauthenticated
-		}
 	case body.TOTP != "":
 		if len(user.MFASecretEnc) == 0 {
 			return "", 0, dbadmin.ErrUnauthenticated
