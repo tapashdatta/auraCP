@@ -87,6 +87,9 @@
     'date.timezone': 'UTC',
     display_errors: 'Off',
   }
+  // Snapshot of the last-saved PHP ini values, so blur-driven auto-save only
+  // PUTs (and reloads the FPM pool) when a value actually changed.
+  let phpValuesSaved = $state({})
   async function savePHPValues() {
     phpValuesBusy = true
     // Send EVERY key — server-side an empty string deletes the override
@@ -97,9 +100,14 @@
     const d = await r.json().catch(() => ({}))
     phpValuesBusy = false
     if (!r.ok) { toastError(d.error || 'Could not save PHP values'); return }
+    phpValuesSaved = { ...phpValues }
     phpValuesFlash = true
     setTimeout(() => { phpValuesFlash = false }, 1600)
-    toastSuccess('PHP values saved; FPM pool reloaded.')
+  }
+  // Auto-save on field blur — no-op when nothing changed since the last save.
+  function maybeSavePHPValues() {
+    if (JSON.stringify(phpValues) === JSON.stringify(phpValuesSaved)) return
+    savePHPValues()
   }
   let newSSH = $state({ username: '', type: 'sftp', password: randPw() })
   let basicAuth = $state({ user: '', password: '' })
@@ -134,6 +142,7 @@
         // unset keys stay as empty strings (= "show default as ghost").
         const overrides = await getJSON(`${base}/php-settings`, {})
         phpValues = { ...phpValues, ...overrides }
+        phpValuesSaved = { ...phpValues }
       }
     }
     else if (tab === 'vhost') {
@@ -184,14 +193,15 @@
     load('vhost')
   }
   async function saveDocRoot() {
+    if (!docRootDirty) return // blur with no edit → nothing to do
     busy = true
     const r = await apiFetch(`${base}`, { method: 'PATCH', body: JSON.stringify({ root: docRoot }) })
     const d = await r.json().catch(() => ({}))
     busy = false
-    if (!r.ok) { notice = d.error || 'Could not save document root'; return }
-    notice = 'Document root updated; nginx reloaded.'
+    if (!r.ok) { toastError(d.error || 'Could not save document root'); return }
     docRootDirty = false
     site.root = docRoot
+    flashSaved('docroot')
   }
 
   // v0.2.23: per-toggle save indicator. savedFlash[key] becomes true for
@@ -225,13 +235,15 @@
     if (fresh) config = fresh
   }
   function toggleConfig(k) { setConfig({ [k]: isOn(k) ? 'false' : 'true' }) }
-  async function saveBasicAuth() {
-    if (!basicAuth.user || !basicAuth.password) { notice = 'Username and password are required.'; return }
-    notice = ''
-    await setConfig({ basic_auth: 'true', basic_auth_user: basicAuth.user, basic_auth_password: basicAuth.password })
-    // setConfig sets `notice` only on error. If still empty, we succeeded.
-    if (!notice) notice = `Basic auth credentials saved. Visitors will now be prompted as ${basicAuth.user}.`
-    basicAuth = { user: '', password: '' }
+  // Auto-save basic-auth creds on blur once BOTH fields are filled, and only
+  // when they changed since the last save (avoids re-PUT on every blur).
+  let basicAuthSaved = $state({ user: '', password: '' })
+  function maybeSaveBasicAuth() {
+    if (!basicAuth.user || !basicAuth.password) return
+    if (basicAuth.user === basicAuthSaved.user && basicAuth.password === basicAuthSaved.password) return
+    basicAuthSaved = { user: basicAuth.user, password: basicAuth.password }
+    // setConfig flashes 'basic_auth' on success / surfaces errors via notice.
+    setConfig({ basic_auth: 'true', basic_auth_user: basicAuth.user, basic_auth_password: basicAuth.password })
   }
   // PR #17 (v0.3.0): the "Manage" button used to mint a one-time Adminer
   // SSO token and open /_adminer/?sso=… in a new tab. Adminer was removed;
@@ -403,7 +415,10 @@
     const r = await apiFetch(`${base}/node-version`, { method: 'PUT', body: JSON.stringify({ version: nodePick }) })
     const d = await r.json().catch(() => ({}))
     busy = false
-    notice = r.ok ? `Site now runs on Node ${d.version}.` : (d.error || 'Failed')
+    if (!r.ok) { toastError(d.error || 'Could not switch Node version'); return }
+    site.node = d.version
+    flashSaved('nodever')
+    toastSuccess(`Site now runs on Node ${d.version}.`)
   }
   // v0.2.47: change a site's PHP version. Backend moves the FPM pool file
   // from the old version to the new one + reloads both fpm services.
@@ -414,6 +429,7 @@
     busy = false
     if (!r.ok) { toastError(d.error || 'Could not switch PHP version'); return }
     site.phpVersion = d.version
+    flashSaved('phpver')
     toastSuccess(`Site now runs on PHP ${d.version}`)
   }
   // v0.2.47: delete one backup row + its on-disk tarball.
@@ -964,11 +980,8 @@
         </div>
         <div class="kv"><span class="k">HTTP/2</span><span class="v">enabled when cert is issued</span></div>
         <div class="field" style="margin-top:14px"><label>
-          <span class="label-text">Document root <span class="hint">Point at a subdirectory (e.g. <span class="mono">/home/{site.user}/htdocs/{site.domain}/public</span>) for Laravel / Statamic / Symfony</span></span>
-          <div class="input-row">
-            <input class="input" bind:value={docRoot} oninput={() => docRootDirty = true}>
-            <button type="button" class="btn btn-ghost" onclick={saveDocRoot} disabled={!docRootDirty || busy}>Save</button>
-          </div>
+          <span class="label-text">Document root <span class="hint">Point at a subdirectory (e.g. <span class="mono">/home/{site.user}/htdocs/{site.domain}/public</span>) for Laravel / Statamic / Symfony</span> {#if savedFlash['docroot']}<span class="saved-flash">✓ Saved</span>{/if}</span>
+          <input class="input" bind:value={docRoot} oninput={() => docRootDirty = true} onblur={saveDocRoot}>
         </label></div>
       </div></div>
 
@@ -979,19 +992,19 @@
       </div></div>
       {#if site.type === 'nodejs'}
         <div class="section"><div class="section-h"><div><h3>Node.js runtime</h3>
-          <p>Pin this site to a specific Node version. Manage installed versions in <b>Settings → Node.js Runtimes</b>.</p></div></div>
+          <p>Pin this site to a specific Node version — changing it restarts the backend. Manage installed versions in <b>Settings → Node.js Runtimes</b>.</p></div>
+          {#if savedFlash['nodever']}<span class="saved-flash">✓ Saved</span>{/if}
+        </div>
           <div class="section-b">
-            <div class="kv"><span class="k">Current</span><span class="v">{site.node || 'default'}</span></div>
             <div class="two">
               <div class="field"><label>
                 <span class="label-text">Node version</span>
-                <select class="select ui" bind:value={nodePick}>
+                <select class="select ui" bind:value={nodePick} onchange={saveNodeVersion}>
                   <option value="default">default (auracp-managed)</option>
                   {#each nodeRuntimes as n}<option value={n.version}>{n.version}{n.isDefault ? ' (default)' : ''}</option>{/each}
                 </select>
               </label></div>
             </div>
-            <button class="btn btn-primary" onclick={saveNodeVersion} disabled={busy}>Apply & restart backend</button>
             <div class="kv" style="margin-top:14px">
               <span class="k">Run via PM2 (pm2-runtime)</span>
               <button type="button" role="switch" aria-checked={!!site.pm2} aria-label="Toggle PM2" class="toggle" class:on={!!site.pm2} onclick={() => togglePM2(!site.pm2)}></button>
@@ -1014,8 +1027,8 @@
             {:else}
               <div class="two">
                 <div class="field"><label>
-                  <span class="label-text">PHP version</span>
-                  <select class="select ui" bind:value={phpPick}>
+                  <span class="label-text">PHP version {#if savedFlash['phpver']}<span class="saved-flash">✓ Saved</span>{/if}</span>
+                  <select class="select ui" bind:value={phpPick} onchange={savePHPVersion}>
                     {#each phpRuntimesSite as v}
                       <option value={v.version}>{v.version}{v.isDefault ? ' (default)' : ''}</option>
                     {/each}
@@ -1023,43 +1036,43 @@
                 </label></div>
                 <div class="field"><label>
                   <span class="label-text">memory_limit <span class="hint">e.g. 256M, 1G</span></span>
-                  <input class="input mono" bind:value={phpValues.memory_limit} placeholder={phpValueDefaults.memory_limit}>
+                  <input class="input mono" bind:value={phpValues.memory_limit} placeholder={phpValueDefaults.memory_limit} onblur={maybeSavePHPValues}>
                 </label></div>
               </div>
               <div class="two">
                 <div class="field"><label>
                   <span class="label-text">max_execution_time <span class="hint">seconds</span></span>
-                  <input class="input mono" bind:value={phpValues.max_execution_time} placeholder={phpValueDefaults.max_execution_time}>
+                  <input class="input mono" bind:value={phpValues.max_execution_time} placeholder={phpValueDefaults.max_execution_time} onblur={maybeSavePHPValues}>
                 </label></div>
                 <div class="field"><label>
                   <span class="label-text">max_input_time <span class="hint">seconds; -1 = use max_execution_time</span></span>
-                  <input class="input mono" bind:value={phpValues.max_input_time} placeholder={phpValueDefaults.max_input_time}>
+                  <input class="input mono" bind:value={phpValues.max_input_time} placeholder={phpValueDefaults.max_input_time} onblur={maybeSavePHPValues}>
                 </label></div>
               </div>
               <div class="two">
                 <div class="field"><label>
                   <span class="label-text">post_max_size <span class="hint">total POST body</span></span>
-                  <input class="input mono" bind:value={phpValues.post_max_size} placeholder={phpValueDefaults.post_max_size}>
+                  <input class="input mono" bind:value={phpValues.post_max_size} placeholder={phpValueDefaults.post_max_size} onblur={maybeSavePHPValues}>
                 </label></div>
                 <div class="field"><label>
                   <span class="label-text">upload_max_filesize <span class="hint">per file</span></span>
-                  <input class="input mono" bind:value={phpValues.upload_max_filesize} placeholder={phpValueDefaults.upload_max_filesize}>
+                  <input class="input mono" bind:value={phpValues.upload_max_filesize} placeholder={phpValueDefaults.upload_max_filesize} onblur={maybeSavePHPValues}>
                 </label></div>
               </div>
               <div class="two">
                 <div class="field"><label>
                   <span class="label-text">max_input_vars <span class="hint">count</span></span>
-                  <input class="input mono" bind:value={phpValues.max_input_vars} placeholder={phpValueDefaults.max_input_vars}>
+                  <input class="input mono" bind:value={phpValues.max_input_vars} placeholder={phpValueDefaults.max_input_vars} onblur={maybeSavePHPValues}>
                 </label></div>
                 <div class="field"><label>
                   <span class="label-text">date.timezone <span class="hint">IANA zone</span></span>
-                  <input class="input mono" bind:value={phpValues['date.timezone']} placeholder={phpValueDefaults['date.timezone']}>
+                  <input class="input mono" bind:value={phpValues['date.timezone']} placeholder={phpValueDefaults['date.timezone']} onblur={maybeSavePHPValues}>
                 </label></div>
               </div>
               <div class="two">
                 <div class="field"><label>
                   <span class="label-text">display_errors <span class="hint">production: Off</span></span>
-                  <select class="select ui" bind:value={phpValues.display_errors}>
+                  <select class="select ui" bind:value={phpValues.display_errors} onchange={maybeSavePHPValues}>
                     <option value="">default (Off)</option>
                     <option value="Off">Off</option>
                     <option value="On">On</option>
@@ -1067,14 +1080,7 @@
                 </label></div>
                 <div class="field"></div>
               </div>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-                <button class="btn btn-primary" onclick={savePHPValues} disabled={phpValuesBusy}>
-                  {phpValuesBusy ? 'Reloading…' : 'Apply values'}
-                </button>
-                <button class="btn btn-ghost" onclick={savePHPVersion} disabled={busy || !phpPick || phpPick === site.phpVersion}>
-                  {busy ? 'Switching…' : 'Switch version'}
-                </button>
-              </div>
+              <p class="hint" style="margin:10px 0 0">Changes save automatically when you leave a field{phpValuesBusy ? ' · saving…' : ''}.</p>
             {/if}
           </div>
         </div>
@@ -1245,14 +1251,14 @@
         <div class="two" style="margin-top:8px">
           <div class="field"><label>
             <span class="label-text">Username</span>
-            <input class="input" bind:value={basicAuth.user}>
+            <input class="input" bind:value={basicAuth.user} onblur={maybeSaveBasicAuth}>
           </label></div>
           <div class="field"><label>
             <span class="label-text">Password</span>
-            <input class="input" type="password" bind:value={basicAuth.password}>
+            <input class="input" type="password" bind:value={basicAuth.password} onblur={maybeSaveBasicAuth}>
           </label></div>
         </div>
-        <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
+        <p class="hint" style="margin-left:0">Saves automatically once both fields are filled and you leave the field.</p>
       {/if}
       <div class="kv"><span class="k">Block bad bots</span><span class="kv-right">{#if savedFlash['block_bots']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></span></div>
       <div class="hint" style="margin-left:0">

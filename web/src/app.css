@@ -424,10 +424,12 @@ td .mono{color:var(--txt-2);font-size:12.5px}
    (existing aria-label) keeps screen-readers happy. */
 @media (max-width:760px){
   .tabs{gap:3px}
-  /* icon-only: even vertical padding + centred icon (the base .tab already
-     sets inline-flex/justify-content:center/flex:1) so each tab is an equal
-     full-height rounded cell with the glyph dead-centre. */
-  .tab{padding:9px 0;font-size:0;line-height:1;min-width:0}
+  /* icon-only: even vertical padding + centred icon. gap:0 is essential —
+     the base .tab sets gap:7px between the icon and the label text; with
+     font-size:0 the label is a zero-width node but the 7px gap still sits
+     beside the icon and shoves it off-centre. Zeroing the gap (and any
+     tab-ic margin) puts the glyph dead-centre. */
+  .tab{padding:9px 0;font-size:0;line-height:1;min-width:0;gap:0}
   .tab .tab-ic{margin:0}
   .tab .tab-ic svg{width:18px;height:18px}
   .tab.active{font-size:0}
