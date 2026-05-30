@@ -27,7 +27,7 @@ export const detailTabs = [
   { id:'databases', label:'DB' },
   { id:'security', label:'Security' },
   { id:'sshftp', label:'FTP' },
-  { id:'files', label:'File Manager' },
+  { id:'files', label:'Directory' },
   { id:'cron', label:'Cron' },
   { id:'logs', label:'Logs' },
 ]
