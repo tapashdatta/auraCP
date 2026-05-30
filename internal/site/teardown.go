@@ -64,15 +64,15 @@ type TeardownDeps struct {
 // everything else that needs to vanish.
 func Teardown(ctx context.Context, deps *TeardownDeps, domain string) error {
 	log := slog.Default().With("site", domain, "op", "teardown")
-	var firstErr error
-	step := func(name string, fn func() error) {
+
+	// best: log only — cleanup failures don't fail the delete operation.
+	// The site is being removed; if an administrative row can't be swept
+	// it's an orphan at worst, not a reason to surface an error to the UI.
+	best := func(name string, fn func() error) {
 		t := time.Now()
 		err := fn()
 		if err != nil {
-			log.Error("teardown step failed", "step", name, "took_ms", time.Since(t).Milliseconds(), "err", err.Error())
-			if firstErr == nil {
-				firstErr = err
-			}
+			log.Warn("teardown cleanup step failed (best-effort)", "step", name, "took_ms", time.Since(t).Milliseconds(), "err", err.Error())
 			return
 		}
 		log.Info("teardown step ok", "step", name, "took_ms", time.Since(t).Milliseconds())
@@ -84,36 +84,28 @@ func Teardown(ctx context.Context, deps *TeardownDeps, domain string) error {
 	dbs, _ := deps.Store.DatabasesForSite(domain)
 	for _, d := range dbs {
 		eng, name, user := d.Engine, d.Name, d.DBUser
-		step("DropDatabase:"+eng+":"+name, func() error {
-			// db.Manager.Drop drops both the DB and the user. Best-effort —
-			// a missing DB (operator manually dropped it earlier) shouldn't
-			// fail the whole teardown.
+		best("DropDatabase:"+eng+":"+name, func() error {
 			return deps.DBs.Drop(ctx, eng, name, user)
 		})
 	}
 
-	// 2. Delete extra SFTP / SSH users tied to this site. These are
-	// Linux accounts that share the site user's home but have their
-	// own /etc/passwd entries.
+	// 2. Delete extra SFTP / SSH users tied to this site.
 	extras, _ := deps.Store.SSHUsersForSite(domain)
 	for _, u := range extras {
 		name := u.Username
-		step("DeleteExtraSSHUser:"+name, func() error {
+		best("DeleteExtraSSHUser:"+name, func() error {
 			return deps.OS.DeleteExtra(ctx, name)
 		})
 	}
 
-	// 3. Backup files. The rows themselves are deleted in step 5 (with
-	// the rest of the store cleanup); here we rm the .tar files from
-	// /var/lib/auracp/backups/ so they don't waste disk on a
-	// long-running host with high site churn.
+	// 3. Backup files on disk.
 	backups, _ := deps.Store.BackupsForSite(domain)
 	for _, b := range backups {
 		path := b.Path
 		if path == "" {
 			continue
 		}
-		step("RemoveBackupFile:"+path, func() error {
+		best("RemoveBackupFile:"+path, func() error {
 			err := os.Remove(path)
 			if os.IsNotExist(err) {
 				return nil
@@ -122,20 +114,24 @@ func Teardown(ctx context.Context, deps *TeardownDeps, domain string) error {
 		})
 	}
 
-	// 4. Store row sweep. ORDER: dependent tables first (so if any
-	// query fails, the FKs / indexes are still consistent at the
-	// moment of crash), then `sites` itself. Each is best-effort.
-	step("DeleteAllSiteConfig", func() error { return deps.Store.DeleteAllSiteConfig(domain) })
-	step("DeleteAllCronJobs", func() error { return deps.Store.DeleteAllCronJobs(domain) })
-	step("DeleteAllSSHUsers", func() error { return deps.Store.DeleteAllSSHUsers(domain) })
-	step("DeleteAllDatabaseRecords", func() error { return deps.Store.DeleteAllDatabaseRecords(domain) })
-	step("DeleteAllBackupRecords", func() error { return deps.Store.DeleteAllBackupRecords(domain) })
-	step("DeleteAllPHPSettings", func() error { return deps.Store.DeleteAllPHPSettings(domain) })
-	step("DeleteCertificate", func() error { return deps.Store.DeleteCertificate(domain) })
-	// `sites` itself comes last — it's the parent row in the conceptual
-	// model. Removing it earlier would leave dangling FKs in tables
-	// without ON DELETE CASCADE (which is all of them).
-	step("DeleteSite", func() error { return deps.Store.DeleteSite(domain) })
+	// 4. Store row sweep — all best-effort. A leftover config or cron row
+	// is an orphan, not a failure visible to the operator.
+	best("DeleteAllSiteConfig", func() error { return deps.Store.DeleteAllSiteConfig(domain) })
+	best("DeleteAllCronJobs", func() error { return deps.Store.DeleteAllCronJobs(domain) })
+	best("DeleteAllSSHUsers", func() error { return deps.Store.DeleteAllSSHUsers(domain) })
+	best("DeleteAllDatabaseRecords", func() error { return deps.Store.DeleteAllDatabaseRecords(domain) })
+	best("DeleteAllBackupRecords", func() error { return deps.Store.DeleteAllBackupRecords(domain) })
+	best("DeleteAllPHPSettings", func() error { return deps.Store.DeleteAllPHPSettings(domain) })
+	best("DeleteCertificate", func() error { return deps.Store.DeleteCertificate(domain) })
 
-	return firstErr
+	// 5. The sites row itself — this is the only step whose failure is
+	// meaningful to the caller. If it fails the site still appears in the
+	// UI; every other failure above is invisible to the operator.
+	t := time.Now()
+	if err := deps.Store.DeleteSite(domain); err != nil {
+		log.Error("teardown step failed", "step", "DeleteSite", "took_ms", time.Since(t).Milliseconds(), "err", err.Error())
+		return err
+	}
+	log.Info("teardown step ok", "step", "DeleteSite", "took_ms", time.Since(t).Milliseconds())
+	return nil
 }
