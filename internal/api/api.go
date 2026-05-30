@@ -4,9 +4,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/auracp/auracp/internal/acme"
 	"github.com/auracp/auracp/internal/auth"
@@ -46,6 +49,31 @@ type Server struct {
 	// cmd/auracpd to invalidate dbadmin step-up flags bound to the
 	// session token. Nil-safe: the logout handler skips it when unset.
 	logoutHook func(sessionToken string)
+
+	// ensureConnHook mirrors a newly-created panel database into the Aura DB
+	// connection store so the operator can open it from "Manage" without
+	// re-entering credentials. Wired by cmd/auracpd to the dbadmin package
+	// (which imports this one, so the dependency only flows one way — the
+	// hook avoids the import cycle). Nil-safe + best-effort: a failure here
+	// is logged but never fails the database-create request.
+	ensureConnHook func(context.Context, EnsureConnParams) error
+}
+
+// EnsureConnParams carries what cmd/auracpd's enrollment hook needs to mirror
+// a panel database as an Aura DB connection. The plaintext password is only
+// available at create time (the panel does not retain a decryptable copy).
+type EnsureConnParams struct {
+	Engine   string // "mariadb" | "postgres"
+	Database string
+	Username string
+	Password string
+	OwnerID  string // panel user id of the creator (for RoleOwner); "" = admins-only
+}
+
+// SetEnsureConnectionHook registers the Aura DB enrollment hook. Wired at
+// startup, before serving; not safe to call concurrently with requests.
+func (s *Server) SetEnsureConnectionHook(fn func(context.Context, EnsureConnParams) error) {
+	s.ensureConnHook = fn
 }
 
 // SetLogoutHook registers a function to be invoked from POST
@@ -427,6 +455,27 @@ func (s *Server) createDatabase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.audit(r, "database.create", in.Engine+":"+in.Name)
+
+	// Mirror the new database into the Aura DB connection store so the
+	// operator can open it from "Manage" without re-entering credentials.
+	// Best-effort: the database was created successfully regardless, so a
+	// hook failure is logged but does not fail the request. This is the only
+	// point we hold the plaintext password (the panel keeps no decryptable
+	// copy), so enrollment must happen here.
+	if s.ensureConnHook != nil {
+		owner := ""
+		if u, ok := s.currentUser(r); ok {
+			owner = strconv.FormatInt(u.ID, 10)
+		}
+		if err := s.ensureConnHook(r.Context(), EnsureConnParams{
+			Engine: in.Engine, Database: in.Name, Username: in.User,
+			Password: in.Password, OwnerID: owner,
+		}); err != nil {
+			slog.Warn("aura-db connection enroll failed",
+				"engine", in.Engine, "database", in.Name, "err", err)
+		}
+	}
+
 	// Return the generated password once (so the operator can copy it).
 	writeJSON(w, http.StatusCreated, map[string]string{
 		"engine": in.Engine, "name": in.Name, "user": in.User, "password": in.Password,

@@ -46,11 +46,19 @@ func (m *Manager) Create(ctx context.Context, engine, siteDomain, name, dbUser, 
 
 	switch engine {
 	case MariaDB:
+		// Create the user for BOTH @'localhost' (socket — how the site's own
+		// app connects, e.g. WordPress DB_HOST=localhost) AND @'127.0.0.1'
+		// (TCP loopback — how panel tooling such as Aura DB connects). A MySQL
+		// grant for @'localhost' only matches socket connections; a TCP client
+		// from 127.0.0.1 matches @'127.0.0.1'. Both accounts share the same
+		// username + password and the same privileges on this database.
 		stmt := fmt.Sprintf(
 			"CREATE DATABASE IF NOT EXISTS `%s`; "+
 				"CREATE USER IF NOT EXISTS '%s'@'localhost' IDENTIFIED BY '%s'; "+
-				"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost'; FLUSH PRIVILEGES;",
-			name, dbUser, password, name, dbUser)
+				"CREATE USER IF NOT EXISTS '%s'@'127.0.0.1' IDENTIFIED BY '%s'; "+
+				"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'localhost'; "+
+				"GRANT ALL PRIVILEGES ON `%s`.* TO '%s'@'127.0.0.1'; FLUSH PRIVILEGES;",
+			name, dbUser, password, dbUser, password, name, dbUser, name, dbUser)
 		if _, err := m.r.Run(ctx, "mariadb", "-e", stmt); err != nil {
 			return fmt.Errorf("mariadb provision: %w", err)
 		}
@@ -82,7 +90,7 @@ func (m *Manager) Drop(ctx context.Context, engine, name, dbUser string) error {
 	}
 	switch engine {
 	case MariaDB:
-		stmt := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'localhost';", name, dbUser)
+		stmt := fmt.Sprintf("DROP DATABASE IF EXISTS `%s`; DROP USER IF EXISTS '%s'@'localhost'; DROP USER IF EXISTS '%s'@'127.0.0.1';", name, dbUser, dbUser)
 		if _, err := m.r.Run(ctx, "mariadb", "-e", stmt); err != nil {
 			return err
 		}

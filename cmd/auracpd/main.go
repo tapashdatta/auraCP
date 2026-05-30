@@ -249,6 +249,21 @@ func main() {
 	// is irrelevant; the handler reads s.logoutHook on every request.
 	apiSrv.SetLogoutHook(dbadminintegration.LogoutHookFor(dbaCloser))
 
+	// Mirror panel-created databases into the Aura DB connection store so the
+	// "Manage" button opens straight into a working connection. Wired here
+	// (not in api.Register) because internal/api/dbadmin imports internal/api,
+	// so the dependency can only flow one way — the hook closes over the
+	// dbadmin package's EnsureConnection.
+	apiSrv.SetEnsureConnectionHook(func(ctx context.Context, p api.EnsureConnParams) error {
+		return dbadminintegration.EnsureConnection(ctx, st, sec, dbadminintegration.EnrollParams{
+			Engine:   p.Engine,
+			Database: p.Database,
+			Username: p.Username,
+			Password: p.Password,
+			OwnerID:  p.OwnerID,
+		})
+	})
+
 	// PR #11: Aura DB Svelte SPA shell. Sibling Vite build embedded under
 	// /dbadmin/. Mounted BEFORE the panel "/" catch-all so requests with
 	// the /dbadmin/ prefix route to the DB workstation rather than the
