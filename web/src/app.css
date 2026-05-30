@@ -509,10 +509,8 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
   box-shadow:0 24px 64px rgba(0,0,0,.32);
   display:flex;flex-direction:column;z-index:501;
   animation:auracp-fade-in .14s ease;overflow:hidden}
-/* Editor-specific window: above topbar (z 50), uses left/top when dragged */
-.editor-window{z-index:600;user-select:none}
-.editor-window.dragging{box-shadow:0 32px 80px rgba(0,0,0,.45)}
-.editor-drag-handle{user-select:none}
+/* Editor window sits above the sticky topbar (z-index 50) */
+.editor-window{z-index:600}
 .modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none}
 .modal-head h3{margin:0 0 4px;font-size:15.5px;font-weight:600}
 .modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 22px;border-top:1px solid var(--line);font-size:11.5px;color:var(--txt-3);font-family:var(--fs-mono);flex:none}

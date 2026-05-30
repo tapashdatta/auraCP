@@ -713,38 +713,8 @@
 
   // ─── in-browser text editor ────────────────────────────────────────────
   let editor = $state({ open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' })
-  // Draggable editor window
-  let editorPos = $state(null)    // { x, y } fixed px from viewport top-left; null = CSS-centered
-  let editorDragging = $state(false)
   let pathEditMode = $state(false)
   let pathEditVal = $state('')
-
-  function startEditorDrag(e) {
-    if (e.button !== 0) return
-    e.preventDefault()
-    // Find current pixel position of the card (works whether centered via CSS
-    // transform or already positioned via left/top).
-    const card = e.currentTarget.closest('.editor-window')
-    if (!card) return
-    const rect = card.getBoundingClientRect()
-    const startX = e.clientX, startY = e.clientY
-    const origX = rect.left,  origY = rect.top
-    editorDragging = true
-
-    function onMove(ev) {
-      editorPos = {
-        x: Math.max(0, Math.min(origX + ev.clientX - startX, window.innerWidth  - rect.width)),
-        y: Math.max(0, Math.min(origY + ev.clientY - startY, window.innerHeight - rect.height)),
-      }
-    }
-    function onUp() {
-      editorDragging = false
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup',   onUp)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup',   onUp)
-  }
 
   function openPathEdit() {
     pathEditMode = true
@@ -772,7 +742,6 @@
   async function openEditor(name) {
     const sub = filePath ? `${filePath}/${name}` : name
     editor = { open: true, name, sub, content: '', original: '', busy: true, err: '' }
-    editorPos = null  // reset to centered on each open
     const r = await apiFetch(`${base}/files/text?path=${encodeURIComponent(sub)}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
@@ -1645,19 +1614,11 @@
       </div><!-- /.fm-split -->
     </div>
 
-    <!-- In-browser editor — draggable floating window. Drag the header to
-         reposition; z-index 600 sits above the topbar (z-index 50). -->
+    <!-- In-browser editor modal. Plain <textarea>, z-index 600 above topbar. -->
     {#if editor.open}
       <div class="modal-back editor-back" onclick={closeEditor} role="presentation"></div>
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div class="modal-card editor-window" role="dialog" aria-label="Edit {editor.name}"
-           style={editorPos ? `left:${editorPos.x}px;top:${editorPos.y}px;transform:none` : ''}
-           class:dragging={editorDragging}>
-        <!-- Drag handle: the whole header row is the drag target -->
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="modal-head editor-drag-handle"
-             onmousedown={startEditorDrag}
-             style="cursor:{editorDragging ? 'grabbing' : 'grab'}">
+      <div class="modal-card editor-window" role="dialog" aria-label="Edit {editor.name}">
+        <div class="modal-head">
           <div style="min-width:0">
             <h3 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.name}</h3>
             <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.sub}</p>
@@ -1676,7 +1637,7 @@
                   onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveEditor() } }}></textarea>
         <div class="modal-foot">
           <span class="mono">{editor.content.length} bytes · {editor.content.split('\n').length} lines</span>
-          <span style="color:var(--txt-2)">Ctrl/Cmd+S · drag header to move</span>
+          <span style="color:var(--txt-2)">Ctrl/Cmd+S to save</span>
         </div>
       </div>
     {/if}

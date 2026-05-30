@@ -1,6 +1,6 @@
 <script>
   import { connections } from '../lib/connections.svelte.js'
-  import { navigate } from '../lib/router.svelte.js'
+  import { navigate, routeState } from '../lib/router.svelte.js'
   import { t } from '../lib/strings.js'
   import Btn from '../lib/components/Btn.svelte'
   import StatusDot from '../lib/components/StatusDot.svelte'
@@ -10,8 +10,22 @@
   function activateRow(c, e) {
     if (e?.type === 'keydown' && e.key !== 'Enter' && e.key !== ' ') return
     if (e?.type === 'keydown') e.preventDefault()
-    navigate(`/connections/${c.id}`)
+    navigate(`/connections/${c.id}/query`)
   }
+
+  // Auto-navigate when opened from the panel with ?engine=X&name=Y deep-link.
+  // Waits for connections to finish loading, then picks the first match on
+  // engine + database name (or connection name as fallback).
+  $effect(() => {
+    if (connections.loading) return
+    const { engine, name } = routeState.query || {}
+    if (!engine && !name) return
+    const match = connections.list.find(c =>
+      (!engine || c.engine === engine) &&
+      (!name   || c.database === name || c.name === name)
+    )
+    if (match) navigate(`/connections/${match.id}/query`)
+  })
 </script>
 
 <div class="pane">
