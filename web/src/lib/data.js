@@ -24,12 +24,12 @@ export const siteTypes = [
 export const detailTabs = [
   { id:'settings', label:'Settings' },
   { id:'vhost', label:'Vhost' },
-  { id:'databases', label:'Databases' },
+  { id:'databases', label:'DB' },
   { id:'cache', label:'Cache' },
-  { id:'ssl', label:'SSL/TLS' },
+  { id:'ssl', label:'SSL' },
   { id:'security', label:'Security' },
   { id:'sshftp', label:'SSH/FTP' },
   { id:'files', label:'File Manager' },
-  { id:'cron', label:'Cron Jobs' },
+  { id:'cron', label:'Crons' },
   { id:'logs', label:'Logs' },
 ]
