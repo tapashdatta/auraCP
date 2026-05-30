@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.15"
+AURACP_VERSION="0.3.16"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -371,30 +371,34 @@ prev_step() {
 # every later step uses "← Back".
 
 tui_components() {
+  # Build checklist args dynamically so OS-unsupported options are hidden.
+  local args=()
+  args+=(MARIADB   "MariaDB database engine"                    "$(onoff "$OPT_MARIADB")")
+  args+=(POSTGRES  "PostgreSQL database engine"                 "$(onoff "$OPT_POSTGRES")")
+  # MongoDB only shown when the detected OS+arch is officially supported.
+  mongodb_supported && \
+    args+=(MONGODB "MongoDB ${MONGODB_VERSION} document database" "$(onoff "$OPT_MONGODB")")
+  args+=(NODE      "Node.js ${NODE_MAJOR} LTS runtime"          "$(onoff "$OPT_NODE")")
+  args+=(PHP       "PHP-FPM (deb.sury.org; pick versions next)" "$(onoff "$OPT_PHP")")
+  args+=(PYTHON    "Python 3 (gunicorn/uvicorn)"                "$(onoff "$OPT_PYTHON")")
+  args+=(REDIS     "Redis (object cache)"                       "$(onoff "$OPT_REDIS")")
+  args+=(TYPESENSE "Typesense search server"                    "$(onoff "$OPT_TYPESENSE")")
+  args+=(DOCKER    "Docker engine"                              "$(onoff "$OPT_DOCKER")")
+  args+=(SECURITY  "UFW firewall + fail2ban"                    "$(onoff "$OPT_SECURITY")")
+  local n_items=$(( ${#args[@]} / 3 ))
+  local win_h=$(( n_items + 9 ))   # checklist window height scales with item count
+
   local chosen
   chosen=$(whiptail --title "auraCP — optional components" \
     --checklist "Space to toggle, Enter to confirm.\nRequired (auracpd, nginx) are always installed." \
-    22 74 10 \
-    MARIADB "MariaDB database engine"            "$(onoff "$OPT_MARIADB")" \
-    POSTGRES "PostgreSQL database engine"        "$(onoff "$OPT_POSTGRES")" \
-    MONGODB "MongoDB ${MONGODB_VERSION} document database" "$(onoff "$OPT_MONGODB")" \
-    NODE    "Node.js ${NODE_MAJOR} LTS runtime"  "$(onoff "$OPT_NODE")" \
-    PHP     "PHP-FPM (deb.sury.org; pick versions next)" "$(onoff "$OPT_PHP")" \
-    PYTHON  "Python 3 (gunicorn/uvicorn)"        "$(onoff "$OPT_PYTHON")" \
-    REDIS   "Redis (object cache)"               "$(onoff "$OPT_REDIS")" \
-    TYPESENSE "Typesense search server"          "$(onoff "$OPT_TYPESENSE")" \
-    DOCKER  "Docker engine"                      "$(onoff "$OPT_DOCKER")" \
-    SECURITY "UFW firewall + fail2ban"           "$(onoff "$OPT_SECURITY")" \
+    "$win_h" 74 "$n_items" \
+    "${args[@]}" \
     3>&1 1>&2 2>&3 < /dev/tty) || return 1
+
   OPT_MARIADB=no OPT_POSTGRES=no OPT_MONGODB=no OPT_NODE=no OPT_PHP=no OPT_PYTHON=no OPT_REDIS=no OPT_TYPESENSE=no OPT_DOCKER=no OPT_SECURITY=no
   case "$chosen" in *MARIADB*) OPT_MARIADB=yes;; esac
   case "$chosen" in *POSTGRES*) OPT_POSTGRES=yes;; esac
   case "$chosen" in *MONGODB*) OPT_MONGODB=yes;; esac
-  if yesno "$OPT_MONGODB" && ! mongodb_supported; then
-    whiptail --title "MongoDB unavailable" --msgbox \
-      "MongoDB 8.0 does not publish server packages for ${OS_ID} ${OS_CODENAME} ${ARCH}.\n\nSupported combinations:\n  Debian 12 (bookworm) — amd64 only\n  Ubuntu 22.04 (jammy)  — amd64 + arm64\n  Ubuntu 24.04 (noble)  — amd64 + arm64\n\nMongoDB will be skipped." 14 64 < /dev/tty || true
-    OPT_MONGODB=no
-  fi
   case "$chosen" in *NODE*) OPT_NODE=yes;; esac
   case "$chosen" in *PHP*) OPT_PHP=yes;; esac
   case "$chosen" in *PYTHON*) OPT_PYTHON=yes;; esac
@@ -634,12 +638,8 @@ build_plan() {
         typesense_l docker_l security_l panel_l
   yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"   || mariadb_l="skip"
   yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})"  || postgres_l="skip"
-  if ! mongodb_supported; then
-    mongodb_l="unavailable (${OS_ID} ${OS_CODENAME} ${ARCH})"
-  elif yesno "$OPT_MONGODB"; then
-    mongodb_l="install  (${MONGODB_VERSION})"
-  else
-    mongodb_l="skip"
+  if mongodb_supported; then
+    yesno "$OPT_MONGODB" && mongodb_l="install  (${MONGODB_VERSION})" || mongodb_l="skip"
   fi
   yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"            || node_l="skip"
   yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSIONS})"           || php_l="skip"
@@ -657,8 +657,7 @@ auraCP ${AURACP_VERSION} on ${OS_ID:-?} ${OS_CODENAME:-?} (${ARCH})
   nginx ...............  required (1.30 mainline)
   MariaDB .............  ${mariadb_l}
   PostgreSQL ..........  ${postgres_l}
-  MongoDB .............  ${mongodb_l}
-  Node.js .............  ${node_l}
+$(mongodb_supported && printf "  MongoDB .............  %s\n" "${mongodb_l}")  Node.js .............  ${node_l}
   PHP-FPM .............  ${php_l}
   Python 3 ............  ${python_l}
   Redis ...............  ${redis_l}
