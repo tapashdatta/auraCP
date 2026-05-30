@@ -4,10 +4,18 @@
   import { apiFetch } from '../lib/api.js'
   import { brandIcons, tabIcons } from '../lib/icons.js'
   import { confirmDialog, promptDialog, alertDialog } from '../lib/dialog.svelte.js'
-  import { toast, toastSuccess, toastError } from '../lib/toast.svelte.js'
+  import { toast, toastSuccess, toastError as _toastError } from '../lib/toast.svelte.js'
+  // Suppress error toasts once the site has been deleted — in-flight auto-saves
+  // (blur-triggered PHP/docroot saves, background SSL checks) would otherwise
+  // surface a "sql logic error" when the site row is gone from the DB.
+  const toastError = (msg) => { if (!siteGone) _toastError(msg) }
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
   let active = $state('settings')
+  // Set to true once the site is successfully deleted so that any in-flight
+  // async fetches (auto-save on blur, background reloads) don't surface
+  // spurious error toasts after the site row is gone from the DB.
+  let siteGone = false
 
   // live data per tab
   let dbs = $state([])
@@ -333,6 +341,7 @@
     // App.svelte). Pre-this, the operator saw the sites list reappear
     // with the deleted site gone but no confirmation that the action
     // actually completed — easy to mistake for "the click didn't work."
+    siteGone = true
     toastSuccess(`Site ${site.domain} deleted`)
     go('sites')
   }
