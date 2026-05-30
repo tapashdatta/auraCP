@@ -2,6 +2,28 @@
 
 All notable changes to auraCP.
 
+## v0.3.11 — 2026-05-30
+
+Add MongoDB as an optional installer component (default: no).
+
+install.sh:
+  - New flag --mongodb=yes|no (env: AURACP_MONGODB); version via
+    --mongodb-version=8.0|7.0 (env: AURACP_MONGODB_VERSION; default: 8.0).
+  - Adds the official MongoDB apt repo (repo.mongodb.org) with the
+    correct keyring, per-distro/codename path, and arch= constraint for
+    amd64 + arm64. Debian 13 (trixie) uses the bookworm repo which is
+    binary-compatible (no official trixie packages yet).
+  - Installs mongodb-org, enables mongod on 127.0.0.1:27017.
+  - Appears in the whiptail checklist, interactive ask, plan summary,
+    and --help text.
+
+uninstall.sh:
+  - Stops mongod, purges mongodb-org and all sub-packages.
+  - Removes /var/lib/mongodb, /var/log/mongodb, leftover sockets.
+  - Drops the mongodb-org-*.list apt source.
+  - Sweeps the mongodb-server-*.gpg keyring.
+  - Removes the mongodb service user.
+
 ## v0.3.10 — 2026-05-30
 
 Fix mobile nav hidden entirely (was display:none at ≤640px — now shows

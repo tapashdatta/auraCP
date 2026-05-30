@@ -5,7 +5,7 @@
 # so the host returns to its baseline.
 #
 # v0.2.0 stack: removes nginx + PHP-FPM (multi-version) + Node + MariaDB +
-# PostgreSQL + Redis + Typesense + Docker + UFW + fail2ban as installed.
+# PostgreSQL + MongoDB + Redis + Typesense + Docker + UFW + fail2ban as installed.
 # (Pre-v0.2.0 hosts: residual Caddy / FrankenPHP / Souin artifacts are also
 # scrubbed by the content-based apt sweep + the legacy keyring entries below.)
 #
@@ -73,7 +73,7 @@ ${Y}This will remove auraCP and everything it installed:${Z}
   • auracpd panel (package, service, /opt/auracp, /etc/auracp, /var/lib/auracp)
   • all hosted sites: their Linux users, /home dirs, vhosts, per-site services
   • nginx, PHP-FPM (all installed versions), Node.js
-  • Redis, Typesense, Docker, UFW + fail2ban (if installed)
+  • MongoDB, Redis, Typesense, Docker, UFW + fail2ban (if installed)
   • legacy v0.1.x residue: Caddy, FrankenPHP, Souin keyrings + sources
 $( [ "$KEEP_DB" -eq 1 ] && echo "  • (keeping MariaDB / PostgreSQL and their data)" || echo "  ${R}• MariaDB and PostgreSQL — including ALL database data${Z}" )
   (base tools like curl/cron and system python3 are left untouched)
@@ -93,7 +93,7 @@ export DEBIAN_FRONTEND=noninteractive
 # additions (packages.sury.org, nginx.org) and v0.1.x leftovers (NodeSource,
 # pkg.dunglas.dev/static-php/frankenphp).
 msg "Sweeping apt for third-party sources auraCP-versions installed…"
-sweep_pat='deb\.nodesource\.com|mirror\.mariadb\.org|apt\.postgresql\.org|download\.docker\.com|pkg\.dunglas\.dev|static-php|frankenphp|dl\.typesense\.org|packages\.sury\.org|nginx\.org/packages'
+sweep_pat='deb\.nodesource\.com|mirror\.mariadb\.org|apt\.postgresql\.org|repo\.mongodb\.org|download\.docker\.com|pkg\.dunglas\.dev|static-php|frankenphp|dl\.typesense\.org|packages\.sury\.org|nginx\.org/packages'
 for src in /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
   [ -e "$src" ] || continue
   if grep -qE "$sweep_pat" "$src" 2>/dev/null; then
@@ -120,7 +120,8 @@ for kr in /etc/apt/keyrings/nodesource.gpg \
           /etc/apt/keyrings/docker.gpg \
           /etc/apt/keyrings/docker-archive-keyring.gpg \
           /usr/share/keyrings/sury-php.gpg \
-          /usr/share/keyrings/nginx-archive-keyring.gpg; do
+          /usr/share/keyrings/nginx-archive-keyring.gpg \
+          /usr/share/keyrings/mongodb-server-*.gpg; do
   [ -e "$kr" ] && run "rm -f '$kr'"
 done
 
@@ -264,6 +265,12 @@ else
 fi
 
 # ── 4. optional components ──────────────────────────────────────────────────
+msg "Removing MongoDB…"
+stop_unit mongod
+purge_installed mongodb-org mongodb-org-database mongodb-org-server mongodb-org-mongos mongodb-org-tools mongodb-org-database-tools-extra mongodb-mongosh
+run "rm -rf /var/lib/mongodb /var/log/mongodb /tmp/mongodb-*.sock"
+run "rm -f /etc/apt/sources.list.d/mongodb-org-*.list"
+
 msg "Removing Redis…"
 stop_unit redis-server
 purge_installed redis-server redis-tools
@@ -295,7 +302,7 @@ if [ "$KEEP_DB" -eq 0 ]; then
     id "$u" >/dev/null 2>&1 && run "userdel -rf $u 2>/dev/null"
   done
 fi
-for u in redis _typesense typesense; do
+for u in mongodb redis _typesense typesense; do
   id "$u" >/dev/null 2>&1 && run "userdel -rf $u 2>/dev/null"
 done
 if getent group docker >/dev/null 2>&1; then

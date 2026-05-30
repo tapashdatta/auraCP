@@ -9,7 +9,7 @@
 #   - PHP-FPM (multiple versions side-by-side from deb.sury.org)
 #   - go-acme/lego in auracpd (in-process ACME — no certbot)
 #   - Node.js from nodejs.org tarballs, optional pm2-runtime in systemd
-#   - MariaDB / PostgreSQL / Redis / Typesense / Docker / UFW + fail2ban — optional
+#   - MariaDB / PostgreSQL / MongoDB / Redis / Typesense / Docker / UFW + fail2ban — optional
 #
 # Usage:
 #   sudo ./install.sh                 # interactive
@@ -20,7 +20,7 @@
 #   --db=mariadb|postgres|both|none   --node=yes|no      --php=yes|no
 #   --php-version=8.3|8.4|8.5         --python=yes|no    --redis=yes|no
 #   --mariadb-version=10.11|11.4|11.8 --postgres-version=16|17|18
-#   --node-version=20|22|24
+#   --node-version=20|22|24           --mongodb=yes|no   --mongodb-version=8.0|7.0
 #   --typesense=yes|no                --docker=yes|no
 #   --security=yes|no                 --port=8443
 #   --panel-domain=panel.example.com  (front the panel via nginx; auracpd issues its LE cert)
@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.10"
+AURACP_VERSION="0.3.11"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -57,6 +57,7 @@ OPT_PYTHON="${AURACP_PYTHON:-no}"
 OPT_MARIADB="${AURACP_MARIADB:-yes}"
 OPT_POSTGRES="${AURACP_POSTGRES:-no}"
 OPT_REDIS="${AURACP_REDIS:-no}"
+OPT_MONGODB="${AURACP_MONGODB:-no}"
 OPT_TYPESENSE="${AURACP_TYPESENSE:-no}"
 OPT_DOCKER="${AURACP_DOCKER:-no}"
 OPT_SECURITY="${AURACP_SECURITY:-yes}"  # UFW firewall + fail2ban
@@ -65,6 +66,7 @@ TYPESENSE_VERSION="${AURACP_TYPESENSE_VERSION:-30.2}"
 # Per-engine version defaults — overridable via flags / env / TUI.
 MARIADB_VERSION="${AURACP_MARIADB_VERSION:-11.8}"     # 11.8 | 11.4 | 10.11  (LTS)
 POSTGRES_VERSION="${AURACP_POSTGRES_VERSION:-18}"     # 18 | 17 | 16
+MONGODB_VERSION="${AURACP_MONGODB_VERSION:-8.0}"      # 8.0 | 7.0
 
 # paths + detected OS (filled in by preflight)
 PREFIX="/opt/auracp"
@@ -194,6 +196,8 @@ parse_args() {
       --node-version=*)     NODE_MAJOR="${arg#*=}" ;;
       --python=*)      sawSelection=1; OPT_PYTHON="${arg#*=}" ;;
       --redis=*)       sawSelection=1; OPT_REDIS="${arg#*=}" ;;
+      --mongodb=*)     sawSelection=1; OPT_MONGODB="${arg#*=}" ;;
+      --mongodb-version=*) MONGODB_VERSION="${arg#*=}" ;;
       --typesense=*)   sawSelection=1; OPT_TYPESENSE="${arg#*=}" ;;
       --docker=*)      sawSelection=1; OPT_DOCKER="${arg#*=}" ;;
       --security=*)    sawSelection=1; OPT_SECURITY="${arg#*=}" ;;
@@ -208,6 +212,7 @@ parse_args() {
   case "$MARIADB_VERSION" in 10.11|11.4|11.8) ;; *) die "--mariadb-version must be 10.11 / 11.4 / 11.8";; esac
   case "$POSTGRES_VERSION" in 16|17|18) ;;       *) die "--postgres-version must be 16 / 17 / 18";; esac
   case "$NODE_MAJOR"      in 20|22|24) ;;        *) die "--node-version must be 20 / 22 / 24";; esac
+  case "$MONGODB_VERSION" in 7.0|8.0) ;;        *) die "--mongodb-version must be 7.0 / 8.0";; esac
   [ "$sawSelection" -eq 1 ] && INTERACTIVE=0
   return 0
 }
@@ -354,9 +359,10 @@ tui_components() {
   local chosen
   chosen=$(whiptail --title "auraCP — optional components" \
     --checklist "Space to toggle, Enter to confirm.\nRequired (auracpd, nginx) are always installed." \
-    20 74 9 \
+    22 74 10 \
     MARIADB "MariaDB database engine"            "$(onoff "$OPT_MARIADB")" \
     POSTGRES "PostgreSQL database engine"        "$(onoff "$OPT_POSTGRES")" \
+    MONGODB "MongoDB ${MONGODB_VERSION} document database" "$(onoff "$OPT_MONGODB")" \
     NODE    "Node.js ${NODE_MAJOR} LTS runtime"  "$(onoff "$OPT_NODE")" \
     PHP     "PHP-FPM (deb.sury.org; pick versions next)" "$(onoff "$OPT_PHP")" \
     PYTHON  "Python 3 (gunicorn/uvicorn)"        "$(onoff "$OPT_PYTHON")" \
@@ -365,9 +371,10 @@ tui_components() {
     DOCKER  "Docker engine"                      "$(onoff "$OPT_DOCKER")" \
     SECURITY "UFW firewall + fail2ban"           "$(onoff "$OPT_SECURITY")" \
     3>&1 1>&2 2>&3 < /dev/tty) || return 1
-  OPT_MARIADB=no OPT_POSTGRES=no OPT_NODE=no OPT_PHP=no OPT_PYTHON=no OPT_REDIS=no OPT_TYPESENSE=no OPT_DOCKER=no OPT_SECURITY=no
+  OPT_MARIADB=no OPT_POSTGRES=no OPT_MONGODB=no OPT_NODE=no OPT_PHP=no OPT_PYTHON=no OPT_REDIS=no OPT_TYPESENSE=no OPT_DOCKER=no OPT_SECURITY=no
   case "$chosen" in *MARIADB*) OPT_MARIADB=yes;; esac
   case "$chosen" in *POSTGRES*) OPT_POSTGRES=yes;; esac
+  case "$chosen" in *MONGODB*) OPT_MONGODB=yes;; esac
   case "$chosen" in *NODE*) OPT_NODE=yes;; esac
   case "$chosen" in *PHP*) OPT_PHP=yes;; esac
   case "$chosen" in *PYTHON*) OPT_PYTHON=yes;; esac
@@ -547,6 +554,7 @@ select_readline() {
   fi
   OPT_PYTHON=$(ask "Install Python 3?" "$OPT_PYTHON")
   OPT_REDIS=$(ask "Install Redis?" "$OPT_REDIS")
+  OPT_MONGODB=$(ask "Install MongoDB ${MONGODB_VERSION}?" "$OPT_MONGODB")
   OPT_TYPESENSE=$(ask "Install Typesense search server?" "$OPT_TYPESENSE")
   OPT_DOCKER=$(ask "Install Docker engine?" "$OPT_DOCKER")
   OPT_SECURITY=$(ask "Enable security hardening (UFW + fail2ban)?" "$OPT_SECURITY")
@@ -597,12 +605,13 @@ print_plan() {
 mark() { yesno "$1" && echo "${C_GRN}install${C_RESET}" || echo "${C_DIM}skip${C_RESET}"; }
 
 build_plan() {
-  local mariadb_l postgres_l node_l php_l python_l redis_l \
+  local mariadb_l postgres_l mongodb_l node_l php_l python_l redis_l \
         typesense_l docker_l security_l panel_l
-  yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"  || mariadb_l="skip"
-  yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})" || postgres_l="skip"
-  yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"           || node_l="skip"
-  yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSIONS})"          || php_l="skip"
+  yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"   || mariadb_l="skip"
+  yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})"  || postgres_l="skip"
+  yesno "$OPT_MONGODB"   && mongodb_l="install  (${MONGODB_VERSION})"    || mongodb_l="skip"
+  yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"            || node_l="skip"
+  yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSIONS})"           || php_l="skip"
   yesno "$OPT_PYTHON"    && python_l="install"  || python_l="skip"
   yesno "$OPT_REDIS"     && redis_l="install"   || redis_l="skip"
   yesno "$OPT_TYPESENSE" && typesense_l="install" || typesense_l="skip"
@@ -617,6 +626,7 @@ auraCP ${AURACP_VERSION} on ${OS_ID:-?} ${OS_CODENAME:-?} (${ARCH})
   nginx ...............  required (1.30 mainline)
   MariaDB .............  ${mariadb_l}
   PostgreSQL ..........  ${postgres_l}
+  MongoDB .............  ${mongodb_l}
   Node.js .............  ${node_l}
   PHP-FPM .............  ${php_l}
   Python 3 ............  ${python_l}
@@ -982,6 +992,30 @@ install_redis() {
   ok "Redis ready."
 }
 
+install_mongodb() {
+  msg "Installing MongoDB ${MONGODB_VERSION} (repo.mongodb.org)…"
+  run "install -d -m 0755 /usr/share/keyrings"
+  run "curl -fsSL 'https://www.mongodb.org/static/pgp/server-${MONGODB_VERSION}.asc' | gpg --dearmor -o /usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg"
+  # mongodb.org publishes per-distro, per-codename repos. Debian 13 (trixie) doesn't have
+  # official packages yet — the bookworm repo is binary-compatible and works fine.
+  local repo_os repo_cn repo_comp
+  if [ "${OS_ID:-}" = "ubuntu" ]; then
+    repo_os="ubuntu"; repo_cn="${OS_CODENAME}"; repo_comp="multiverse"
+  else
+    repo_os="debian"; repo_comp="main"
+    case "${OS_CODENAME:-}" in
+      trixie) repo_cn="bookworm" ;;   # no trixie packages yet — bookworm is compat
+      *)      repo_cn="${OS_CODENAME}" ;;
+    esac
+  fi
+  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${repo_cn}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
+    | run "tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list >/dev/null"
+  run "apt-get update -y"
+  run "apt-get install -y mongodb-org"
+  run "systemctl enable --now mongod"
+  ok "MongoDB ${MONGODB_VERSION} ready (mongod listening on 127.0.0.1:27017)."
+}
+
 install_typesense() {
   msg "Installing Typesense ${TYPESENSE_VERSION} (search server)…"
   local deb="/tmp/typesense-server.deb"
@@ -1139,6 +1173,7 @@ main() {
   yesno "$OPT_PHP"      && install_php_fpm
   yesno "$OPT_PYTHON"   && install_python
   yesno "$OPT_REDIS"    && install_redis
+  yesno "$OPT_MONGODB"  && install_mongodb
   yesno "$OPT_TYPESENSE" && install_typesense
   yesno "$OPT_DOCKER"   && install_docker
   yesno "$OPT_SECURITY" && install_security
