@@ -107,3 +107,78 @@ type errorFrame struct {
 	Message   string    `json:"message"`
 	RequestID string    `json:"request_id"`
 }
+
+// ─── Slow-log subprotocol (v0.3.2-C) ─────────────────────────────────
+//
+// /connections/{id}/slow-log/stream rides the same wsSubprotocol token
+// and reuses the open / cancel / error / progress / done close codes
+// of the SQL stream. The slow-log-specific frames are an open-frame
+// variant carrying SlowLog parameters and a row frame carrying one
+// slowLogRow per emission. The meta frame carries Mode + a Hint when
+// the backend's prerequisites are met but degraded (e.g. snapshot
+// mode for Postgres). Mode "unavailable" is never emitted as a meta
+// frame — it always resolves to an error frame so the client takes
+// a definite "not enabled" branch.
+
+const wsSlowLogSubprotocol = "aura.slowlog.v1"
+
+// slowLogParamsSpec is carried inside the open frame's SlowLog field
+// to parameterise the slow-log read. SinceMS is a Unix millisecond
+// epoch — the server clamps to "not in the future" and treats zero as
+// "all available rows". MinDurationMS filters per-execution (table
+// mode) or per-mean (snapshot mode). MaxRows / TimeoutMS clamp to the
+// engine's Config().Query.* effective caps, same as openFrameLimitsSpec.
+type slowLogParamsSpec struct {
+	SinceMS       int64 `json:"sinceMs,omitempty"`
+	MinDurationMS int64 `json:"minDurationMs,omitempty"`
+	MaxRows       int   `json:"maxRows,omitempty"`
+	// Follow asks the server to keep the connection open and poll for
+	// new rows on an interval. Honoured only in table mode (MariaDB);
+	// snapshot mode (Postgres) refuses follow=true and emits a single
+	// snapshot then done.
+	Follow bool `json:"follow,omitempty"`
+}
+
+// slowLogMetaFrame describes the slow-log session's effective
+// parameters and the discovered backend mode. Distinct type from
+// metaFrame so SDKs can switch on frame type without inspecting
+// optional columns.
+type slowLogMetaFrame struct {
+	Type            frameType `json:"type"`
+	Mode            string    `json:"mode"`            // "table" | "snapshot"
+	Hint            string    `json:"hint,omitempty"`  // operator-actionable note (empty when fully usable)
+	PollIntervalMS  int64     `json:"pollIntervalMs,omitempty"`
+	EffectiveLimits openFrameLimitsSpec `json:"effectiveLimits"`
+}
+
+// slowLogRow is one emitted slow-query record. Field names are
+// camelCased per SDK wire convention. SQL text is REDACTED to a
+// length-capped excerpt; the audit log carries the verbatim text
+// server-side.
+type slowLogRow struct {
+	Type         frameType `json:"type"` // always frameRow
+	TimestampMS  int64     `json:"timestampMs"`
+	UserHost     string    `json:"userHost"`
+	Database     string    `json:"database,omitempty"`
+	QueryTimeMS  float64   `json:"queryTimeMs"`
+	LockTimeMS   float64   `json:"lockTimeMs,omitempty"`
+	MeanTimeMS   float64   `json:"meanTimeMs"`
+	Calls        int64     `json:"calls"`
+	RowsExamined int64     `json:"rowsExamined,omitempty"`
+	RowsSent     int64     `json:"rowsSent,omitempty"`
+	SQLExcerpt   string    `json:"sqlExcerpt"`
+}
+
+// wsSlowLogPollInterval is the default poll cadence for Follow=true
+// streams. Set conservatively: a 2s tick is fine-grained enough for an
+// operator watching a degrading query without hammering the backend.
+// The httpapi layer surfaces this in the meta frame so the UI can
+// render a "next refresh in 2s" affordance.
+const wsSlowLogPollInterval = 2 * time.Second
+
+// wsSlowLogSQLExcerptCap is the maximum bytes of sql_text emitted per
+// row. We never echo more than this to the client — operator logs are
+// in the audit sink. 2 KiB is enough to spot the slow query while
+// keeping the WS frame size bounded.
+const wsSlowLogSQLExcerptCap = 2048
+

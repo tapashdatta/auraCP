@@ -61,6 +61,12 @@ const (
 	CodeNotImplemented     = "not-implemented"
 	CodeOriginRejected     = "origin-rejected"
 	CodeCSRFRejected       = "csrf-rejected"
+	// CodeSlowLogUnavailable is emitted by the slow-log WS handler
+	// when the backend's prerequisites are missing
+	// (slow_query_log=OFF, log_output=FILE, pg_stat_statements not
+	// installed). The error frame's Message carries the operator-
+	// actionable hint string verbatim.
+	CodeSlowLogUnavailable = "slowlog-unavailable"
 )
 
 // errorEnvelope is the canonical wire shape for every error response.
@@ -209,6 +215,11 @@ func mapErr(err error) (status int, code string, msg string) {
 		return http.StatusUnprocessableEntity, CodeResultCapped, "result capped; use /sql/stream"
 	case errors.Is(err, driver.ErrClosed):
 		return http.StatusInternalServerError, CodeInternal, "internal driver state"
+	case errors.Is(err, driver.ErrSlowLogUnavailable):
+		// Surface the hint (operator-actionable) verbatim via the
+		// error's Error() string — callers using writeErrorDetails
+		// can attach the hint separately.
+		return http.StatusUnprocessableEntity, CodeSlowLogUnavailable, err.Error()
 
 	// context
 	case errors.Is(err, context.DeadlineExceeded):

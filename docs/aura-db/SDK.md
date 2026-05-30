@@ -761,7 +761,7 @@ to wherever the host mounts `engine.Handler()` (typically
 | `GET`  | `/connections/{id}/saved-queries`                   | List saved queries.                      |
 | `POST` | `/connections/{id}/export`                          | Initiate export. Returns a signed URL.   |
 | `POST` | `/connections/{id}/import`                          | Initiate import (CSV/JSON/SQL).          |
-| `WS`   | `/connections/{id}/slow-log/stream`                 | WebSocket: slow query log tail (v0.3.1). |
+| `WS`   | `/connections/{id}/slow-log/stream`                 | WebSocket: slow query log tail (MariaDB table mode) / pg_stat_statements snapshot (Postgres) (v0.3.2-C). Subprotocol `aura.slowlog.v1`. |
 | `GET`  | `/connections/{id}/audit`                           | Last 1000 events. Filterable.            |
 | `POST` | `/step-up/initiate`                                 | Begin a step-up flow (returns challenge). |
 | `POST` | `/step-up/verify`                                   | Verify a step-up assertion.              |

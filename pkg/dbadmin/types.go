@@ -112,6 +112,13 @@ const (
 	ActionRestore        Action = "backup.restore"
 	ActionAuditRead      Action = "audit.read"
 	ActionAuditConfig    Action = "audit.config"
+	// ActionSlowLogRead authorises reading the backend slow-query log
+	// (MariaDB mysql.slow_log table; Postgres pg_stat_statements). It
+	// is a read-class operation gated per-connection; viewers may
+	// observe slow-query metadata on connections they can view. The
+	// WS streamer for /connections/{id}/slow-log/stream (v0.3.1) is
+	// the only consumer.
+	ActionSlowLogRead    Action = "slowlog.read"
 )
 
 // MinRole returns the minimum role required for an action under the default
@@ -127,6 +134,12 @@ func (a Action) MinRole() Role {
 		return RoleViewer
 	case ActionRowRead, ActionQueryRead, ActionExport:
 		return RoleAnalyst
+	case ActionSlowLogRead:
+		// Slow-log read is per-connection metadata: a viewer-level
+		// permission on a connection they already see. The actual
+		// statement bodies are redacted/digested upstream (we surface
+		// query digests, not literal SQL with parameters).
+		return RoleViewer
 	case ActionRowWrite, ActionQueryWrite, ActionImport:
 		return RoleWriter
 	case ActionQueryDDL, ActionRestore:

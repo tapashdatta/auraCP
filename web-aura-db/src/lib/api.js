@@ -227,6 +227,112 @@ export class AuraDBClient {
   audit(id)                      { return request(`/connections/${enc(id)}/audit`) }
 
   /**
+   * Open a WebSocket against /connections/{id}/slow-log/stream and
+   * stream slow-query rows. Mirrors sqlStream.exec's handle pattern —
+   * returns an object whose chained .onMeta / .onRow / .onProgress /
+   * .onDone / .onError methods install per-stream callbacks.
+   *
+   * The CSRF token piggybacks on the WS upgrade via the
+   * `aura.csrf.<token>` subprotocol; browsers can't set custom
+   * headers on the WebSocket constructor. The first message sent is
+   * an "open" frame carrying the slow-log knobs; the server replies
+   * with one meta frame (carrying mode + hint), zero-or-more row
+   * frames, a final done frame, then a close. The client may send a
+   * "cancel" frame at any time to terminate the stream early.
+   *
+   * Backend frame protocol (mirrors aura.slowlog.v1):
+   *   client → server  {type:"open",   connectionId, csrf, slowLog:{sinceMs,minDurationMs,maxRows,follow}, limits?}
+   *   client → server  {type:"cancel", csrf?}
+   *   server → client  {type:"meta",   mode:"table"|"snapshot", hint?, pollIntervalMs?, effectiveLimits}
+   *   server → client  {type:"row",    timestampMs, userHost, database?, queryTimeMs, lockTimeMs?, meanTimeMs, calls, rowsExamined?, rowsSent?, sqlExcerpt}
+   *   server → client  {type:"progress", rowsEmitted, elapsedMs}
+   *   server → client  {type:"done",   totalRows, durationMs, truncated}
+   *   server → client  {type:"error",  code, message, request_id}
+   *
+   * @param {string} connId
+   * @param {{
+   *   sinceMs?: number,
+   *   minDurationMs?: number,
+   *   maxRows?: number,
+   *   follow?: boolean,
+   *   timeoutMs?: number,
+   * }} [opts]
+   */
+  slowLogStream(connId, opts = {}) {
+    if (!connId) throw new AuraDBError(0, 'invalid-input', 'connId required')
+    const csrf = csrfToken()
+    if (!csrf) throw new AuraDBError(0, 'unauthenticated', 'CSRF cookie missing')
+
+    const scheme = (typeof location !== 'undefined' && location.protocol === 'https:') ? 'wss' : 'ws'
+    const host = typeof location !== 'undefined' ? location.host : 'localhost'
+    const protos = ['aura.slowlog.v1', 'aura.csrf.' + csrf]
+    const url = `${scheme}://${host}${BASE}/connections/${enc(connId)}/slow-log/stream`
+    const ws = new WebSocket(url, protos)
+
+    /** @type {{onMeta?:Function, onRow?:Function, onProgress?:Function, onDone?:Function, onError?:Function}} */
+    const h = {}
+
+    const slowLog = {}
+    if (typeof opts.sinceMs === 'number')       slowLog.sinceMs       = opts.sinceMs
+    if (typeof opts.minDurationMs === 'number') slowLog.minDurationMs = opts.minDurationMs
+    if (typeof opts.maxRows === 'number')       slowLog.maxRows       = opts.maxRows
+    if (opts.follow === true)                   slowLog.follow        = true
+
+    const openFrame = {
+      type: 'open',
+      connectionId: connId,
+      csrf,
+      slowLog,
+    }
+    if (typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0) {
+      openFrame.limits = { maxRows: 0, maxBytes: 0, timeoutMs: opts.timeoutMs }
+    }
+
+    ws.addEventListener('open', () => {
+      try { ws.send(JSON.stringify(openFrame)) }
+      catch (e) {
+        const msg = (e && /** @type {any} */ (e).message) || 'send failed'
+        h.onError?.({ code: 'stream_unavailable', message: msg })
+      }
+    })
+    ws.addEventListener('error', () => {
+      h.onError?.({ code: 'stream_unavailable', message: 'WebSocket error' })
+    })
+    ws.addEventListener('message', (e) => {
+      let f
+      try { f = JSON.parse(/** @type {string} */ (e.data)) }
+      catch { return }
+      if (!f || typeof f !== 'object') return
+      switch (f.type) {
+        case 'meta':     h.onMeta?.(f); break
+        case 'row':      h.onRow?.(f); break
+        case 'progress': h.onProgress?.(f); break
+        case 'done':     h.onDone?.(f); break
+        case 'error':    h.onError?.({ code: f.code, message: f.message, requestId: f.request_id }); break
+      }
+    })
+
+    const handle = {
+      ws,
+      cancel: () => {
+        try { ws.send(JSON.stringify({ type: 'cancel', csrf })) } catch { /* ignore */ }
+        try { ws.close() } catch { /* ignore */ }
+      },
+      /** @param {(meta:{mode:string,hint?:string,pollIntervalMs?:number,effectiveLimits:any})=>void} fn */
+      onMeta:     (fn) => { h.onMeta = fn; return handle },
+      /** @param {(row:any)=>void} fn */
+      onRow:      (fn) => { h.onRow = fn; return handle },
+      /** @param {(p:{rowsEmitted:number,elapsedMs:number})=>void} fn */
+      onProgress: (fn) => { h.onProgress = fn; return handle },
+      /** @param {(d:{totalRows:number,durationMs:number,truncated:boolean})=>void} fn */
+      onDone:     (fn) => { h.onDone = fn; return handle },
+      /** @param {(e:{code:string,message:string,requestId?:string})=>void} fn */
+      onError:    (fn) => { h.onError = fn; return handle },
+    }
+    return handle
+  }
+
+  /**
    * Stream a table export and trigger a file download via a Blob URL.
    * Sends a POST with the structured export request — the backend
    * builds the SELECT server-side from validated identifiers, never

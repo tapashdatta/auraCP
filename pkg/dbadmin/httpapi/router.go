@@ -94,6 +94,18 @@ func (s *server) routes() http.Handler {
 		authn(s),
 	))
 
+	// Slow-log WS stream (v0.3.2-C). Same chain layout as /sql/stream
+	// — own timeout management, CSRF validated inside the handler via
+	// the WS subprotocol token. The handler reuses the SQL stream's
+	// CSWSH + CSRF + rate-limit + semaphore defenses; see
+	// handlers_slowlog.go for the numbered-comment reference.
+	mux.Handle("GET /connections/{id}/slow-log/stream", chain(handleSlowLogStream(s),
+		shutdownGate(s),
+		requestID(),
+		recoverer(s),
+		authn(s),
+	))
+
 	// History.
 	mux.Handle("GET /connections/{id}/history", read(defaultTimeout, handleListHistory(s)))
 	mux.Handle("GET /connections/{id}/history/search", read(defaultTimeout, handleSearchHistory(s)))
