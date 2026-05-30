@@ -5,6 +5,7 @@ package instance
 
 import (
 	"context"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 type Stats struct {
 	Hostname    string  `json:"hostname"`
 	OS          string  `json:"os"`
+	IP          string  `json:"ip"`
 	Load1       float64 `json:"load1"`
 	Load5       float64 `json:"load5"`
 	Load15      float64 `json:"load15"`
@@ -30,10 +32,32 @@ type Stats struct {
 func GetStats() Stats {
 	s := Stats{Cores: runtime.NumCPU(), OS: osPretty()}
 	s.Hostname, _ = os.Hostname()
+	s.IP = primaryIP()
 	s.Load1, s.Load5, s.Load15 = loadAvg()
 	s.MemUsedMB, s.MemTotalMB = memInfo()
 	s.DiskUsedGB, s.DiskTotalGB = diskInfo("/")
 	return s
+}
+
+// primaryIP returns the host's primary outbound IPv4. It opens a UDP socket
+// to a public address (no packets are actually sent — UDP connect just picks
+// the route) and reads back the local address the kernel chose. Falls back to
+// the first non-loopback interface address, then "" if none.
+func primaryIP() string {
+	if c, err := net.Dial("udp", "1.1.1.1:80"); err == nil {
+		defer c.Close()
+		if a, ok := c.LocalAddr().(*net.UDPAddr); ok && a.IP != nil {
+			return a.IP.String()
+		}
+	}
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && ipn.IP.To4() != nil {
+				return ipn.IP.String()
+			}
+		}
+	}
+	return ""
 }
 
 func osPretty() string {

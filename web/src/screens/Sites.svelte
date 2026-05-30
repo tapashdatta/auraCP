@@ -132,26 +132,18 @@
       {/if}
     </div>
 
-    <!-- Recent activity — audit log preview. Hidden < 720 px so phones
-         show only Sites Hosted + Server Snapshot (operator dipping in to
-         check status, not scanning audit log). -->
-    <div class="hero-card hero-card-recent">
-      <span class="lbl">Recent activity</span>
-      {#if recent.length === 0}
-        <div class="hint" style="margin-left:0">No events yet.</div>
+    <!-- Server info — OS / hostname / IP. Replaces the old activity card;
+         the activity feed now lives below the sites table. -->
+    <div class="hero-card hero-card-server">
+      <span class="lbl">Server</span>
+      {#if stats}
+        <dl class="srv">
+          <div><dt>OS</dt><dd>{stats.os || '—'}</dd></div>
+          <div><dt>Hostname</dt><dd class="mono">{stats.hostname || '—'}</dd></div>
+          <div><dt>IP address</dt><dd class="mono">{stats.ip || '—'}</dd></div>
+        </dl>
       {:else}
-        <ul class="feed">
-          {#each recent as e}
-            <li>
-              <span class="feed-dot"></span>
-              <div class="feed-body">
-                <div class="feed-action mono">{e.action}</div>
-                {#if e.target}<div class="feed-target">{e.target}</div>{/if}
-                <div class="feed-meta">{e.actor || 'system'} · {relTime(e.ts)}</div>
-              </div>
-            </li>
-          {/each}
-        </ul>
+        <div class="hint" style="margin-left:0">Loading…</div>
       {/if}
     </div>
   </section>
@@ -209,6 +201,27 @@
       </tbody>
     </table>
   </div>
+
+  <!-- Recent activity — audit log preview, moved below the sites table. -->
+  <div class="card activity-card">
+    <div class="section-h"><div><h3>Recent activity</h3><p>Latest panel actions</p></div></div>
+    {#if recent.length === 0}
+      <div class="empty">No events yet.</div>
+    {:else}
+      <ul class="feed">
+        {#each recent as e}
+          <li>
+            <span class="feed-dot"></span>
+            <div class="feed-body">
+              <div class="feed-action mono">{e.action}</div>
+              {#if e.target}<div class="feed-target">{e.target}</div>{/if}
+              <div class="feed-meta">{e.actor || 'system'} · {relTime(e.ts)}</div>
+            </div>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -244,7 +257,20 @@
   .snap-v small{font-weight:500;color:var(--txt-3);font-size:11px;margin-left:3px}
   .snap-row.hot .bar i{background:linear-gradient(90deg,#a8691a,var(--warn))}
 
-  /* Recent activity feed inside the third hero card. */
+  /* Server-info card (OS / hostname / IP) — replaces the old activity card. */
+  .srv{display:flex;flex-direction:column;gap:9px;margin:0}
+  .srv > div{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+  .srv dt{font-size:12px;color:var(--txt-3);flex:none}
+  .srv dd{margin:0;font-size:12.5px;color:var(--txt);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* Recent activity card — now below the sites table. */
+  .activity-card{margin-top:18px}
+  .activity-card .section-h{padding:15px 18px;border-bottom:1px solid var(--line)}
+  .activity-card .section-h h3{font-size:14px;font-weight:600;margin:0}
+  .activity-card .section-h p{font-size:12px;color:var(--txt-3);margin-top:2px}
+  .activity-card .feed{padding:14px 18px}
+  .activity-card .empty{border-top:none}
+
   .feed{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:14px}
   .feed li{display:flex;gap:11px;align-items:flex-start;font-size:12.5px}
   .feed-dot{width:7px;height:7px;border-radius:50%;background:var(--aura);box-shadow:0 0 0 3px var(--aura-glow);flex:none;margin-top:5px}
@@ -273,7 +299,8 @@
      readable at 320 px viewports. */
   @media (max-width:720px){
     .hero-grid{grid-template-columns:1fr 1fr}
-    .hero-card.hero-card-recent{display:none}
+    /* Server card takes the full second row rather than a lone half cell. */
+    .hero-card-server{grid-column:1 / -1}
   }
   @media (max-width:480px){
     .hero{flex-direction:column;align-items:flex-start;gap:14px}
