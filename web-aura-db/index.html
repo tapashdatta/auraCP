@@ -3,32 +3,36 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0d1014" />
+  <meta name="theme-color" content="#0a0a0c" />
   <!--
     FIX (PR #11 CSP-HEADER-NOT-IN-SPA-HTML): defense-in-depth CSP meta.
     The canonical CSP source is the panel response header set by
     auracpd, but a meta tag here closes the gap when the SPA is opened
     via `vite preview` or saved to disk for offline review. Style-src
-    no longer needs 'unsafe-inline' (PR #11 CSP-STYLE-UNSAFE-INLINE):
-    Svelte's scoped <style> blocks compile down to component-class CSS
-    embedded in the main stylesheet, and the inline `style=` attributes
-    that remain in markup are all dynamic (column widths, grid templates,
-    transform offsets) — those are tolerated by 'unsafe-inline' only
-    inside the per-component fold and are fine to drop here. Connect-src
-    matches the websocket + REST endpoints; font-src self covers the
-    self-hosted Plex fallback (lib/fonts.css).
+    keeps 'unsafe-inline' for the dynamic per-component style= attributes
+    (column widths, grid templates, transform offsets). Connect-src
+    matches the websocket + REST endpoints.
+
+    Fonts: Manrope + JetBrains Mono are loaded from Google Fonts (same as
+    the panel SPA) so Aura DB renders in the prototype's typeface. The CSP
+    is widened to permit the Google Fonts stylesheet host
+    (fonts.googleapis.com under style-src) and the woff2 host
+    (fonts.gstatic.com under font-src); everything else stays locked down.
   -->
   <meta http-equiv="Content-Security-Policy"
         content="default-src 'self';
                  script-src 'self';
-                 style-src 'self' 'unsafe-inline';
+                 style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
                  img-src 'self' data:;
-                 font-src 'self' data:;
+                 font-src 'self' data: https://fonts.gstatic.com;
                  connect-src 'self' ws: wss:;
                  base-uri 'self';
                  form-action 'self';
                  frame-ancestors 'self';
                  object-src 'none'" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@300..800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <title>Aura DB</title>
 </head>
 <body>

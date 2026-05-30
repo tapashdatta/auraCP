@@ -1,53 +1,59 @@
 /* ============================================================
    Aura DB Workstation — design tokens
    Dark-first. Light theme via :root[data-theme="light"].
-   Single accent: oxidized copper (#b87333 family). Used sparingly:
-   active tab underline, focus ring, the single primary button per
-   screen, "running" status dot. Everything else is monochrome.
+   Palette: blue (#3b82f6) accent + purple (#a78bfa) secondary on a
+   near-black surface stack — matches the Aura DB prototype. The accent
+   carries active tabs, focus rings, primary buttons and "running" dots;
+   purple flags secondary/info; everything else stays neutral.
    ============================================================ */
 
 :root {
-  /* ---- Dark (default) ---- */
-  --bg:                #0d1014;
-  --surface:           #14181d;
-  --surface-elev:      #1a1f25;
-  --surface-sunk:      #0a0d11;
-  --surface-hover:     #1f242b;
-  --surface-active:    #252b33;
+  /* ---- Dark (default) — Aura DB "acp" palette (matches prototype) ---- */
+  --bg:                #0a0a0c;
+  --bg-elev:           #111114;
+  --surface:           #131317;
+  --surface-elev:      #18181d;
+  --surface-sunk:      #0d0d10;
+  --surface-hover:     #1e1e24;
+  --surface-active:    #26262e;
 
-  --border:            #232931;
-  --border-strong:     #2f3640;
-  --border-focus:      #b87333;
+  --border:            #232329;
+  --border-strong:     #2c2c34;
+  --border-focus:      #3b82f6;
 
-  --text:              #e6e8ec;
-  --text-dim:          #a0a6b0;
-  --text-mute:         #6b727d;
-  --text-disabled:     #474d57;
+  --text:              #ededf0;
+  --text-dim:          #8b8b94;
+  --text-mute:         #5c5c66;
+  --text-disabled:     #3a3a42;
 
-  --accent:            #b87333;
-  --accent-hover:      #c98640;
-  --accent-dim:        #8a5626;
-  --accent-bg:         rgba(184,115,51,.12);
-  --accent-bg-strong:  rgba(184,115,51,.20);
+  --accent:            #3b82f6;
+  --accent-hover:      #60a5fa;
+  --accent-dim:        #1d4ed8;
+  --accent-bg:         rgba(59,130,246,.12);
+  --accent-bg-strong:  rgba(59,130,246,.22);
 
-  --danger:            #d8504f;
-  --danger-bg:         rgba(216,80,79,.12);
-  --warning:           #d49d4a;
-  --warning-bg:        rgba(212,157,74,.12);
-  --success:           #5fb47c;
-  --success-bg:        rgba(95,180,124,.12);
-  --info:              #6c8fb5;
-  --info-bg:           rgba(108,143,181,.12);
+  --purple:            #a78bfa;
+  --danger:            #ef4444;
+  --danger-bg:         rgba(239,68,68,.12);
+  --warning:           #f59e0b;
+  --warning-bg:        rgba(245,158,11,.12);
+  --success:           #10b981;
+  --success-bg:        rgba(16,185,129,.12);
+  --info:              #a78bfa;
+  --info-bg:           rgba(167,139,250,.12);
 
-  --engine-pg:         #4a7ca6;
-  --engine-mysql:      #b8893d;
-  --engine-sqlite:     #6d6d6d;
-  --engine-mssql:      #a4554f;
-  --engine-oracle:     #8a4a4a;
+  --engine-pg:         #5a91c4;
+  --engine-mysql:      #e0a458;
+  --engine-sqlite:     #8b8b94;
+  --engine-mssql:      #ef6f6a;
+  --engine-oracle:     #d97b6c;
 
-  /* Typography */
-  --font-sans:         "IBM Plex Sans", ui-sans-serif, sans-serif;
-  --font-mono:         "IBM Plex Mono", ui-monospace, monospace;
+  --shadow:            0 8px 24px -8px rgba(0,0,0,.55);
+  --shadow-lg:         0 24px 60px -20px rgba(0,0,0,.7);
+
+  /* Typography — Manrope (UI) + JetBrains Mono (code/identifiers) */
+  --font-sans:         "Manrope", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:         "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --fs-meta:           11px;
   --fs-body:           12px;
   --fs-ui:             13px;
@@ -57,17 +63,17 @@
   --lh-body:           1.5;
 
   /* Layout constants */
-  --topnav-h:          40px;
+  --topnav-h:          48px;
   --statusbar-h:       24px;
-  --tree-w:            280px;
-  --tree-row-h:        24px;
+  --tree-w:            264px;
+  --tree-row-h:        26px;
   --table-row-h:       28px;
-  --tab-h:             32px;
+  --tab-h:             34px;
 
-  /* Sharp corners — only inputs/pills get any radius at all */
-  --r-input:           4px;
-  --r-pill:            2px;
-  --r-modal:           6px;
+  /* Soft rounded corners (prototype radius scale) */
+  --r-input:           5px;
+  --r-pill:            6px;
+  --r-modal:           10px;
 
   /* Motion — short, ease-out, never animates color cross-fades */
   --t-fast:            80ms ease-out;
@@ -75,42 +81,47 @@
 }
 
 :root[data-theme="light"] {
-  --bg:                #f0ece6;
-  --surface:           #faf8f4;
-  --surface-elev:      #ffffff;
-  --surface-sunk:      #e7e2d9;
-  --surface-hover:     #efeae0;
-  --surface-active:    #e4ddd0;
+  --bg:                #ffffff;
+  --bg-elev:           #fbfbfc;
+  --surface:           #ffffff;
+  --surface-elev:      #fbfbfc;
+  --surface-sunk:      #f6f6f8;
+  --surface-hover:     #f1f1f4;
+  --surface-active:    #ebebef;
 
-  --border:            #d5cfc1;
-  --border-strong:     #b9b09b;
-  --border-focus:      #8a5626;
+  --border:            #e8e8ec;
+  --border-strong:     #d8d8de;
+  --border-focus:      #2563eb;
 
-  --text:              #1c1a16;
-  --text-dim:          #565148;
-  --text-mute:         #8a8579;
-  --text-disabled:     #b5b0a3;
+  --text:              #0a0a0c;
+  --text-dim:          #57575f;
+  --text-mute:         #9a9aa3;
+  --text-disabled:     #c4c4cc;
 
-  --accent:            #8a5626;
-  --accent-hover:      #6f4319;
-  --accent-dim:        #b87333;
-  --accent-bg:         rgba(138,86,38,.10);
-  --accent-bg-strong:  rgba(138,86,38,.18);
+  --accent:            #2563eb;
+  --accent-hover:      #1d4ed8;
+  --accent-dim:        #93c5fd;
+  --accent-bg:         rgba(37,99,235,.10);
+  --accent-bg-strong:  rgba(37,99,235,.18);
 
-  --danger:            #a8302e;
-  --danger-bg:         rgba(168,48,46,.10);
-  --warning:           #8a651c;
-  --warning-bg:        rgba(138,101,28,.10);
-  --success:           #2f7a4d;
-  --success-bg:        rgba(47,122,77,.10);
-  --info:              #3e6896;
-  --info-bg:           rgba(62,104,150,.10);
+  --purple:            #7c3aed;
+  --danger:            #dc2626;
+  --danger-bg:         rgba(220,38,38,.10);
+  --warning:           #b45309;
+  --warning-bg:        rgba(180,83,9,.10);
+  --success:           #047857;
+  --success-bg:        rgba(4,120,87,.10);
+  --info:              #7c3aed;
+  --info-bg:           rgba(124,58,237,.10);
 
   --engine-pg:         #336791;
-  --engine-mysql:      #8b6b29;
+  --engine-mysql:      #a16207;
   --engine-sqlite:     #555555;
-  --engine-mssql:      #8a3a35;
-  --engine-oracle:     #6a3636;
+  --engine-mssql:      #b91c1c;
+  --engine-oracle:     #9a3636;
+
+  --shadow:            0 8px 24px -10px rgba(15,15,20,.12);
+  --shadow-lg:         0 24px 60px -24px rgba(15,15,20,.18);
 }
 
 /* ============================================================

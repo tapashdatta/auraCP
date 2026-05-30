@@ -1,66 +1,16 @@
 /*
- * Self-hosted font face declarations.
+ * Font loading for Aura DB.
  *
- * FIX (PR #11 FONTS-NO-SRI-THIRD-PARTY / dc-13 / PR #13.5 a11y-15):
- * The previous build pulled IBM Plex Sans + Mono from Google Fonts at
- * runtime — no SRI, no offline fallback, and an extra third-party
- * cross-origin handshake that gated initial paint. We now bundle a small
- * system-font stack as the @font-face source path so the SPA never
- * dials out to a third party at runtime.
+ * The SPA renders in Manrope (UI) + JetBrains Mono (code/identifiers) to
+ * match the Aura DB prototype and the panel SPA. Those families are
+ * registered by the Google Fonts <link> in index.html (woff2 with proper
+ * unicode-range subsetting), and the CSP there is widened to permit the
+ * Google Fonts stylesheet + woff2 hosts. We deliberately do NOT redeclare
+ * @font-face for Manrope/JetBrains Mono here: a bare local()-only face
+ * would shadow the link's woff2 src on machines that lack the font.
  *
- * If/when we ship the actual Plex `.woff2` blobs the install pulls them
- * via Vite's asset graph (no Google Fonts dependency). For now the
- * `local()` lookups fall through to the OS UI sans/mono if Plex is
- * installed locally; otherwise the stack in --font-sans / --font-mono
- * (ui-sans-serif / ui-monospace) takes over.
+ * If/when we self-host the woff2 blobs through Vite's asset graph we can
+ * drop the <link> and add real @font-face src: url(...) rules in this
+ * file; --font-sans / --font-mono in app.css already carry the system
+ * fallback stack used until the web fonts paint.
  */
-
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: local('IBM Plex Sans'), local('IBMPlexSans');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: local('IBM Plex Sans Medium'), local('IBMPlexSans-Medium');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: local('IBM Plex Sans SemiBold'), local('IBMPlexSans-SemiBold');
-}
-@font-face {
-  font-family: 'IBM Plex Sans';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: local('IBM Plex Sans Bold'), local('IBMPlexSans-Bold');
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: local('IBM Plex Mono'), local('IBMPlexMono');
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: local('IBM Plex Mono Medium'), local('IBMPlexMono-Medium');
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: local('IBM Plex Mono SemiBold'), local('IBMPlexMono-SemiBold');
-}
