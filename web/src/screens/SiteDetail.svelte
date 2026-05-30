@@ -28,27 +28,35 @@
   let sslStatus = $state(null)
   let sslBusy = $state(false)
   let sslRecheckBusy = $state(false)
+  let sslPolling = $state(false) // true while auto-polling after issue
   // v0.2.42: HTTP-01 reachability pre-flight result. { ok, step, reason, hint, url }
   let preflight = $state(null)
   let preflightBusy = $state(false)
 
-  // v0.2.47: re-check the live TLS state with feedback. The previous button
-  // just called load('ssl') silently — operators thought it didn't work
-  // because nothing visible changed when the cert state was unchanged.
-  // Now: busy state during the refetch + toast on completion.
+  // Poll live cert status after issuance until the cert is active or we time out.
+  // The ACME goroutine runs in the background; the POST returns immediately,
+  // so we need to watch for the state change rather than relying on the response.
+  async function pollUntilActive() {
+    sslPolling = true
+    const deadline = Date.now() + 90_000 // 90s max (LE can take up to ~60s)
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 3000))
+      await load('ssl')
+      if (sslStatus?.status === 'active' && !sslStatus?.selfSigned) {
+        sslPolling = false
+        toastSuccess('Certificate issued successfully.')
+        return
+      }
+    }
+    sslPolling = false
+    toast('Issuance is taking longer than expected — click Refresh to check again.', { kind: 'warn' })
+  }
+
   async function recheckSSL() {
     sslRecheckBusy = true
-    preflight = null   // wipe the stale pre-flight result; the world may have changed
-    const before = sslStatus?.status
+    preflight = null
     await load('ssl')
     sslRecheckBusy = false
-    if (sslStatus?.status === 'active') {
-      toastSuccess(before === 'active' ? 'Still active' : 'Cert is now active')
-    } else if (sslStatus?.status === 'pending') {
-      toast('Still pending — issuance may not have completed', { kind: 'warn' })
-    } else {
-      toastError("No cert served yet. Click 'Issue a certificate' above.")
-    }
   }
   let sshUsers = $state([])
   let nodeRuntimes = $state([])
@@ -277,12 +285,11 @@
     sslBusy = false
     if (!r.ok) {
       toastError(d.error ? `Issuance failed: ${d.error}` : `Issuance failed: HTTP ${r.status}`)
-      // Still refresh — the certs table now has lastError populated.
       load('ssl')
       return
     }
-    toastSuccess('Certificate issued. Reloading status…')
-    load('ssl')
+    // The ACME goroutine runs in the background; poll until the cert lands.
+    pollUntilActive()
   }
 
   async function manageDb(engine, name) {
@@ -1309,45 +1316,56 @@
           {/if}
         {/if}
 
-        <!-- v0.2.42: pre-flight HTTP-01 reachability probe. Round-trips a
-             test token through the same path lego would use. -->
+        <!-- HTTP-01 pre-flight: writes a test token and GETs it through
+             the public URL to verify the challenge path is reachable
+             before burning an ACME attempt. -->
         <div class="preflight-row">
           <button class="btn btn-ghost" onclick={runPreflight} disabled={preflightBusy}>
-            {preflightBusy ? 'Probing…' : (preflight ? 'Re-check reachability' : 'Test HTTP-01 reachability')}
+            {preflightBusy ? 'Checking…' : (preflight ? 'Run check again' : 'Verify challenge path')}
           </button>
           {#if preflight}
             {#if preflight.ok}
-              <span class="pf-pill pf-ok">✓ HTTP-01 ready</span>
+              <span class="pf-pill pf-ok">✓ Challenge path reachable</span>
             {:else}
-              <span class="pf-pill pf-bad">✗ HTTP-01 unreachable</span>
+              <span class="pf-pill pf-bad">✗ Challenge path unreachable</span>
             {/if}
           {/if}
         </div>
         {#if preflight && !preflight.ok}
           <div class="note ssl-fail" style="margin-top:6px"><div>
-            <b>HTTP-01 won't work for this domain.</b><br>
+            <b>HTTP-01 challenge path is not reachable.</b><br>
             <span class="mono" style="font-size:12px">{preflight.url || ''}</span><br>
             <span style="font-size:12.5px;color:var(--down)">{preflight.reason}</span>
             {#if preflight.hint}<br><span style="font-size:12.5px;color:var(--txt-2);margin-top:6px;display:inline-block">{preflight.hint}</span>{/if}
           </div></div>
         {:else if preflight && preflight.ok}
-          <div class="hint" style="margin-top:6px">Port 80, DNS, and the ACME location all line up. Issuance will work.</div>
+          <div class="hint" style="margin-top:6px">Challenge path verified — port 80 and DNS are reachable. Issuance will succeed.</div>
         {/if}
 
-        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy}>
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy || sslPolling}>
             {#if sslBusy}
-              Issuing…
+              Requesting…
+            {:else if sslPolling}
+              Waiting for certificate…
             {:else if sslStatus?.status === 'active' && !sslStatus?.selfSigned}
               Renew now
             {:else}
               Issue a certificate
             {/if}
           </button>
-          <button class="btn btn-ghost" onclick={recheckSSL} disabled={sslRecheckBusy}>
-            {sslRecheckBusy ? 'Refreshing…' : 'Re-check status'}
-          </button>
+          <!-- Only show Refresh when the cert is not yet active — once a
+               valid LE cert is live the card already shows the full details
+               and there is nothing to poll for. -->
+          {#if !sslStatus || sslStatus.selfSigned || sslStatus.status !== 'active'}
+            <button class="btn btn-ghost" onclick={recheckSSL} disabled={sslRecheckBusy || sslPolling}>
+              {sslRecheckBusy ? 'Checking…' : 'Refresh status'}
+            </button>
+          {/if}
         </div>
+        {#if sslPolling}
+          <div class="hint" style="margin-top:8px">Waiting for Let's Encrypt to issue the certificate — this usually takes 10–30 seconds.</div>
+        {/if}
 
         <!-- v0.2.42: DNS-01 section is now a clearly-labelled OPT-IN, not
              an auto-fallback. Most sites won't need this; it's specifically
