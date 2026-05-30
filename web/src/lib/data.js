@@ -30,6 +30,6 @@ export const detailTabs = [
   { id:'security', label:'Security' },
   { id:'sshftp', label:'SSH/FTP' },
   { id:'files', label:'File Manager' },
-  { id:'cron', label:'Crons' },
+  { id:'cron', label:'Cron' },
   { id:'logs', label:'Logs' },
 ]
