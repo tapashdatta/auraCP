@@ -966,7 +966,7 @@
   </div>
 
   {#if active === 'settings'}
-    <div class="fade">
+    <div class="fade tab-2col">
       <div class="section"><div class="section-h"><div><h3>General</h3><p>Runtime, HTTPS, and docroot for this site</p></div></div><div class="section-b" style="padding-top:4px">
         <!-- v0.2.57: Domain row removed — already shown in the h1 + site
              header at the top of the page. v0.3.28: Application row removed
@@ -1085,11 +1085,9 @@
           </div>
         </div>
       {/if}
-      <!-- v0.2.56: backups + danger zone laid out side-by-side at ≥980 px
-           viewport, stacked on narrower. They're paired because operators
-           often want to back up before deleting and the visual proximity
-           reinforces that workflow. -->
-      <div class="settings-bottom-row">
+      <!-- v0.3.33: Backups + Danger are now direct children of the
+           .tab-2col grid (was a nested settings-bottom-row), so they flow
+           into the same two columns as the other settings cards. -->
         <div class="section"><div class="section-h"><div><h3>Backups</h3><p>Document root + databases, stored locally</p></div>
           <button class="btn btn-primary" style="padding:8px 14px" onclick={makeBackup} disabled={busy}>{busy ? 'Working…' : 'Create Backup'}</button></div>
           {#if backups.length === 0}
@@ -1138,8 +1136,6 @@
           </div>
         </div>
       </div>
-    </div>
-
   {:else if active === 'vhost'}
     <div class="section fade"><div class="section-h"><div>
       <h3>nginx vhost</h3>
@@ -1244,8 +1240,10 @@
     </div>
 
   {:else if active === 'security'}
-    <!-- v0.3.28: Security tab merges access controls + SSL/TLS (was 2 tabs). -->
-    <div class="section fade"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
+    <!-- v0.3.28: Security tab merges access controls + SSL/TLS (was 2 tabs).
+         v0.3.33: laid out in 2 columns on desktop. -->
+    <div class="fade tab-2col">
+    <div class="section"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
       <div class="kv"><span class="k">Basic authentication</span><span class="kv-right">{#if savedFlash['basic_auth']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></span></div>
       {#if isOn('basic_auth')}
         <div class="two" style="margin-top:8px">
@@ -1271,7 +1269,7 @@
          the operator explicitly opts in to Cloudflare DNS-01. No automatic
          fallback. New: pre-flight reachability probe answers "would
          HTTP-01 work right now?" without burning an ACME attempt. -->
-    <div class="section fade"><div class="section-h"><div><h3>SSL/TLS Certificate</h3>
+    <div class="section"><div class="section-h"><div><h3>SSL/TLS Certificate</h3>
       <p>Free Let's Encrypt certificate via <span class="mono">/.well-known/acme-challenge/</span> on port 80. Auto-renewed every ~60 days.</p>
     </div>
       {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}
@@ -1356,6 +1354,7 @@
           {/if}
         {/if}
       </div></div>
+    </div>
 
   {:else if active === 'sshftp'}
     <div class="section fade"><div class="section-h"><div><h3>SSH / FTP Users</h3><p>Chroot-jailed to the site home — extra accounts get their own credentials</p></div></div>

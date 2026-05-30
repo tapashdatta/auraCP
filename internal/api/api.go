@@ -251,7 +251,7 @@ func (s *Server) listSites(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]store.SiteView, 0, len(sites))
 	for _, st := range sites {
-		views = append(views, st.View())
+		views = append(views, s.enrichNodeVersion(st.View()))
 	}
 	writeJSON(w, http.StatusOK, views)
 }
@@ -287,7 +287,20 @@ func (s *Server) getSite(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, st.View())
+	writeJSON(w, http.StatusOK, s.enrichNodeVersion(st.View()))
+}
+
+// enrichNodeVersion fills in the effective Node version for a nodejs site
+// that has no pinned version, so the UI can show the real version number
+// (e.g. "Node.js 24") next to the app name instead of nothing/"default".
+func (s *Server) enrichNodeVersion(v store.SiteView) store.SiteView {
+	if v.Type == "nodejs" && v.Node == nil {
+		if d, ok := s.store.DefaultNodeRuntime(); ok && d.Version != "" {
+			ver := d.Version
+			v.Node = &ver
+		}
+	}
+	return v
 }
 
 func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {

@@ -407,6 +407,16 @@ td .mono{color:var(--txt-2);font-size:12.5px}
   .settings-bottom-row{grid-template-columns:1fr}
 }
 
+/* v0.3.33: two-column tab layout (Settings, Security) on desktop. Each
+   .section is a grid cell; align-items:start so cells size to content and
+   the gap (not the section's own margin) controls spacing. Collapses to a
+   single column on tablet/phone. */
+.tab-2col{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.tab-2col > .section{margin-bottom:0}
+@media (max-width:900px){
+  .tab-2col{grid-template-columns:1fr}
+}
+
 /* v0.2.57: utility — hide on phone-sized viewports. Sites list table
    uses this to collapse to Domain + Status only on mobile (the
    operator clicks a row to drill in anyway; Site User / App / Manage
