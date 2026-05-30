@@ -18,6 +18,7 @@
    *   hotspot: { estimate: boolean, loops: boolean },
    *   analyzed: boolean,
    *   engine: string,
+   *   searchTerm?: string,
    *   onSelect: (id: string) => void,
    *   onToggle: (id: string) => void,
    * }}
@@ -37,9 +38,33 @@
     hotspot,
     analyzed,
     engine,
+    searchTerm = '',
     onSelect,
     onToggle,
   } = $props()
+
+  // FIX CORR-13 (PR #14.5): inline match highlight using <mark> spans.
+  // We split the kind / relation strings around the (case-insensitive)
+  // searchTerm so the matched substring is visible inside the row,
+  // not just visible-via-non-dim. The split function escapes regex
+  // metacharacters in the term so a user typing "*" / "(" doesn't blow
+  // up the regex.
+  function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') }
+  function splitForMatch(text, term) {
+    if (!text || !term) return [{ s: text || '', match: false }]
+    try {
+      const re = new RegExp('(' + escapeRe(term) + ')', 'ig')
+      const parts = String(text).split(re)
+      return parts.filter((p) => p !== '').map((p) => ({
+        s: p,
+        match: p.toLowerCase() === term.toLowerCase(),
+      }))
+    } catch {
+      return [{ s: text, match: false }]
+    }
+  }
+  const kindParts = $derived(splitForMatch(entry.node?.kind, searchTerm))
+  const relationParts = $derived(splitForMatch(entry.node?.relation, searchTerm))
 
   const node = $derived(entry.node)
   const m = $derived(node.metrics || {})
@@ -120,9 +145,9 @@
       {:else}
         <span class="flame-row__chevron flame-row__chevron--leaf" aria-hidden="true">·</span>
       {/if}
-      <span class="flame-row__kind" data-engine={engine}>{node.kind}</span>
+      <span class="flame-row__kind" data-engine={engine}>{#each kindParts as p}{#if p.match}<mark>{p.s}</mark>{:else}{p.s}{/if}{/each}</span>
       {#if node.relation}
-        <span class="flame-row__relation">{node.schema ? node.schema + '.' : ''}{node.relation}{node.alias ? ' AS ' + node.alias : ''}</span>
+        <span class="flame-row__relation">{node.schema ? node.schema + '.' : ''}{#each relationParts as p}{#if p.match}<mark>{p.s}</mark>{:else}{p.s}{/if}{/each}{node.alias ? ' AS ' + node.alias : ''}</span>
       {/if}
       {#if node.index}
         <span class="flame-row__index">via {node.index}</span>

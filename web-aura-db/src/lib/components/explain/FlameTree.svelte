@@ -42,7 +42,13 @@
     onExpandAll,
   } = $props()
 
-  const ROW_H = 22
+  // FIX DC-2 (PR #14.5): align to the 24px tree grid used by
+  // LeftTree. The 22px value created a 2-pixel cadence drift between
+  // the editor's object tree and the inspector's flame tree —
+  // noticeable when both are on screen during the editor↔inspector
+  // round-trip. The bar itself shrinks by 2px height-2 so vertical
+  // spacing inside the row stays balanced.
+  const ROW_H = 24
   const INDENT_X = 14
   const RAIL_W = 14
   const RIGHT_GUTTER = 24
@@ -206,6 +212,7 @@
           hotspot={hot}
           analyzed={analyzed}
           engine={engine}
+          searchTerm={searchTerm}
           onSelect={onSelect}
           onToggle={onToggleExpand}
         />

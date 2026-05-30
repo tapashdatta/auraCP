@@ -1943,6 +1943,122 @@ below.
   drift risk — extract to a shared class or use `EngineGlyph`.
   **Target:** PR #14.5.
 
+### Resolved in PR #14.5 (Inspector hardening — residual items)
+
+The 26-item PR #14.5 pass landed the following deferred items
+(remaining 12 items are routed to PR #11.5 as documented in the PR #14
+deferred-medium section above). No version bump on the parent panel —
+this is web-aura-db internal.
+
+**High (1):**
+- **DC-1** — Copper ramp retuned (`app.css :root` and `:root[data-theme="light"]`):
+  step-2 dropped to a neutral warm-gray to stop copper bleed; step-3
+  re-anchored to a desaturated bronze; step-4/5 keep the solid amber
+  base. Pairs with the CORR-8 log buckets so the now-distinct hues
+  earn coverage in real plans.
+
+**Medium (10):**
+- **CORR-7 / A11Y-12** — `WarningBanner` now classifies each warning
+  string into critical / warning / info via a client-side
+  severity-inference shim (`inferWarningSeverity` in `explainFormat.js`,
+  parsing the existing `[Level Code]` server-side prefix + "truncated"
+  escalation). The banner picks `role=alert` + `aria-live=assertive`
+  when any critical warning is present and `role=status` otherwise.
+  Each row carries a tone-coloured severity badge so the classification
+  is also visible. No wire-contract change — the shim swaps for a
+  future server-side `severity` field with a 1-line edit.
+- **CORR-8** — `costStep` converted from linear to log buckets
+  (0.005 / 0.02 / 0.08 / 0.25). Right-skewed plans (root owns 60–95%
+  of share) now actually use all five color steps instead of
+  collapsing to step-1 / step-5. Test fixture updated.
+- **CORR-9** — `ExplainInspectorScreen` now re-classifies the current
+  statement via `api.classifySql` whenever `stmt` changes so
+  `AnalyzeToggle.currentClass` reflects the actual statement, not the
+  initial-handoff klass. The toggle's typed-confirm gate now fires on
+  deep-linked DELETEs even before Re-run. Server still owns the
+  security boundary.
+- **DC-2** — `FlameTree.ROW_H` aligned to 24px to match
+  `LeftTree`'s tree grid; the 22-vs-24 cadence drift between editor's
+  object tree and inspector's flame tree is gone.
+- **DC-3** — `HotspotChip` gets distinct CSS for `--estimate` (amber,
+  planner-trust signal) vs `--loops` (danger, actionable quadratic
+  cost). Same shape, different tone + glyph weight.
+- **DC-5 + INT-7** — Initial fetch now renders a spinner + elapsed-time
+  counter + Abort affordance, and the loading hint escalates to
+  "server is slow" past the 5s soft deadline. `api.explain` accepts an
+  optional `AbortSignal`; the inspector wires an `AbortController`
+  whose `.abort()` is hit on rapid Re-run or explicit Abort.
+- **A11Y-10 / INT-10** — Cmd/Ctrl+E is now a documented re-run shortcut
+  on the inspector (paired with the editor's Cmd+E that opens it). The
+  Re-run button carries a `reason=` tooltip that surfaces the shortcut,
+  and the toolbar's Close button is annotated with Esc.
+- **INT-3** — Dead `explain:return` sessionStorage write removed.
+- **INT-5** — `document.title` synced to the connection on mount and
+  restored on unmount so multi-tab users can tell which connection's
+  plan is up.
+- **INT-6** — Browser-back from inspector now restores the editor's
+  prior `docText`. Both the explicit "Open in SQL editor" and the
+  implicit Close path stash under `editor:restore:<connId>`; the
+  editor's `onMount` drains the slot.
+- **INT-8** — Bare `h` / `r` shortcuts re-scoped: ignored when the
+  event target is an editable surface (input / textarea /
+  contenteditable), and the activation key is now `Shift+H` / `Shift+R`
+  so plain typing in any future textarea is safe. `/` and Cmd+F focus
+  the new search input.
+
+**Low (12):**
+- **CORR-10** — `fmtRows` 10_000 boundary now carries a doc-comment
+  explaining the intentional asymmetry with `fmtCost` (the 1k-9k row
+  band benefits from the precise thousands-separator form; 10k+
+  collapses to the compact `k` form).
+- **CORR-11** — `RawPlanView` defers the decode + stringify pass for
+  payloads over 256KB behind a "Show anyway" affordance so the tab
+  open no longer freezes on a 1MB+ plan.
+- **CORR-12** — Inline "tree truncated" marker rendered as a row at
+  the foot of the flame tree when the server flagged truncation in
+  warnings, so operators scrolling the tree see the cut-off point in
+  context.
+- **CORR-13** — Inline `<mark>` match highlight inside flame row
+  `kind` and `relation` cells based on the store's `searchTerm`.
+  Paired with A11Y-13.
+- **DC-6** — Chevron + copy + key-hint glyphs normalized to the mono
+  font stack with tabular-nums so the unicode `▾` / `▸` / `⧉` glyphs
+  share the editor cadence and don't drift across platforms.
+- **DC-7** — Per-mount dismiss model for `WarningBanner` documented
+  explicitly (a Re-run that produces fresh warnings, or a route
+  revisit, resurfaces the banner — per-session persistence would
+  hide warnings for new plans that happen to share strings).
+- **DC-8** — RAW toggle promoted to a 2-button `role=tablist` so the
+  Tree↔RAW switch matches the DataGrip / pgMustard tab convention.
+- **DC-10** — `NodeDetail` metrics table gets a `<colgroup>` with a
+  fixed-narrow Hot? column so the mostly-empty column doesn't steal
+  density from the value columns.
+- **A11Y-13** — Search input added to the inspector toolbar, wired to
+  the store's `setSearch`. Carries `aria-keyshortcuts="/ Control+F Meta+F"`
+  and surfaces a `/` hint in the affordance.
+- **INT-4** — `fromHash` field removed from the `explain:pending`
+  payload (producer-side in `SqlEditor.openExplain`).
+- **INT-9** — `ExplainInspectorScreen.test.js` added: source-shape
+  guards for INT-1 / INT-2 (PR #14 handoff) AND INT-3 / INT-6
+  (PR #14.5 round-trip) AND the new INT-5 / INT-7 / INT-8 / A11Y-10 /
+  A11Y-13 / DC-8 / CORR-9 / CORR-12 contracts.
+- **INT-11** — `RawPlanView` decode path simplified: object → JSON
+  pretty-print; string → try base64-of-JSON once (guarded by a
+  `{ / [` smell check), then JSON-parse once, fall back to raw.
+  Triple-error-swallow chain is gone.
+
+**Nit (2):**
+- **CORR-14** — `fmtMs(v < 0)` now returns `—` rather than `-0.42ms`
+  (negative durations are upstream corruption). Test added.
+- **DC-11** — Engine pill style consolidated: `.explain-inspector__engine`
+  and `.metric__engine` share base + `data-engine` variant rules via
+  comma-separated selectors; `.metric__engine` only carries the
+  ribbon-specific `margin-left: auto` modifier.
+
+**Routed to PR #11.5 (a11y polish pass — out of #14.5 scope):**
+A11Y-5, A11Y-7, A11Y-8, A11Y-9, A11Y-11, A11Y-14, A11Y-15, A11Y-16,
+DC-9 (overlaps A11Y-7 for narrow-viewport stack).
+
 ---
 
 ## Source: PR #15 adversarial review (workflow run wf_c284e2fc-e26)

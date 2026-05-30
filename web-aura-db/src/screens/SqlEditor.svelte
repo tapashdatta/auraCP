@@ -147,6 +147,25 @@
       // loadIntoEditor calls setDoc which assumes editorRef is mounted;
       // tick once to let CodeMirrorPane finish its onMount.
       queueMicrotask(() => { loadIntoEditor(pending.statement) })
+      return
+    }
+    // FIX INT-6 (PR #14.5): the inspector writes the editor's prior
+    // docText to `editor:restore:<connId>` when it navigates away (via
+    // the "Open in SQL editor" button or browser-back). On mount we
+    // drain that slot so the editor's content is restored — a
+    // round-trip through the inspector no longer eats the user's
+    // unsaved query.
+    try {
+      const raw = sessionStorage.getItem('editor:restore:' + id)
+      if (raw) {
+        sessionStorage.removeItem('editor:restore:' + id)
+        const parsed = JSON.parse(raw)
+        if (parsed && typeof parsed.stmt === 'string' && parsed.stmt) {
+          queueMicrotask(() => { loadIntoEditor(parsed.stmt) })
+        }
+      }
+    } catch {
+      try { sessionStorage.removeItem('editor:restore:' + id) } catch { /* ignore */ }
     }
   })
 
@@ -447,13 +466,18 @@
       statusMsg = 'statement is forbidden — refusing'
       return
     }
+    // FIX INT-4 (PR #14.5): the previous payload carried a `fromHash`
+    // field that was never read by the inspector — pure dead bytes in
+    // the handoff. Removed. INT-6 is solved separately by the inspector
+    // saving the editor's docText back to `editor:restore:<id>` on
+    // navigation so a browser-back restores the editor state without
+    // a hash-based round-trip.
     try {
       sessionStorage.setItem('explain:pending', JSON.stringify({
         connId: id,
         stmt: stmt.trimmedText,
         klass,
         analyze: false,
-        fromHash: typeof location !== 'undefined' ? location.hash : '',
       }))
     } catch { /* ignore */ }
     navigate('/connections/' + encodeURIComponent(id) + '/explain')

@@ -25,6 +25,8 @@ import {
   costStep,
   shareFor,
   hotspotFlags,
+  inferWarningSeverity,
+  maxWarningSeverity,
 } from '../src/lib/sqlEditor/explainFormat.js'
 
 const PG_PLAN = {
@@ -122,15 +124,17 @@ describe('explainFlatten', () => {
 
 describe('explainFormat — color scale + share', () => {
   it('costStep buckets are correct on bucket boundaries', () => {
+    // FIX CORR-8 (PR #14.5): log buckets so the ramp earns its colors
+    // in real, right-skewed plans. Boundaries: 0.005 / 0.02 / 0.08 / 0.25.
     expect(costStep(0)).toBe(1)
-    expect(costStep(0.049)).toBe(1)
-    expect(costStep(0.05)).toBe(2)
-    expect(costStep(0.149)).toBe(2)
-    expect(costStep(0.15)).toBe(3)
-    expect(costStep(0.34)).toBe(3)
-    expect(costStep(0.35)).toBe(4)
-    expect(costStep(0.64)).toBe(4)
-    expect(costStep(0.65)).toBe(5)
+    expect(costStep(0.004)).toBe(1)
+    expect(costStep(0.005)).toBe(2)
+    expect(costStep(0.019)).toBe(2)
+    expect(costStep(0.02)).toBe(3)
+    expect(costStep(0.079)).toBe(3)
+    expect(costStep(0.08)).toBe(4)
+    expect(costStep(0.249)).toBe(4)
+    expect(costStep(0.25)).toBe(5)
     expect(costStep(1.0)).toBe(5)
   })
 
@@ -157,11 +161,15 @@ describe('explainFormat — color scale + share', () => {
 })
 
 describe('explainFormat — number formatting', () => {
-  it('fmtMs renders 0 / null / NaN as em-dash where appropriate', () => {
+  it('fmtMs renders 0 / null / NaN / negative as em-dash where appropriate', () => {
     expect(fmtMs(null)).toBe('—')
     expect(fmtMs(NaN)).toBe('—')
     expect(fmtMs(0)).toBe('0.00ms')
     expect(fmtMs(1.234)).toBe('1.23ms')
+    // FIX CORR-14 (PR #14.5): negative durations are upstream
+    // corruption — render em-dash, not "-0.42ms".
+    expect(fmtMs(-0.42)).toBe('—')
+    expect(fmtMs(-12)).toBe('—')
   })
 
   it('fmtRows compacts large numbers with k/M/B suffixes', () => {
@@ -197,6 +205,31 @@ describe('explainFormat — hotspot detection', () => {
   it('flags loops>1000 as a loops hotspot', () => {
     expect(hotspotFlags({ loops: 5000 }).loops).toBe(true)
     expect(hotspotFlags({ loops: 100 }).loops).toBe(false)
+  })
+})
+
+describe('explainFormat — warning severity inference (CORR-7 / A11Y-12)', () => {
+  it('classifies the MySQL/MariaDB [Level Code] prefix', () => {
+    expect(inferWarningSeverity('[Error 1234] table missing')).toBe('critical')
+    expect(inferWarningSeverity('[Warning 1681] deprecated syntax')).toBe('warning')
+    expect(inferWarningSeverity('[Note 1003] index dive estimate')).toBe('info')
+  })
+
+  it('escalates "truncated" messages without a prefix', () => {
+    expect(inferWarningSeverity('plan tree truncated at node 1000 (limit 1000)')).toBe('critical')
+  })
+
+  it('falls back to info for plain advisory text', () => {
+    expect(inferWarningSeverity('estimate-vs-actual mismatch on node 3')).toBe('info')
+    expect(inferWarningSeverity('')).toBe('info')
+    expect(inferWarningSeverity(null)).toBe('info')
+  })
+
+  it('maxWarningSeverity returns the highest tier in a list', () => {
+    expect(maxWarningSeverity([])).toBe('info')
+    expect(maxWarningSeverity(['[Note 1] a', '[Warning 2] b'])).toBe('warning')
+    expect(maxWarningSeverity(['[Note 1] a', 'plan tree truncated at 1k'])).toBe('critical')
+    expect(maxWarningSeverity(['[Note 1] a'])).toBe('info')
   })
 })
 

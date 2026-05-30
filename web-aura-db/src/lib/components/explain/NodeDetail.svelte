@@ -106,13 +106,22 @@
     </dl>
 
     <h4 class="node-detail__sectionH">Metrics</h4>
+    <!-- FIX DC-10 (PR #14.5): give the Hot? column a fixed narrow
+         width via colgroup so the mostly-empty column doesn't steal
+         density from the value columns. -->
     <table class="data node-detail__metrics">
+      <colgroup>
+        <col />
+        <col />
+        <col />
+        <col class="col-hot" />
+      </colgroup>
       <thead>
         <tr>
           <th scope="col">Metric</th>
           <th scope="col" class="num">Expected</th>
           <th scope="col" class="num">Actual</th>
-          <th scope="col">Hot?</th>
+          <th scope="col" title="Hotspot flag">Hot?</th>
         </tr>
       </thead>
       <tbody>

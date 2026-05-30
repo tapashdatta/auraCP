@@ -10,15 +10,20 @@
 const NF_INT = (typeof Intl !== 'undefined') ? new Intl.NumberFormat('en-US') : null
 
 /**
- * Format a millisecond duration. Sub-millisecond is "0.0ms"; everything
+ * Format a millisecond duration. Sub-millisecond is "<0.01ms"; everything
  * else is `.toFixed(2)` plus the "ms" suffix. NaN / Infinity / null
  * collapse to "—" (the inspector renders unavailable metrics as em-dash).
+ *
+ * FIX CORR-14 (PR #14.5): clamp negative inputs to "—" rather than
+ * rendering "-0.42ms". The wire contract never emits negative durations
+ * — a negative input is upstream corruption and the em-dash communicates
+ * "unavailable / suspect" without misleading the operator.
  *
  * @param {number} v
  * @returns {string}
  */
 export function fmtMs(v) {
-  if (v == null || !Number.isFinite(v)) return '—'
+  if (v == null || !Number.isFinite(v) || v < 0) return '—'
   if (v === 0) return '0.00ms'
   if (v < 0.01) return '<0.01ms'
   return v.toFixed(2) + 'ms'
@@ -27,6 +32,15 @@ export function fmtMs(v) {
 /**
  * Format an integer row count. Uses thousands separators and a "k/M/B"
  * suffix for big numbers so the ribbon stays compact.
+ *
+ * NOTE CORR-10 (PR #14.5): the boundary for the "k" suffix is
+ * deliberately 10_000 rather than 1_000. Plans often surface row counts
+ * in the 1k–9k band where the thousands-separator form
+ * (`1,234` / `8,765`) is more precise and easier to compare than the
+ * lossy `1.2k` / `8.8k` form, while values >=10k crowd the bar tail and
+ * benefit from the compact form. This asymmetry vs. `fmtCost` is
+ * intentional: cost values cluster much higher (PG cost is unit-less)
+ * and the 4-digit band is comparatively rare for cost.
  *
  * @param {number|bigint} v
  * @returns {string}
@@ -87,21 +101,34 @@ export function kFormat(n) {
 
 /**
  * Quantize a share-of-total into one of five ordinal color buckets.
- * Buckets are closed-open intervals on `share`:
- *   step 1 [0.00, 0.05)   cool
- *   step 2 [0.05, 0.15)
- *   step 3 [0.15, 0.35)
- *   step 4 [0.35, 0.65)
- *   step 5 [0.65, 1.00]   hottest
+ *
+ * FIX CORR-8 / DC-1 (PR #14.5): the previous LINEAR thresholds
+ * (0.05/0.15/0.35/0.65) collapsed real plans to ~2 colors because plan
+ * cost is heavily right-skewed: the root node typically owns 60–95% of
+ * the share and every other node sits in the 0.1–5% band. That painted
+ * one step-5 root, a fistful of step-1s, and almost nothing in 2/3/4 —
+ * making the ramp useless as a pre-attentive signal.
+ *
+ * The new scale is LOG-based on share, with thresholds chosen so each
+ * bucket holds a comparable count of nodes in typical OLTP/OLAP plans:
+ *   step 1 [0,     0.005)   < 0.5%   — background noise (cool)
+ *   step 2 [0.005, 0.02 )   0.5–2%   — measurable
+ *   step 3 [0.02,  0.08 )   2–8%     — notable
+ *   step 4 [0.08,  0.25 )   8–25%    — heavy
+ *   step 5 [0.25,  1.00 ]   >= 25%   — hottest (root + heavy children)
+ *
+ * Boundaries are tuned so a typical 50-node plan with a 70%-share root
+ * paints: ~1 node @ step 5, 2–4 @ step 4, 5–10 @ step 3, with the long
+ * tail spread across step 1/2.
  *
  * @param {number} share
  * @returns {1|2|3|4|5}
  */
 export function costStep(share) {
-  if (!Number.isFinite(share) || share < 0.05) return 1
-  if (share < 0.15) return 2
-  if (share < 0.35) return 3
-  if (share < 0.65) return 4
+  if (!Number.isFinite(share) || share < 0.005) return 1
+  if (share < 0.02) return 2
+  if (share < 0.08) return 3
+  if (share < 0.25) return 4
   return 5
 }
 
@@ -162,6 +189,70 @@ export function safeFloat(v) {
   if (v == null) return 0
   const n = Number(v)
   return Number.isFinite(n) ? n : 0
+}
+
+/**
+ * Infer a warning severity from the wire-string the server emits.
+ *
+ * FIX CORR-7 / A11Y-12 (PR #14.5): the server-side wire contract emits
+ * `Plan.Warnings []string` with each entry pre-formatted as
+ * `[Level CODE] message` (mysql.go) or `plan tree truncated ...`
+ * (explain.go). We don't have a server-side `severity` field yet — a
+ * coordinated backend change is tracked for a future PR — but the
+ * existing string prefix is rich enough to derive a reliable
+ * three-tier severity client-side without a wire change. This shim is
+ * the SINGLE place that classification lives so the day the backend
+ * emits a structured severity field the inference can be swapped for
+ * a `w.severity ?? inferSeverity(w.message)` lookup.
+ *
+ * Tiers, in announced-priority order:
+ *   - 'critical'  → `[Error N]` MySQL prefix, OR contains "truncated"
+ *                   (data is missing from the tree — the operator MUST
+ *                   know the inspector is showing a partial view).
+ *   - 'warning'   → `[Warning N]` MySQL prefix, or any string carrying
+ *                   "warning" / "deprecated" in a non-Note context.
+ *   - 'info'      → everything else: `[Note N]` MySQL prefix, plain
+ *                   advisory messages, MariaDB EXPLAIN-ANALYZE caveats,
+ *                   etc.
+ *
+ * @param {string} msg
+ * @returns {'critical'|'warning'|'info'}
+ */
+export function inferWarningSeverity(msg) {
+  if (typeof msg !== 'string' || msg.length === 0) return 'info'
+  // MySQL/MariaDB prefix is `[Level Code]` — match the bracket form
+  // first so an "Error" in free text doesn't escalate a Note.
+  const m = msg.match(/^\[([A-Za-z]+)\b/)
+  if (m) {
+    const level = m[1].toLowerCase()
+    if (level === 'error') return 'critical'
+    if (level === 'warning') return 'warning'
+    if (level === 'note') return 'info'
+  }
+  // Truncation is data-incompleteness; MUST escalate even if the
+  // server formatted it without a level prefix.
+  if (/\btruncated\b/i.test(msg)) return 'critical'
+  if (/\b(warning|deprecated)\b/i.test(msg)) return 'warning'
+  return 'info'
+}
+
+/**
+ * Pick the highest severity in a warnings list. Used by WarningBanner
+ * to pick its role (status vs alert) and by callers that want a single
+ * tone for the bundle.
+ *
+ * @param {string[]} warnings
+ * @returns {'critical'|'warning'|'info'}
+ */
+export function maxWarningSeverity(warnings) {
+  if (!warnings || warnings.length === 0) return 'info'
+  let max = 'info'
+  for (const w of warnings) {
+    const s = inferWarningSeverity(w)
+    if (s === 'critical') return 'critical'
+    if (s === 'warning') max = 'warning'
+  }
+  return /** @type {'critical'|'warning'|'info'} */ (max)
 }
 
 /**

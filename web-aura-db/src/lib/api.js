@@ -161,13 +161,19 @@ export class AuraDBClient {
    * Issue an EXPLAIN. Returns `{ plan: Plan }`. Pass `{ analyze: true }`
    * for EXPLAIN ANALYZE; the server re-classifies and rejects analyze on
    * non-read statements with 422 forbidden_statement.
-   * @param {string} id @param {string} sql @param {{analyze?:boolean}} [opts]
+   *
+   * FIX INT-7 (PR #14.5): accepts an optional `signal` so the inspector
+   * can cancel an in-flight EXPLAIN when the user hits the abort button
+   * or navigates away mid-flight. Without this, a 60s EXPLAIN locked
+   * the loading branch until the server response arrived.
+   *
+   * @param {string} id @param {string} sql @param {{analyze?:boolean, signal?:AbortSignal}} [opts]
    */
   explain(id, sql, opts = {}) {
     /** @type {{statement:string, analyze?:boolean}} */
     const body = { statement: sql }
     if (opts && opts.analyze) body.analyze = true
-    return request(`/connections/${enc(id)}/explain`, { method: 'POST', body })
+    return request(`/connections/${enc(id)}/explain`, { method: 'POST', body, signal: opts?.signal })
   }
   /**
    * Server-side classifier preview (UX only — NEVER a security boundary,
