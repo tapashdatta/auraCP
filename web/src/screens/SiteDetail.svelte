@@ -1121,18 +1121,13 @@
           <div class="section-h"><div>
             <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px;color:var(--down)"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Danger Zone</h3>
             <p>Permanent actions for this site</p>
-          </div></div>
-          <div class="section-b">
-            <div class="danger-row">
-              <div>
-                <b>Delete this site</b>
-                <p>Removes the nginx vhost, PHP-FPM pool / systemd unit, site user (with home dir + crontab + SFTP access), associated databases, extra SSH/FTP users, backup files, and every panel-side record. <b>This is irreversible</b> — take a backup first if you may need the data again.</p>
-              </div>
-              <button class="btn btn-danger" onclick={deleteSite}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
-                Delete site
-              </button>
-            </div>
+          </div>
+          <button class="btn btn-danger" style="padding:8px 14px" onclick={deleteSite}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>
+            Delete site
+          </button></div>
+          <div class="section-b" style="padding-top:4px">
+            <p style="color:var(--txt-2);font-size:12.5px;line-height:1.6;margin:0">Removes the nginx vhost, PHP-FPM pool / systemd unit, site user (with home dir + crontab + SFTP access), associated databases, extra SSH/FTP users, backup files, and every panel-side record. <b>This is irreversible</b> — take a backup first if you may need the data again.</p>
           </div>
         </div>
       </div>

@@ -388,7 +388,7 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 
 /* ---------- site detail ---------- */
 .site-head{display:flex;align-items:center;gap:16px;margin-bottom:6px}
-.site-head .fav{width:46px;height:46px;border-radius:12px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);font-size:20px}
+.site-head .fav{width:46px;height:46px;display:grid;place-items:center;font-size:20px}
 .site-head h1{font-family:var(--fs-display);font-weight:700;font-size:25px;letter-spacing:-.02em}
 .site-meta{display:flex;flex-wrap:wrap;gap:18px;margin:14px 0 22px;padding:14px 18px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface-0);box-shadow:var(--shadow)}
 .site-meta .m{display:flex;flex-direction:column;gap:3px}
@@ -459,7 +459,7 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 }
 /* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
    default centered-glyph background for a sized SVG that fills the box. */
-.fav.brand{padding:7px}
+.fav.brand{padding:0}
 .fav.brand svg{width:100%;height:100%}
 .badge .ic.brand-sm{width:14px;height:14px}
 .badge .ic.brand-sm svg{width:100%;height:100%}
@@ -643,13 +643,10 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 
 /* v0.2.23: Danger Zone on a site's Settings tab. Red top border + slight tint
    so destructive actions feel distinct from the rest of the page. */
-.danger-zone{border-top:2px solid color-mix(in srgb, var(--down) 60%, transparent);margin-top:18px}
-.danger-zone .section-h{padding-top:0}
+/* v0.3.34: danger zone now matches the Backups card — a plain .section with
+   its action button in the header. Only the heading + the Delete button stay
+   red; no special top-border or margin (it sits flush in the 2-col grid). */
 .danger-zone h3{color:var(--down)}
-.danger-row{display:flex;align-items:center;gap:18px;justify-content:space-between;flex-wrap:wrap}
-.danger-row > div{flex:1;min-width:280px}
-.danger-row b{display:block;font-size:14px;font-weight:600;color:var(--txt);margin-bottom:4px}
-.danger-row p{margin:0;font-size:12.5px;color:var(--txt-2);line-height:1.5}
 
 /* v0.2.23: restyled database list. Each row gets a leading database glyph
    tinted to the engine, plus a clearer name treatment and a trash button. */
