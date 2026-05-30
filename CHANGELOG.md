@@ -2,6 +2,26 @@
 
 All notable changes to auraCP.
 
+## v0.3.4 — 2026-05-30
+
+Build-verified patch. Same code as v0.3.3; version bump only to give
+CI a clean tag after the v0.3.2/v0.3.3 build failures. All 6 release
+binaries (auracpd, auracp, aura-db × amd64 + arm64) confirmed
+cross-compiled successfully with `CGO_ENABLED=0` before tagging.
+
+Local pre-tag checks:
+  - go mod verify                         ✓
+  - go mod tidy (no diff)                ✓
+  - go vet ./...                          ✓
+  - go test -race -count=1 ./... (all)   ✓
+  - CGO_ENABLED=0 linux/amd64 all 3 bins ✓
+  - CGO_ENABLED=0 linux/arm64 all 3 bins ✓
+  - npm run build (web-aura-db SPA)      ✓
+  - npx vitest run (317/317)             ✓
+  - npm run build (panel SPA)            ✓
+  - bash -n installer/install.sh         ✓
+  - bash -n packaging/build-deb.sh       ✓
+
 ## v0.3.3 — 2026-05-30
 
 Metadata-only patch over v0.3.2. The v0.3.2 release tag fired the
