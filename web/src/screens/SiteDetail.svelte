@@ -4,18 +4,10 @@
   import { apiFetch } from '../lib/api.js'
   import { brandIcons, tabIcons } from '../lib/icons.js'
   import { confirmDialog, promptDialog, alertDialog } from '../lib/dialog.svelte.js'
-  import { toast, toastSuccess, toastError as _toastError } from '../lib/toast.svelte.js'
-  // Suppress error toasts once the site has been deleted — in-flight auto-saves
-  // (blur-triggered PHP/docroot saves, background SSL checks) would otherwise
-  // surface a "sql logic error" when the site row is gone from the DB.
-  const toastError = (msg) => { if (!siteGone) _toastError(msg) }
+  import { toast, toastSuccess, toastError } from '../lib/toast.svelte.js'
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
   let active = $state('settings')
-  // Set to true once the site is successfully deleted so that any in-flight
-  // async fetches (auto-save on blur, background reloads) don't surface
-  // spurious error toasts after the site row is gone from the DB.
-  let siteGone = false
 
   // live data per tab
   let dbs = $state([])
@@ -337,13 +329,16 @@
       toastError(d.error || 'Delete failed')
       return
     }
-    // v0.2.56: success toast survives the navigation (ToastHost lives at
-    // App.svelte). Pre-this, the operator saw the sites list reappear
-    // with the deleted site gone but no confirmation that the action
-    // actually completed — easy to mistake for "the click didn't work."
-    siteGone = true
-    toastSuccess(`Site ${site.domain} deleted`)
+    // Navigate first so SiteDetail is torn down (and all its in-flight
+    // async fetches with it) before the success toast fires. The reverse
+    // order (toast-then-navigate) left a window where blur-triggered
+    // auto-saves or background reloads could complete against the now-gone
+    // site row and surface a spurious "sql logic error" toast on top of
+    // the success one. ToastHost lives at App.svelte so the toast is
+    // visible on the sites list regardless.
+    const deleted = site.domain
     go('sites')
+    toastSuccess(`Site ${deleted} deleted`)
   }
   async function addSSH() {
     busy = true
