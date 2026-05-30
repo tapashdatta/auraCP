@@ -423,9 +423,13 @@ td .mono{color:var(--txt-2);font-size:12.5px}
    horizontal scroll on phones. Tooltip via the SVG's surrounding button label
    (existing aria-label) keeps screen-readers happy. */
 @media (max-width:760px){
-  .tabs{gap:2px}
-  .tab{padding:7px 9px;font-size:0;line-height:1}
-  .tab .tab-ic svg{width:16px;height:16px}
+  .tabs{gap:3px}
+  /* icon-only: even vertical padding + centred icon (the base .tab already
+     sets inline-flex/justify-content:center/flex:1) so each tab is an equal
+     full-height rounded cell with the glyph dead-centre. */
+  .tab{padding:9px 0;font-size:0;line-height:1;min-width:0}
+  .tab .tab-ic{margin:0}
+  .tab .tab-ic svg{width:18px;height:18px}
   .tab.active{font-size:0}
 }
 /* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
@@ -831,8 +835,11 @@ tr.site-row:hover td:last-child .manage{opacity:1}
   .fm-section .btn-ghost svg,.fm-section .btn-primary svg{margin-right:0 !important}
   .topbar{gap:12px;padding:0 14px}
   .instance-pill{display:none}
-  .nav button{font-size:0;padding:7px 10px}  /* icons-only on mobile */
-  .nav button svg{margin-right:0 !important;width:16px;height:16px}
+  /* icons-only on mobile: square, flex-centered circles so the active
+     pill is a clean round and the icon sits dead-centre (the inline SVG
+     vertical-align/margin from TopBar are overridden here). */
+  .nav button{font-size:0;padding:0;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;flex:none}
+  .nav button svg{margin:0 !important;width:18px !important;height:18px !important;vertical-align:middle}
   .topbar .brand{font-size:17px}
   .wrap{padding:18px 14px 56px}
   .ph{flex-direction:column;align-items:flex-start;gap:14px}
