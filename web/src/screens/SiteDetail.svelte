@@ -1267,17 +1267,32 @@
     <div class="section"><div class="section-h"><div><h3>SSL/TLS Certificate</h3>
       <p>Free Let's Encrypt certificate via <span class="mono">/.well-known/acme-challenge/</span> on port 80. Auto-renewed every ~60 days.</p>
     </div>
-      {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' ? 's-up' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.status}</span>{/if}
+      {#if sslStatus}<span class="status"><span class="sdot {sslStatus.status === 'active' && !sslStatus.selfSigned ? 's-up' : sslStatus.status === 'active' && sslStatus.selfSigned ? 's-warn' : sslStatus.status === 'pending' ? 's-warn' : 's-down'}"></span>{sslStatus.selfSigned ? 'self-signed' : sslStatus.status}</span>{/if}
     </div>
       <div class="section-b" style="padding-top:4px">
         {#if sslStatus === null}
           <div class="kv"><span class="k">Status</span><span class="v">checking…</span></div>
+        {:else if sslStatus.status === 'active' && sslStatus.selfSigned}
+          <!-- Local self-signed placeholder cert — LE has not issued yet.
+               Don't show issuer/domains/expiry — they're meaningless for a
+               throwaway cert and actively confusing if the domain is live
+               elsewhere on the internet. -->
+          <div class="kv"><span class="k">Certificate</span><span class="v">Self-signed (temporary)</span></div>
+          <div class="hint" style="margin-top:6px">
+            A placeholder certificate was created so the site can load. Click <b>Issue / retry</b> to get a free Let's Encrypt certificate once your DNS points to this server.
+          </div>
+          {#if sslStatus?.stored?.lastError}
+            <div class="note ssl-fail" style="margin:14px 0 6px"><div>
+              <b>Last issuance failed</b> (attempt {sslStatus.stored.attempts || 1})<br>
+              <span class="mono" style="font-size:12px;color:var(--down);white-space:pre-wrap">{sslStatus.stored.lastError}</span>
+            </div></div>
+          {/if}
         {:else if sslStatus.status === 'active'}
           <div class="kv"><span class="k">Issuer</span><span class="v">{sslStatus.issuer || '—'}</span></div>
           <div class="kv"><span class="k">Domains</span><span class="v">{(sslStatus.domains || []).join(', ') || '—'}</span></div>
           <div class="kv"><span class="k">Expires</span><span class="v">{sslStatus.expires ? new Date(sslStatus.expires).toLocaleString() : '—'}{#if sslStatus.expires}<span class="hint" style="margin-left:8px">({Math.max(0, Math.round((new Date(sslStatus.expires) - Date.now()) / 86400000))} days left)</span>{/if}</span></div>
         {:else}
-          <div class="kv"><span class="k">Live status</span><span class="v">{sslStatus?.message || 'no certificate served yet'}</span></div>
+          <div class="kv"><span class="k">Status</span><span class="v">{sslStatus?.message || 'no certificate on disk yet'}</span></div>
           {#if sslStatus?.stored?.lastError}
             <div class="note ssl-fail" style="margin:14px 0 6px"><div>
               <b>Last issuance failed</b> (attempt {sslStatus.stored.attempts || 1})<br>

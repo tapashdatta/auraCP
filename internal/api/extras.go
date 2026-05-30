@@ -33,14 +33,27 @@ const (
 // attempt count, whether CF DNS-01 is enabled). v0.2.40.
 func (s *Server) siteSSL(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
-	live := ssl.Of(domain)
+
+	// Choose probe strategy based on whether a real LE cert has been issued.
+	// - Issued: dial the public internet — confirms what browsers actually see.
+	// - Not issued (pending/failed/no row): read the local cert file on disk.
+	//   Dialling the internet would show whoever owns the domain publicly,
+	//   which is meaningless and actively confusing (e.g. abc.com shows
+	//   Disney's wildcard cert, not our self-signed placeholder).
+	var live ssl.Status
+	if cert, ok := s.store.Certificate(domain); ok && cert.Status == "issued" && cert.CertPath.Valid && cert.CertPath.String != "" {
+		live = ssl.Of(domain)
+	} else {
+		live = ssl.OfLocal(paths.CertPath(domain))
+	}
 
 	out := map[string]any{
-		"status":  live.Status,
-		"issuer":  live.Issuer,
-		"expires": live.Expires,
-		"domains": live.Domains,
-		"message": live.Message,
+		"status":     live.Status,
+		"issuer":     live.Issuer,
+		"expires":    live.Expires,
+		"domains":    live.Domains,
+		"message":    live.Message,
+		"selfSigned": live.SelfSigned,
 	}
 	// Stored issuance history from the certificates table (populated by
 	// internal/acme on every issuance/renewal attempt). Useful when the
