@@ -1,13 +1,21 @@
+//go:build cgo
+
 package standalone
 
-// v0.3.2-D: WebAuthn / FIDO2 step-up.
+// v0.3.2-D: WebAuthn / FIDO2 step-up — CGO build path.
 //
 // This file is the thin wrapper around github.com/go-webauthn/webauthn.
-// It exposes four pure helpers — RegistrationBegin/Finish and
-// AssertionBegin/Finish — plus the WebAuthnUser adapter that the
-// library's User interface needs. All DB I/O lives in
-// users_webauthn.go / auth_webauthn.go; this file MUST stay free of
-// store access so it can be unit-tested without a SQLite handle.
+// It is compiled ONLY when CGO is enabled (native / non-static builds)
+// because go-webauthn transitively depends on google/go-tpm which links
+// against Linux kernel TPM headers on some CI environments. Static
+// (CGO_ENABLED=0) builds compile mfa_webauthn_nocgo.go instead, which
+// stubs every function with ErrWebAuthnDisabled so the binary always
+// links. The split mirrors pkg/dbadmin/classifier/postgres_ast.go vs
+// postgres_ast_nocgo.go.
+//
+// All DB I/O lives in users_webauthn.go / auth_webauthn.go; this file
+// MUST stay free of store access so it can be unit-tested without a
+// SQLite handle.
 
 import (
 	"encoding/json"

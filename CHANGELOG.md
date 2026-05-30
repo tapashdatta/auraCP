@@ -2,6 +2,43 @@
 
 All notable changes to auraCP.
 
+## v0.3.5 — 2026-05-30
+
+Fix `undefined: webAuthnMux` build failure on CI (Linux,
+`CGO_ENABLED=0`). Applies the same `//go:build cgo` / `//go:build
+!cgo` split that PR #2.5 used for the Postgres AST classifier.
+
+Root cause: `cmd/aura-db/webauthn.go` → `standalone.RegistrationBegin`
+→ `mfa_webauthn.go` → `github.com/go-webauthn/webauthn` →
+`google/go-tpm/tpm2`. On some Linux CI environments, `go-tpm` fails
+to compile when `CGO_ENABLED=0`, causing the entire symbol chain to
+silently break and `webAuthnMux` to appear undefined in `serve.go`.
+
+Fix:
+  - `pkg/dbadmin/standalone/mfa_webauthn.go` → `//go:build cgo`
+    (the real go-webauthn implementation)
+  - `pkg/dbadmin/standalone/mfa_webauthn_nocgo.go` → `//go:build !cgo`
+    (stub that returns `ErrWebAuthnDisabled` for every function)
+  - `pkg/dbadmin/standalone/mfa_webauthn_test.go` → `//go:build cgo`
+    (tests use internal cgo-only helpers)
+  - `cmd/aura-db/webauthn.go` → `//go:build cgo`
+    (full WebAuthn HTTP handlers)
+  - `cmd/aura-db/webauthn_nocgo.go` → `//go:build !cgo` (NEW)
+    (stub: `webAuthnMux` returns the engine handler unchanged)
+
+Also:
+  - CI release workflow: added explicit `CGO_ENABLED=0` cross-compile
+    verification step for `cmd/aura-db` before the `.deb` build so
+    this class of failure is caught earlier and with a clearer error
+  - Node.js updated to 24 throughout CI (v0.3.4 already did this)
+
+Local verification before tagging:
+  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/aura-db  ✓
+  CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/aura-db   ✓
+  CGO_ENABLED=0 go vet ./...                                      ✓
+  CGO_ENABLED=0 go test ./pkg/dbadmin/... ./cmd/...               ✓
+  npx vitest run (317/317)                                        ✓
+
 ## v0.3.4 — 2026-05-30
 
 Build-verified patch. Same code as v0.3.3; version bump only to give

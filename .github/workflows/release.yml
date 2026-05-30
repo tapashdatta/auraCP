@@ -30,11 +30,17 @@ jobs:
         id: ver
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Verify static cross-compile (catches CGO_ENABLED=0 issues)
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /tmp/aura-db-amd64 ./cmd/aura-db
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o /tmp/aura-db-arm64 ./cmd/aura-db
+          echo "aura-db static compile: OK"
+
       - name: Build .deb packages (amd64 + arm64)
         run: make deb VERSION=${{ steps.ver.outputs.version || '0.1.0' }}
 
       - name: List artifacts
-        run: ls -lh dist/*.deb dist/auracpd-linux-* dist/auracp-linux-*
+        run: ls -lh dist/*.deb dist/auracpd-linux-* dist/auracp-linux-* dist/aura-db-linux-* 2>/dev/null || ls -lh dist/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

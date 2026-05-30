@@ -1,3 +1,5 @@
+//go:build cgo
+
 package standalone
 
 // v0.3.2-D: tests cover the store-layer + light wrapper behavior of

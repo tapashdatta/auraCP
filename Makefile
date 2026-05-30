@@ -2,7 +2,7 @@
 # classifier (PR #2.5) pulls libpg_query through pg_query_go/v5 which
 # requires cgo for the AST path. CGO_ENABLED=0 builds remain valid —
 # they degrade Postgres to the PR #2 tokenizer fallback.
-VERSION ?= 0.3.4
+VERSION ?= 0.3.5
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
 
