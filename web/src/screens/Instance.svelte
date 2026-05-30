@@ -219,7 +219,7 @@
          tiny "Last checked" caption, action buttons on one row. Was a 3-kv
          block + buttons spanning ~6 vertical lines; now ~3. -->
     <div class="card"><div class="section-h"><div><h3>auraCP Updates</h3>
-        <p>GitHub Releases · in-place upgrade via dpkg</p></div>
+        <p>OTA update auraCP packages</p></div>
       {#if update.available}<span class="pill-cat warn">Update available</span>
       {:else if update.error}<span class="pill-cat danger">Check failed</span>
       {:else}<span class="pill-cat ok">Up to date</span>{/if}</div>
@@ -243,10 +243,24 @@
       </div>
     </div>
 
+    <!-- Panel domain card -->
+    <div class="card"><div class="section-h"><div><h3>Panel Domain</h3><p>Custom Domain for auraCP</p></div>
+      <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
+      <div class="section-b">
+        <div class="field"><label>
+          <span class="label-text">Domain / subdomain <span class="hint">point its DNS A record to this server first</span></span>
+          <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com">
+        </label></div>
+        <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
+        {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
+        {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
+      </div>
+    </div>
+
     <!-- v0.2.41: Cloudflare card — auto-saves on paste, validates live
          against Cloudflare's /user/tokens/verify, no Save button. Status
          pill in the section header reflects the stored validation state. -->
-    <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>API token for DNS-01 (wildcard SSL) &amp; cache purge · auto-saves on paste</p></div>
+    <div class="card"><div class="section-h"><div><h3>Cloudflare</h3><p>Cloudflare → My Profile → API Tokens</p></div>
       {#if cf.validating}
         <span class="pill-cat warn"><span class="cf-spin"></span> Validating</span>
       {:else if cf.configured && cf.status === 'valid'}
@@ -272,22 +286,8 @@
         {:else if cf.configured && cf.status === 'valid'}
           <div class="hint" style="margin-left:0;margin-top:4px">Token verified with Cloudflare. Used for DNS-01 fallback when HTTP-01 can't reach the origin (orange-cloud proxied domains).</div>
         {:else}
-          <div class="hint" style="margin-left:0;margin-top:4px">Create a token in Cloudflare → My Profile → API Tokens → "Edit zone DNS" permission for the zone(s) you want certs on.</div>
+          <div class="hint" style="margin-left:0;margin-top:4px">Create a token in Cloudflare → My Profile → API Tokens</div>
         {/if}
-      </div>
-    </div>
-
-    <!-- Panel domain card -->
-    <div class="card"><div class="section-h"><div><h3>Panel Domain</h3><p>Front the panel on a domain; auracpd issues a Let's Encrypt certificate automatically.</p></div>
-      <span class="status"><span class="sdot {panel.domain ? 's-up' : 's-down'}"></span>{panel.domain || 'IP:8443'}</span></div>
-      <div class="section-b">
-        <div class="field"><label>
-          <span class="label-text">Domain / subdomain <span class="hint">point its DNS A record to this server first</span></span>
-          <input class="input" style="font-family:var(--fs-ui)" bind:value={panel.input} placeholder="panel.example.com">
-        </label></div>
-        <button class="btn btn-primary" onclick={savePanelDomain}>Save</button>
-        {#if panel.domain}<button class="btn btn-ghost" style="margin-left:8px" onclick={() => { panel.input=''; savePanelDomain() }}>Revert to IP</button>{/if}
-        {#if panelMsg}<div class="note" style="margin-top:12px"><div>{panelMsg}</div></div>{/if}
       </div>
     </div>
 
