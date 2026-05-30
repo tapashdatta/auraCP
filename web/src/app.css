@@ -787,7 +787,7 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 .menu-item.danger:hover{background:rgba(var(--down-rgb),.1)}
 
 /* ---------- brand icons (site-type chooser) ---------- */
-.ico.brand{background:var(--surface-2)}
+.ico.brand{background:none}
 .ico.brand svg{width:28px;height:28px;display:block}
 
 /* ---------- animations ----------
