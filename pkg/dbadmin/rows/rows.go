@@ -76,7 +76,7 @@ func New(conn driver.Conn, reader schema.Reader, opt Options) (*Operator, error)
 	}
 	engine := reader.Engine()
 	switch engine {
-	case dbadmin.EngineMariaDB, dbadmin.EnginePostgres:
+	case dbadmin.EngineMariaDB, dbadmin.EnginePostgres, dbadmin.EngineMongo:
 		// supported
 	default:
 		return nil, fmt.Errorf("rows: unsupported engine %v from reader", engine)
@@ -269,6 +269,12 @@ type ReadResult struct {
 // Read does NOT return a total-row count. Callers needing one should
 // invoke Count with the same filter (see ReadResult).
 func (o *Operator) Read(ctx context.Context, opts ReadOpts) (*ReadResult, error) {
+	// MongoDB short-circuit: the SQL build path doesn't apply.
+	// rows/mongo.go handles identifier validation + limit checks for
+	// the Mongo backend.
+	if o.engine == dbadmin.EngineMongo {
+		return o.mongoRead(ctx, opts)
+	}
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return nil, err
 	}
@@ -468,6 +474,9 @@ type CountOpts struct {
 // CountByOpts (H2) is the preferred entrypoint for COUNT(*). Validates
 // identifiers + predicate ops and executes a parameterized COUNT(*).
 func (o *Operator) CountByOpts(ctx context.Context, opts CountOpts) (int64, error) {
+	if o.engine == dbadmin.EngineMongo {
+		return o.mongoCount(ctx, opts)
+	}
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return 0, err
 	}
@@ -564,6 +573,13 @@ type UpdateByPKOpts struct {
 type UpdateResult struct {
 	RowsAffected int64
 	LastInsertID int64 // Insert-only; meaningful only when the table has an auto-increment / IDENTITY column
+
+	// LastInsertKey is the textual PK of the inserted row when the
+	// backend's PK is not integer-shaped. Currently populated only on
+	// MongoDB Insert (the auto-generated _id is an ObjectID, rendered
+	// as 24-char hex). Empty for relational engines, which continue
+	// to surface their PK via LastInsertID. v0.3.2-F.
+	LastInsertKey string
 }
 
 // UpdateByPK runs the parameterized UPDATE. When opts.Where is non-empty,
@@ -571,6 +587,9 @@ type UpdateResult struct {
 // concurrent change to any snapshot column causes the UPDATE to affect
 // zero rows, which UpdateByPK reports as ErrConcurrentModification.
 func (o *Operator) UpdateByPK(ctx context.Context, opts UpdateByPKOpts) (*UpdateResult, error) {
+	if o.engine == dbadmin.EngineMongo {
+		return o.mongoUpdateByPK(ctx, opts)
+	}
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return nil, err
 	}
@@ -655,6 +674,9 @@ type DeleteByPKOpts struct {
 
 // DeleteByPK runs the parameterized DELETE.
 func (o *Operator) DeleteByPK(ctx context.Context, opts DeleteByPKOpts) (*UpdateResult, error) {
+	if o.engine == dbadmin.EngineMongo {
+		return o.mongoDeleteByPK(ctx, opts)
+	}
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return nil, err
 	}
@@ -710,6 +732,9 @@ type InsertOpts struct {
 // LAST_INSERT_ID() via Exec — it's free and reliable for
 // AUTO_INCREMENT columns.
 func (o *Operator) Insert(ctx context.Context, opts InsertOpts) (*UpdateResult, error) {
+	if o.engine == dbadmin.EngineMongo {
+		return o.mongoInsert(ctx, opts)
+	}
 	if err := schema.ValidateIdentifier(opts.Schema); err != nil {
 		return nil, err
 	}

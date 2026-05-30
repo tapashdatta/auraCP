@@ -262,6 +262,15 @@ const (
 	// github.com/jackc/pgx/v5. Classifier:
 	// github.com/pganalyze/pg_query_go/v5.
 	EnginePostgres
+
+	// EngineMongo covers MongoDB. Driver:
+	// go.mongodb.org/mongo-driver/v2/mongo. Unlike the relational
+	// engines, Mongo speaks BSON commands rather than SQL; the
+	// classifier refuses raw SQL on Mongo connections (ClassForbidden
+	// with reason RAW_SQL_ON_MONGO) and all row mutations route through
+	// the structured rows.Operator surface (Find / InsertOne / UpdateOne
+	// / DeleteOne under the hood). v0.3.2-F.
+	EngineMongo
 )
 
 // String returns the canonical lowercased name.
@@ -271,6 +280,8 @@ func (e EngineKind) String() string {
 		return "mariadb"
 	case EnginePostgres:
 		return "postgres"
+	case EngineMongo:
+		return "mongo"
 	default:
 		return "unknown"
 	}

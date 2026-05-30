@@ -358,6 +358,13 @@ func Explain(ctx context.Context, conn driver.Conn, engine dbadmin.EngineKind, o
 		p, err = mysqlExplain(ctx, conn, opts, limits)
 	case dbadmin.EnginePostgres:
 		p, err = postgresExplain(ctx, conn, opts, limits)
+	case dbadmin.EngineMongo:
+		// MongoDB does have an .explain() surface but it is BSON-
+		// command shaped, not SQL — and the classifier already
+		// refuses raw SQL on Mongo connections, so this branch is
+		// unreachable via the HTTP path. Return a clean refusal for
+		// any direct caller. v0.3.2-F.
+		return nil, fmt.Errorf("explain: EXPLAIN is not supported on MongoDB connections (raw SQL is refused upstream)")
 	default:
 		return nil, fmt.Errorf("explain: unsupported engine %v", engine)
 	}

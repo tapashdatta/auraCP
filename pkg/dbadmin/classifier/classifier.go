@@ -339,6 +339,28 @@ func Classify(engine dbadmin.EngineKind, sql string) (ParsedQuery, error) {
 		return mysqlParser.Parse(sql)
 	case dbadmin.EnginePostgres:
 		return postgresParser.Parse(sql)
+	case dbadmin.EngineMongo:
+		// MongoDB connections do not accept raw SQL — the document
+		// store speaks BSON commands. Rather than build a parallel
+		// MQL classifier (deferred until UI scope demands it), refuse
+		// raw SQL outright at this layer so the panel's /classify
+		// and /query handlers cleanly reject the request and the UI
+		// can hide the SQL editor for Mongo connections. The
+		// structured rows.Operator surface remains available and is
+		// authorized via ActionRowRead / ActionRowWrite as usual.
+		return ParsedQuery{
+			Class: ClassForbidden,
+			Statements: []ParsedStatement{{
+				Class:   ClassForbidden,
+				Kind:    KindUnknown,
+				RawText: sql,
+			}},
+			Forbidden: []ForbiddenMatch{{
+				Pattern: "RAW_SQL_ON_MONGO",
+				Reason:  "MongoDB connections do not accept raw SQL; use the structured row operations API",
+			}},
+			ParseSource: ParseSourceFallback,
+		}, nil
 	default:
 		return ParsedQuery{}, fmt.Errorf("classifier: unsupported engine %v", engine)
 	}

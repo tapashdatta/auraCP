@@ -222,6 +222,8 @@ func For(engine dbadmin.EngineKind) (Driver, error) {
 		return mysqlDriver, nil
 	case dbadmin.EnginePostgres:
 		return postgresDriver, nil
+	case dbadmin.EngineMongo:
+		return mongoDriver, nil
 	default:
 		return nil, fmt.Errorf("driver: unsupported engine %v", engine)
 	}
@@ -231,4 +233,5 @@ func For(engine dbadmin.EngineKind) (Driver, error) {
 var (
 	mysqlDriver    Driver = &mysqlDriverImpl{}
 	postgresDriver Driver = &postgresDriverImpl{}
+	mongoDriver    Driver = &mongoDriverImpl{}
 )

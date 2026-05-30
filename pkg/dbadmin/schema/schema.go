@@ -105,6 +105,8 @@ func ForWithOptions(c driver.Conn, engine dbadmin.EngineKind, opt Options) (Read
 		return &mysqlReader{conn: c, limits: lim}, nil
 	case dbadmin.EnginePostgres:
 		return &postgresReader{conn: c, limits: lim}, nil
+	case dbadmin.EngineMongo:
+		return newMongoReader(c, lim)
 	default:
 		return nil, fmt.Errorf("schema: unsupported engine %v", engine)
 	}
@@ -365,6 +367,49 @@ func ValidateIdentifier(name string) error {
 	}
 	if !identifierRE.MatchString(name) {
 		return fmt.Errorf("%w: %q does not match [a-zA-Z_][a-zA-Z0-9_$]{0,62}", ErrInvalidIdentifier, name)
+	}
+	return nil
+}
+
+// ValidateMongoIdentifier returns ErrInvalidIdentifier if name fails
+// the MongoDB-specific safe-identifier pattern. Unlike SQL identifiers
+// (which the relational engines quote), MongoDB database, collection,
+// and field names are referenced as raw JSON keys — so we apply a
+// distinct allowlist that is wider than the SQL one (covers `.` and
+// `-` which are legal in BSON keys) but still excludes characters that
+// would let an operator smuggle a query operator into a structured
+// payload: '$', '"', '\', '\x00', and whitespace.
+//
+// Specifically we accept any byte sequence of 1..120 bytes that
+// contains none of: '/', '\\', '"', '$', '\x00', ' '. The 120-byte
+// ceiling matches MongoDB's documented limit on namespace component
+// length (database + ".$" + collection ≤ 255 bytes on legacy storage
+// engines; keeping each component ≤ 120 bytes is well within the
+// safety envelope and matches the convention the official drivers use
+// in their own validators).
+//
+// Reserved names — '', 'admin', 'local', 'config' as DATABASE names —
+// are NOT rejected here because operators with the right role may
+// legitimately address them; ListDatabases filters them from the
+// default listing instead.
+//
+// v0.3.2-F.
+func ValidateMongoIdentifier(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: empty", ErrInvalidIdentifier)
+	}
+	if len(name) > 120 {
+		return fmt.Errorf("%w: %q exceeds 120-byte length cap", ErrInvalidIdentifier, name)
+	}
+	for i := 0; i < len(name); i++ {
+		b := name[i]
+		switch b {
+		case '/', '\\', '"', '$', 0x00:
+			return fmt.Errorf("%w: %q contains reserved byte 0x%02x at offset %d", ErrInvalidIdentifier, name, b, i)
+		}
+		if b == ' ' || b == '\t' || b == '\n' || b == '\r' {
+			return fmt.Errorf("%w: %q contains whitespace at offset %d", ErrInvalidIdentifier, name, i)
+		}
 	}
 	return nil
 }

@@ -53,6 +53,14 @@ func (e *sqlEncoder) WriteHeader(columns []string) error {
 	if e.headerWritten {
 		return fmt.Errorf("export/sql: header already written")
 	}
+	// MongoDB cannot replay SQL INSERT statements; refuse the dump
+	// path entirely here. The HTTP layer surfaces the error and the
+	// UI hides the "SQL dump" export option for Mongo connections
+	// (operators get JSON / CSV via the structured row exporter
+	// instead). v0.3.2-F.
+	if e.engine == dbadmin.EngineMongo {
+		return fmt.Errorf("export/sql: SQL dump format is not supported for MongoDB connections; use JSON or CSV export")
+	}
 	e.columns = append(e.columns[:0], columns...)
 	e.headerWritten = true
 

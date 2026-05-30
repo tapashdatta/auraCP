@@ -100,6 +100,8 @@ func parseEngine(s string) (dbadmin.EngineKind, bool) {
 		return dbadmin.EngineMariaDB, true
 	case "postgres", "postgresql":
 		return dbadmin.EnginePostgres, true
+	case "mongo", "mongodb":
+		return dbadmin.EngineMongo, true
 	}
 	return 0, false
 }

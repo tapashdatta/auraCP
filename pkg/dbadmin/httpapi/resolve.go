@@ -154,7 +154,9 @@ func validateEngineKind(s string) (dbadmin.EngineKind, error) {
 		return dbadmin.EngineMariaDB, nil
 	case "postgres", "postgresql":
 		return dbadmin.EnginePostgres, nil
+	case "mongo", "mongodb":
+		return dbadmin.EngineMongo, nil
 	default:
-		return dbadmin.EngineUnknown, errors.New("unsupported engine; want mariadb or postgres")
+		return dbadmin.EngineUnknown, errors.New("unsupported engine; want mariadb, postgres, or mongo")
 	}
 }
