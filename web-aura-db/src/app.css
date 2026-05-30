@@ -968,6 +968,54 @@ summary:focus-visible,
   color: var(--text);
 }
 
+/* Overview subtitle (host · db • engine), pulled up under the head rule. */
+.pane__sub {
+  margin: -8px 0 16px;
+  font-size: var(--fs-ui);
+  color: var(--text-dim);
+}
+
+/* ============================================================
+   Stat tiles (connection overview) — prototype .stat cards.
+   No sparklines/deltas: we render real values only.
+   ============================================================ */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 0 0 20px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-modal);
+}
+.stat__label {
+  font-size: var(--fs-meta);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 500;
+  color: var(--text-mute);
+}
+.stat__value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.stat__unit { font-size: var(--fs-body); font-weight: 500; color: var(--text-dim); }
+@media (max-width: 760px) {
+  .stats { grid-template-columns: repeat(2, 1fr); }
+}
+
 /* Generic data table */
 table.data {
   width: 100%;
