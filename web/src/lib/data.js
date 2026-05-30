@@ -24,7 +24,7 @@ export const siteTypes = [
 export const detailTabs = [
   { id:'settings', label:'Settings' },
   { id:'vhost', label:'Vhost' },
-  { id:'databases', label:'DB' },
+  { id:'databases', label:'Database' },
   { id:'security', label:'Security' },
   { id:'sshftp', label:'FTP' },
   { id:'files', label:'Directory' },
