@@ -2,7 +2,33 @@
 
 All notable changes to auraCP.
 
-## v0.3.2 — 2026-05-30
+## v0.3.3 — 2026-05-30
+
+Metadata-only patch over v0.3.2. The v0.3.2 release tag fired the
+GitHub Actions release workflow against a working tree where
+`go mod tidy` had drifted:
+
+  - `github.com/go-webauthn/webauthn v0.17.4` was listed as
+    `// indirect` in go.mod even though v0.3.2-D directly imports
+    it from `pkg/dbadmin/standalone/mfa_webauthn.go` +
+    `auth_webauthn.go`
+  - `go.mongodb.org/mongo-driver/v2 v2.6.0` was listed as
+    `// indirect` even though v0.3.2-F directly imports it from
+    `pkg/dbadmin/driver/mongo.go` + `schema/mongo.go` +
+    `rows/mongo.go`
+  - go.sum had a stale `go.mongodb.org/mongo-driver v1.17.9` entry
+    (v1 is no longer in the build graph)
+
+CI's `go build ./...` with `-mod=readonly` (Go default) rejected
+the mismatch. Running `go mod tidy` is the one-line fix.
+
+Functionally identical to v0.3.2 — same features, same hardening,
+same SPA bundle. Only go.mod + go.sum changed.
+
+Tag v0.3.2 is preserved in history as the broken-build marker;
+v0.3.3 is the installable release.
+
+## v0.3.2 — 2026-05-30 (release-broken — see v0.3.3)
 
 Combined v0.3.1 hardening + v0.3.2 feature release. The 14 `.5`
 follow-up PRs deferred from v0.3.0 are all closed, and six new
