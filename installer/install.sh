@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.13"
+AURACP_VERSION="0.3.14"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -1033,7 +1033,16 @@ install_mongodb() {
     | run "tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list >/dev/null"
   wait_apt_lock
   run "apt-get update -y"
-  run "apt-get install -y mongodb-org"
+  # The mongodb-org meta-package depends on mongodb-mongosh, which MongoDB does not
+  # consistently publish for arm64 in Debian repos. When it's absent the meta-package
+  # is also absent from the index. Fall back to the individual server + router packages,
+  # which are always present and are all Aura DB needs to connect to MongoDB.
+  if [ "$DRY_RUN" -eq 1 ] || apt-cache show mongodb-org >/dev/null 2>&1; then
+    run "apt-get install -y mongodb-org"
+  else
+    warn "mongodb-org meta-package not in index for ${ARCH}/${repo_cn} — installing server packages"
+    run "apt-get install -y mongodb-org-server mongodb-org-mongos mongodb-org-database-tools-extra"
+  fi
   run "systemctl enable --now mongod"
   ok "MongoDB ${MONGODB_VERSION} ready (mongod listening on 127.0.0.1:27017)."
 }
