@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.11"
+AURACP_VERSION="0.3.12"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -663,6 +663,19 @@ confirm() {
 # ──────────────────────────────────────────────────────────────────────────
 # install steps
 # ──────────────────────────────────────────────────────────────────────────
+
+# wait_apt_lock — block until apt/dpkg releases the lock (max 120 s).
+# Needed when a previous apt-get install triggers post-install scripts that
+# briefly hold the lock again (e.g. unattended-upgrades, triggers, ldconfig).
+wait_apt_lock() {
+  local i=0
+  while pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1; do
+    [ $i -eq 0 ] && msg "Waiting for apt lock to be released…"
+    i=$((i+1)); sleep 2
+    [ $i -le 60 ] || { warn "apt lock still held after 2 min — proceeding anyway"; break; }
+  done
+}
+
 apt_refresh() {
   run "export DEBIAN_FRONTEND=noninteractive"
   run "apt-get update -y"
@@ -688,6 +701,7 @@ install_nginx() { # required — nginx 1.30 mainline from nginx.org
   local distro="${OS_ID:-debian}"
   echo "deb [signed-by=/usr/share/keyrings/nginx-archive-keyring.gpg] https://nginx.org/packages/mainline/${distro} ${OS_CODENAME} nginx" \
     | run "tee /etc/apt/sources.list.d/nginx.list >/dev/null"
+  wait_apt_lock
   run "apt-get update -y"
   run "apt-get install -y nginx"
   # Bootstrap nginx.conf with auraCP includes (FastCGI + proxy cache zones,
@@ -757,6 +771,7 @@ install_php_fpm() {
   run "curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg"
   echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ ${OS_CODENAME} main" \
     | run "tee /etc/apt/sources.list.d/sury-php.list >/dev/null"
+  wait_apt_lock
   run "apt-get update -y"
 
   # NOTE: opcache is statically embedded in php<ver>-cli and php<ver>-fpm
@@ -915,6 +930,7 @@ install_mariadb() {
   run "curl -fsSL https://mariadb.org/mariadb_release_signing_key.asc -o /usr/share/keyrings/mariadb.asc"
   echo "deb [signed-by=/usr/share/keyrings/mariadb.asc] https://mirror.mariadb.org/repo/${MARIADB_VERSION}/${distro} ${OS_CODENAME} main" \
     | run "tee /etc/apt/sources.list.d/mariadb.list >/dev/null"
+  wait_apt_lock
   run "apt-get update -y"
   run "apt-get install -y mariadb-server"
   run "systemctl enable --now mariadb"
@@ -941,6 +957,7 @@ install_postgres() {
   run "curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/pgdg.gpg"
   echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt ${OS_CODENAME}-pgdg main" \
     | run "tee /etc/apt/sources.list.d/pgdg.list >/dev/null"
+  wait_apt_lock
   run "apt-get update -y"
   run "apt-get install -y postgresql-${POSTGRES_VERSION}"
   run "systemctl enable --now postgresql"
@@ -1010,6 +1027,7 @@ install_mongodb() {
   fi
   echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${repo_cn}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
     | run "tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list >/dev/null"
+  wait_apt_lock
   run "apt-get update -y"
   run "apt-get install -y mongodb-org"
   run "systemctl enable --now mongod"

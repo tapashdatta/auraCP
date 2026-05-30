@@ -267,8 +267,11 @@ fi
 # ── 4. optional components ──────────────────────────────────────────────────
 msg "Removing MongoDB…"
 stop_unit mongod
-purge_installed mongodb-org mongodb-org-database mongodb-org-server mongodb-org-mongos mongodb-org-tools mongodb-org-database-tools-extra mongodb-mongosh
-run "rm -rf /var/lib/mongodb /var/log/mongodb /tmp/mongodb-*.sock"
+purge_installed mongodb-org mongodb-org-database mongodb-org-server mongodb-org-mongos \
+  mongodb-org-tools mongodb-org-database-tools-extra mongodb-org-shell mongodb-mongosh
+run "rm -rf /var/lib/mongodb /var/log/mongodb"
+run "rm -rf /var/run/mongodb /run/mongodb /tmp/mongodb-*.sock"
+run "rm -f /etc/mongod.conf /etc/mongos.conf"
 run "rm -f /etc/apt/sources.list.d/mongodb-org-*.list"
 
 msg "Removing Redis…"
