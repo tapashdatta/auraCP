@@ -2,6 +2,14 @@
 
 All notable changes to auraCP.
 
+## v0.3.9 — 2026-05-30
+
+Update brand icons on the site-type chooser to official marks:
+  - Node.js: official hexagonal gradient logo (green hex, two overlapping polygons)
+  - Python: official two-snake gradient logo (blue + yellow)
+  - PHP: official "php" wordmark in PHP purple (#777BB4)
+  - WordPress: official W mark in WP charcoal (#464342)
+
 ## v0.3.8 — 2026-05-30
 
 Mobile: site-type chooser ("What kind of site?") now shows a 2-column
