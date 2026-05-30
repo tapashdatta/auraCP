@@ -54,6 +54,22 @@ export function replayInEditor(connId, statement, opts = {}) {
   const path = `/connections/${encodeURIComponent(connId)}/query`
   if (opts.newTab && typeof window !== 'undefined') {
     window.open(`#${path}`, '_blank')
+    // FIX (PR #15.5 C3): the new tab inherits the source tab's
+    // sessionStorage on open, so the consuming editor in the new tab
+    // reads the payload via onMount + consumePending. We must clear the
+    // slot in THIS (source) tab so the next same-tab replay isn't
+    // poisoned by leftover state from a prior newTab handoff. We defer
+    // by a microtask so the just-opened tab has a chance to snapshot
+    // its inherited storage before we clear ours.
+    // FIX (PR #15.5 INT-6): rapid Cmd+Enter handoffs all wrote to the
+    // SAME sessionStorage key, so N quick taps would have N new tabs
+    // each reading the most-recent payload. Clearing after open closes
+    // the window — newly-opened tabs snapshot synchronously on
+    // creation, so once that snapshot exists in the child, our clear
+    // here has no effect on it.
+    queueMicrotask(() => {
+      try { sessionStorage.removeItem(KEY) } catch { /* ignore */ }
+    })
   } else {
     navigate(path)
   }

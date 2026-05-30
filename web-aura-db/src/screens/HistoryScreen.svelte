@@ -30,39 +30,86 @@
   let classFilter = $state('all')
   let starredOnly = $state(false)
 
+  // FIX (PR #15.5 C4/INT-2): when the user has more than CONN_CAP
+  // connections, the cross-connection fanout silently drops the rest.
+  // Surface it as a banner so the user knows their tail connections
+  // aren't being included.
+  const CONN_CAP = 25
+  let connCapHit = $state(false)
+  // FIX (PR #15.5 INT-4): cross-connection fanout surfaces 403/permission
+  // errors as empty data. Track how many connections rejected so we can
+  // show a per-connection error count to the user.
+  let connErrorCount = $state(0)
+  // FIX (PR #15.5 INT-8): primeHistoryCache TOCTOU — a rapid conn-filter
+  // switch can resolve in the wrong order (request A completes after B).
+  // Bump a request token on every fetchAll and discard stale resolves.
+  let _fetchToken = 0
+
   function activeConn() {
     return connections.selectedId || connections.list?.[0]?.id || null
   }
 
   async function fetchAll() {
+    const myToken = ++_fetchToken
     loading = true
+    connCapHit = false
+    connErrorCount = 0
     try {
       const list = connections.list || []
+      let merged = []
+      let errCount = 0
+      let capHit = false
       if (connFilter && connFilter !== '*') {
-        rawEntries = await loadForConn(connFilter)
+        const { rows, error } = await loadForConn(connFilter)
+        merged = rows
+        if (error) errCount = 1
       } else if (list.length === 0) {
         const id = activeConn()
-        rawEntries = id ? await loadForConn(id) : []
+        if (id) {
+          const { rows, error } = await loadForConn(id)
+          merged = rows
+          if (error) errCount = 1
+        }
       } else {
         // Fan-out across all connections — there is no server-side
-        // cross-connection history endpoint. Cap at 25 conns.
-        const conns = list.slice(0, 25)
+        // cross-connection history endpoint. Cap at CONN_CAP conns.
+        capHit = list.length > CONN_CAP
+        const conns = list.slice(0, CONN_CAP)
         const results = await Promise.allSettled(conns.map((c) => loadForConn(c.id)))
-        const merged = []
-        for (const r of results) if (r.status === 'fulfilled') merged.push(...r.value)
-        rawEntries = merged
+        for (const r of results) {
+          if (r.status === 'fulfilled') {
+            merged.push(...r.value.rows)
+            if (r.value.error) errCount += 1
+          } else {
+            errCount += 1
+          }
+        }
       }
-    } catch { rawEntries = [] }
-    finally { loading = false }
+      // FIX (PR #15.5 INT-8): drop stale resolves. If the user changed
+      // the conn filter while our request was in flight, a newer fetch
+      // is already running with a higher token — let that one win.
+      if (myToken !== _fetchToken) return
+      rawEntries = merged
+      connErrorCount = errCount
+      connCapHit = capHit
+    } catch {
+      if (myToken !== _fetchToken) return
+      rawEntries = []
+    } finally {
+      if (myToken === _fetchToken) loading = false
+    }
   }
 
-  /** @param {string} id @returns {Promise<HistoryEntry[]>} */
+  /**
+   * @param {string} id
+   * @returns {Promise<{rows: HistoryEntry[], error: boolean}>}
+   */
   async function loadForConn(id) {
     try {
       const r = await api.connHistory(id)
       const list = (r && Array.isArray(r.entries)) ? r.entries : []
-      return list.map((e) => ({ ...e, connectionId: e.connectionId || id }))
-    } catch { return [] }
+      return { rows: list.map((e) => ({ ...e, connectionId: e.connectionId || id })), error: false }
+    } catch { return { rows: [], error: true } }
   }
 
   onMount(fetchAll)
@@ -95,6 +142,12 @@
   }))
 
   async function toggleStar(entry) {
+    // FIX (PR #15.5 C6): when an entry.id is undefined/null, the
+    // optimistic-update `e.id === entry.id` predicate collapses ALL
+    // undefined-id rows together (undefined === undefined is true) and
+    // a single star toggle would flip every unidentifiable row. Bail
+    // when we can't uniquely identify the row.
+    if (entry == null || entry.id === undefined || entry.id === null || entry.id === '') return
     const next = !entry.starred
     // Optimistic update + rollback.
     rawEntries = rawEntries.map((e) => (e.id === entry.id ? { ...e, starred: next } : e))
@@ -196,6 +249,27 @@
     </label>
   </div>
 
+  <!-- FIX (PR #15.5 C4/INT-2): tell the user when the cross-connection
+       fanout has been capped, instead of silently truncating their list.
+       FIX (PR #15.5 INT-4): also tell the user when some connections
+       errored (403/permission/network) instead of folding their failures
+       into an empty result set. -->
+  {#if connCapHit || connErrorCount > 0}
+    <div class="history__banner" role="status" aria-live="polite">
+      {#if connCapHit}
+        <span class="history__bannerItem">
+          Showing history for the first {CONN_CAP} connections.
+          Filter by connection to see others.
+        </span>
+      {/if}
+      {#if connErrorCount > 0}
+        <span class="history__bannerItem history__bannerItem--err">
+          {connErrorCount === 1 ? '1 connection' : `${connErrorCount} connections`} returned an error (permission denied or unreachable).
+        </span>
+      {/if}
+    </div>
+  {/if}
+
   {#if loading}
     <LoadingPane />
   {:else if filtered.length === 0}
@@ -233,6 +307,10 @@
             title="Click or press Enter to replay in editor"
           >
             <td>
+              <!-- FIX (PR #15.5 D-2): outline glyph (☆) for unstarred,
+                   filled glyph (★) for starred. Color-only differentiation
+                   failed for users with color-vision differences and was
+                   easy to miss in dense rows. -->
               <button
                 type="button"
                 class="history__star"
@@ -240,7 +318,7 @@
                 aria-label={r.starred ? 'Unstar' : 'Star'}
                 aria-pressed={r.starred}
                 onclick={(e) => { e.stopPropagation(); toggleStar(r) }}
-              >★</button>
+              >{r.starred ? '★' : '☆'}</button>
             </td>
             <td><span class="history__class" data-class={r.class || 'unknown'}>{r.class || ''}</span></td>
             <td><span class="history__sql" title={r.sql || ''}>{(r.sql || '').slice(0, 120)}</span></td>
@@ -275,6 +353,12 @@
     margin-bottom: 12px;
     border-bottom: 1px solid var(--border);
   }
+  /* FIX (PR #15.5 D-9): commit to a single style — segmented tab
+     control with crisp internal dividers and a 6px outer radius. The
+     previous styling sat between "pill" and "tab" because individual
+     buttons inherited the parent rounded corners without explicit
+     end-cap radii. Pin the outer radius to the first/last buttons via
+     :first-child / :last-child so each cell reads as a discrete tab. */
   .history__range {
     display: inline-flex;
     border: 1px solid var(--border);
@@ -286,14 +370,16 @@
     color: var(--text);
     border: none;
     border-right: 1px solid var(--border);
-    padding: 4px 10px;
+    padding: 5px 12px;
     cursor: pointer;
     font: 12px/1 'IBM Plex Sans', sans-serif;
+    border-radius: 0;
   }
   .history__rangeBtn:last-child { border-right: none; }
   .history__rangeBtn--active {
     background: var(--surface-active, var(--surface-hover));
     color: var(--accent);
+    font-weight: 600;
   }
   .history__select {
     background: var(--surface);
@@ -356,7 +442,11 @@
     cursor: default;
   }
   .history__row--head:hover { background: var(--surface-sunk, var(--surface)); }
-  .history__row--error { border-left: 2px solid #c84a4a; }
+  /* FIX (PR #15.5 D-3): replace hard-coded #c84a4a with the existing
+     danger token so light/dark/high-contrast themes pick up the right
+     hue without us re-tuning per-theme. Fall back to the legacy hex if
+     a theme hasn't defined --danger yet. */
+  .history__row--error { border-left: 2px solid var(--danger, #c84a4a); }
   .history__star {
     background: transparent;
     border: none;
@@ -365,7 +455,29 @@
     font-size: 14px;
     padding: 0;
   }
-  .history__star--on { color: #d4a14a; }
+  /* FIX (PR #15.5 D-3): hard-coded #d4a14a bypassed the accent token
+     system. Use the existing --accent (now coupled to the active theme)
+     so star color stays in sync with the rest of the surface. */
+  .history__star--on { color: var(--accent, #d4a14a); }
+
+  /* FIX (PR #15.5 C4/INT-2, INT-4): banner styles for partial-result
+     situations. Uses the existing surface-sunk + border tokens so it
+     reads as a subtle inline notice, not an alarm bar. */
+  .history__banner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    background: var(--surface-sunk, var(--surface));
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font: 12px/1.4 'IBM Plex Sans', sans-serif;
+    color: var(--text-mute, #888);
+  }
+  .history__bannerItem--err {
+    color: var(--danger, #c84a4a);
+  }
   .history__class {
     font: 11px/1 'IBM Plex Mono', monospace;
     color: var(--text-mute, #888);

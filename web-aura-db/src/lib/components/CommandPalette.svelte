@@ -265,13 +265,31 @@
       </div>
 
       <div class="palette__listWrap" bind:this={listEl}>
-        {#if flat.length === 0}
+        {#if flat.length === 0 && historyCache.loading}
+          <!-- FIX (PR #15.5 D-4): show a loading state while the first
+               primeHistoryCache fanout is in flight. Without this, the
+               first open against a slow API briefly shows "No matches"
+               which reads as a real empty state instead of "still
+               loading". -->
+          <div class="palette__empty" role="status" aria-live="polite">
+            <div class="palette__emptyTitle">Loading…</div>
+            <div class="palette__emptyHint">Fetching recent history and saved queries.</div>
+          </div>
+        {:else if flat.length === 0}
           <!-- FIX (PR #15.5 A11Y-15 routed): empty-state must be a
                live region so SR users hear that the result set went
-               empty after typing. -->
+               empty after typing.
+               FIX (PR #15.5 D-12): when the user typed something and
+               nothing matched, suggest clearing the filter as the next
+               step. When the query is empty there is genuinely nothing
+               to suggest beyond the original onboarding hint. -->
           <div class="palette__empty" role="status" aria-live="polite">
             <div class="palette__emptyTitle">No matches</div>
-            <div class="palette__emptyHint">Try a connection name, table, SQL keyword, or “/” for actions.</div>
+            {#if hasQuery}
+              <div class="palette__emptyHint">No commands match “{query}”. Press <kbd>⌘</kbd><kbd>⌫</kbd> to clear the filter.</div>
+            {:else}
+              <div class="palette__emptyHint">Try a connection name, table, SQL keyword, or “/” for actions.</div>
+            {/if}
           </div>
         {:else}
           <ul
@@ -325,6 +343,11 @@
         <span class="palette__kbd"><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
         <span class="palette__kbd"><kbd>↵</kbd> select</span>
         <span class="palette__kbd"><kbd>⌘</kbd><kbd>↵</kbd> new tab</span>
+        <!-- FIX (PR #15.5 D-10): surface the palette's own toggle
+             shortcut in its footer so first-time users learn it.
+             Pressing it while the palette is open also closes the
+             palette (same toggle). -->
+        <span class="palette__kbd"><kbd>⌘</kbd><kbd>K</kbd> toggle</span>
         <span class="palette__kbd"><kbd>esc</kbd> close</span>
       </div>
 
@@ -340,7 +363,11 @@
     inset: 0;
     z-index: 90;
     background: rgba(0, 0, 0, 0.24);
-    backdrop-filter: blur(8px);
+    /* FIX (PR #15.5 D-14): 8px blur is GPU-heavy on low-power devices
+       (visible jank on Intel iGPUs / older iPads during the open
+       animation). 4px is enough to push the page chrome out of focus
+       without bringing weak GPUs to their knees. */
+    backdrop-filter: blur(4px);
     display: flex;
     justify-content: center;
     align-items: flex-start;
@@ -414,17 +441,26 @@
     font: 600 10px/1 'IBM Plex Sans', sans-serif;
     letter-spacing: 0.08em;
     color: var(--text-mute, #888);
-    padding: 10px 14px 4px;
+    /* FIX (PR #15.5 D-13): even the top/bottom padding so the header
+       sits at a consistent visual rhythm above the row below it. 8/6
+       reads as a calmer divider than the previous 10/4 asymmetry. */
+    padding: 8px 14px 6px;
   }
   .palette__row {
     display: grid;
-    grid-template-columns: 28px 1fr auto;
+    /* FIX (PR #15.5 D-8): glyph column was 28px for a 13-14px icon —
+       too much dead space on the left. Trim to 20px so the title sits
+       closer to the icon and matches the tree's column rhythm. */
+    grid-template-columns: 20px 1fr auto;
     align-items: center;
     gap: 10px;
     height: 44px;
     padding: 0 14px;
     cursor: pointer;
-    border-left: 3px solid transparent;
+    /* FIX (PR #15.5 D-6): selection accent thickness should match the
+       tree's 2px so the two surfaces feel like the same selection
+       system. 3px here was reading as a separate accent token. */
+    border-left: 2px solid transparent;
     background: transparent;
     user-select: none;
   }

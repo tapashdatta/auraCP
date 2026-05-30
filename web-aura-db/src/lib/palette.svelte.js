@@ -144,7 +144,10 @@ export function connectionCommands(list) {
     kind: 'connection',
     section: 'Connections',
     title: c.name || c.id,
-    subtitle: c.engine || '',
+    // FIX (PR #15.5 C7/D-1): drop duplicate engine name. The engine
+    // belongs in the hint column (right-aligned chip) since the title
+    // already shows the connection name. Putting it in both subtitle
+    // AND hint duplicates the same text across the row.
     hint: c.engine || '',
     score: 0,
     recencyKey: c.lastUsed ? Date.parse(c.lastUsed) || 0 : 0,
@@ -192,18 +195,25 @@ export function historyCommands(entries, activeConnFallback) {
  */
 export function savedCommands(saved, connId) {
   if (!Array.isArray(saved)) return []
-  return saved.map((s) => ({
-    id: 'saved:' + s.id,
-    kind: 'saved',
-    section: 'Saved queries',
-    title: s.name || '(unnamed)',
-    subtitle: (s.statement || '').slice(0, 80),
-    hint: 'saved',
-    score: 0,
-    run: ({ newTab } = {}) => {
-      if (connId) replayInEditor(connId, s.statement || '', { newTab })
-    },
-  }))
+  return saved.map((s) => {
+    // FIX (PR #15.5 D-5): collapse whitespace + newlines in the SQL
+    // preview so multi-line saved queries don't render as a single tall
+    // wrapped row in the palette. The full statement still replays
+    // verbatim via the run() handler.
+    const oneLine = (s.statement || '').replace(/\s+/g, ' ').trim()
+    return {
+      id: 'saved:' + s.id,
+      kind: 'saved',
+      section: 'Saved queries',
+      title: s.name || '(unnamed)',
+      subtitle: oneLine.slice(0, 80),
+      hint: 'saved',
+      score: 0,
+      run: ({ newTab } = {}) => {
+        if (connId) replayInEditor(connId, s.statement || '', { newTab })
+      },
+    }
+  })
 }
 
 // ─── registry assembly ───────────────────────────────────────────────

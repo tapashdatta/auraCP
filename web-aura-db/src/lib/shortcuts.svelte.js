@@ -39,7 +39,21 @@ function handler(ev) {
 
   // Cmd/Ctrl-K → toggle the command palette. Wins over the old tree-
   // filter focus shortcut (which moved to Cmd-Shift-K).
+  //
+  // FIX (PR #15.5 C5): when the palette is already open we ALWAYS
+  // accept Cmd-K to close it (its own input is a "text editing target"
+  // but the user has only that one place to invoke the shortcut from).
+  // When the palette is NOT open, skip the toggle while the user is
+  // typing in a regular input/textarea/contentEditable so Cmd-K doesn't
+  // steal focus mid-edit. CodeMirror sets contenteditable so the editor
+  // is covered too; Cmd-K inside the editor is a no-op (use Cmd-Shift-K
+  // for tree filter or click outside first). This matches Linear's
+  // behaviour and is the documented Raycast convention.
   if (mod && !ev.shiftKey && (ev.key === 'k' || ev.key === 'K')) {
+    if (!palette.open && isTextEditingTarget(ev)) {
+      // Let the keystroke through to the input (no preventDefault).
+      return
+    }
     ev.preventDefault()
     togglePalette()
     return
