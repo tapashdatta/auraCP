@@ -47,7 +47,7 @@
     } else if (sslStatus?.status === 'pending') {
       toast('Still pending — issuance may not have completed', { kind: 'warn' })
     } else {
-      toastError('No cert served yet. Click Issue / retry above.')
+      toastError("No cert served yet. Click 'Issue a certificate' above.")
     }
   }
   let sshUsers = $state([])
@@ -1279,7 +1279,7 @@
                elsewhere on the internet. -->
           <div class="kv"><span class="k">Certificate</span><span class="v">Self-signed (temporary)</span></div>
           <div class="hint" style="margin-top:6px">
-            A placeholder certificate was created so the site can load. Click <b>Issue / retry</b> to get a free Let's Encrypt certificate once your DNS points to this server.
+            A placeholder certificate was created so the site can load. Click <b>Issue a certificate</b> to get a free Let's Encrypt certificate once your DNS points to this server.
           </div>
           {#if sslStatus?.stored?.lastError}
             <div class="note ssl-fail" style="margin:14px 0 6px"><div>
@@ -1332,7 +1332,13 @@
 
         <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-primary" onclick={renewCert} disabled={sslBusy}>
-            {sslBusy ? 'Issuing…' : (sslStatus?.status === 'active' ? 'Renew now' : 'Issue / retry')}
+            {#if sslBusy}
+              Issuing…
+            {:else if sslStatus?.status === 'active' && !sslStatus?.selfSigned}
+              Renew now
+            {:else}
+              Issue a certificate
+            {/if}
           </button>
           <button class="btn btn-ghost" onclick={recheckSSL} disabled={sslRecheckBusy}>
             {sslRecheckBusy ? 'Refreshing…' : 'Re-check status'}
@@ -1357,10 +1363,10 @@
             <div class="note ssl-fail" style="margin-top:10px"><div>
               <b>No Cloudflare API token configured.</b> Set one under
               <button type="button" class="linkish" onclick={() => go('instance')}>Settings → Cloudflare</button>,
-              then click <b>Issue / retry</b>.
+              then click <b>Issue a certificate</b>.
             </div></div>
           {:else}
-            <div class="hint" style="margin-left:0;margin-top:6px">Token is configured. Click <b>Issue / retry</b> above to issue via DNS-01.</div>
+            <div class="hint" style="margin-left:0;margin-top:6px">Token is configured. Click <b>Issue a certificate</b> above to issue via DNS-01.</div>
           {/if}
         {/if}
       </div></div>
