@@ -402,13 +402,13 @@ td .mono{color:var(--txt-2);font-size:12.5px}
   .hide-on-mobile{display:none !important}
 }
 
-.tabs{display:flex;flex-wrap:nowrap;gap:2px;border-bottom:1px solid var(--line);margin-bottom:26px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}
+.tabs{display:flex;flex-wrap:nowrap;gap:3px;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-pill);padding:4px;margin-bottom:22px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;width:fit-content;max-width:100%}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global
    reset; visual styling sits on .tab itself. */
-.tab{padding:11px 14px;color:var(--txt-3);font-weight:500;font-size:13.5px;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px;transition:.1s;cursor:pointer;background:none;display:inline-flex;align-items:center;gap:7px}
-.tab:hover{color:var(--txt-2)}
-.tab.active{color:var(--txt);border-bottom-color:var(--aura)}
+.tab{padding:7px 14px;color:var(--txt-2);font-weight:500;font-size:13px;white-space:nowrap;border-bottom:none;margin-bottom:0;transition:.1s;cursor:pointer;background:transparent;display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-pill)}
+.tab:hover{color:var(--txt);background:var(--surface-2)}
+.tab.active{color:var(--solid-fg);background:var(--solid-bg);font-weight:600}
 .tab .num{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);margin-left:6px}
 .tab .tab-ic{display:inline-flex;align-items:center;color:currentColor}
 .tab .tab-ic svg{width:14px;height:14px}
@@ -424,10 +424,9 @@ td .mono{color:var(--txt-2);font-size:12.5px}
    (existing aria-label) keeps screen-readers happy. */
 @media (max-width:760px){
   .tabs{gap:2px}
-  .tab{padding:10px 9px;font-size:0;line-height:1}
-  .tab .tab-ic svg{width:18px;height:18px}
-  /* Restore font size for the active tab so the user has *some* anchor; but
-     only on slightly larger phones — sub-540 still icon-only. */
+  .tab{padding:7px 9px;font-size:0;line-height:1}
+  .tab .tab-ic svg{width:16px;height:16px}
+  .tab.active{font-size:0}
 }
 /* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
    default centered-glyph background for a sized SVG that fills the box. */
@@ -451,7 +450,7 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .file-row:hover .file-ic,.file-row.k:not(button) .file-ic{color:inherit}
 button.file-row:hover .file-ic{color:var(--aura-strong)}
 /* File-manager row layout: filename / meta / delete button on one line. */
-.file-row-grid{display:flex;align-items:center;gap:14px;padding:11px 18px;border-bottom:1px solid var(--line);transition:background-color .1s}
+.file-row-grid{display:flex;align-items:center;gap:14px;padding:4px 10px;border-bottom:1px solid var(--line);transition:background-color .1s}
 .file-row-grid:last-child{border-bottom:none}
 .file-row-grid:hover{background:var(--surface-1)}
 .file-meta{font-family:var(--fs-mono);font-size:11.5px;color:var(--txt-3);flex:none}
@@ -478,6 +477,8 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .crumbs .crumb.home svg{width:14px;height:14px}
 .crumbs .crumb-sep{color:var(--txt-3);user-select:none;padding:0 1px}
 .crumb-path{margin:0;font-size:11.5px;color:var(--txt-3)}
+/* Inline path editor that replaces crumbs when crumb home is clicked */
+.crumb-path-input{height:28px;padding:2px 10px;border-radius:6px;border:1.5px solid var(--aura);background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;outline:none;min-width:220px;width:auto}
 /* Rich empty-state for the file manager — concrete SFTP details so the operator
    doesn't have to dig through SSH/FTP tab to figure out how to upload. */
 .empty-fm{padding:36px 28px 32px;text-align:center;color:var(--txt-2)}
@@ -499,12 +500,8 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
    to z-index:500 and opacity .72 + heavier blur so the editor is a
    focused-context modal, not a card-over-pane. Card +1 above the back. */
 .modal-back{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%);z-index:500;animation:auracp-fade-in .12s ease}
-/* v0.2.38: file-editor modal sized off the *dynamic* viewport (dvh)
-   so the bottom doesn't disappear behind iOS Safari's collapsing
-   address bar / iPad multitasking dock. Capped to 960×720 — bigger
-   monitors don't get a giant editor; smaller screens fill what they
-   have minus 32 px of breathing room. min(...) handles every viewport
-   gracefully without needing per-breakpoint media queries. */
+/* Editor back is dimmer and sits below editor-window */
+.editor-back{z-index:598}
 .modal-card{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
   width:min(960px, calc(100vw - 32px));
   height:min(720px, calc(100dvh - 32px));
@@ -512,10 +509,14 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
   box-shadow:0 24px 64px rgba(0,0,0,.32);
   display:flex;flex-direction:column;z-index:501;
   animation:auracp-fade-in .14s ease;overflow:hidden}
+/* Editor-specific window: above topbar (z 50), uses left/top when dragged */
+.editor-window{z-index:600;user-select:none}
+.editor-window.dragging{box-shadow:0 32px 80px rgba(0,0,0,.45)}
+.editor-drag-handle{user-select:none}
 .modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none}
 .modal-head h3{margin:0 0 4px;font-size:15.5px;font-weight:600}
 .modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 22px;border-top:1px solid var(--line);font-size:11.5px;color:var(--txt-3);font-family:var(--fs-mono);flex:none}
-.editor-area{flex:1;min-height:0;width:100%;padding:18px 22px;border:none;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;line-height:1.55;resize:none;outline:none;tab-size:2;white-space:pre;overflow:auto}
+.editor-area{flex:1;min-height:0;width:100%;padding:18px 22px;border:none;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;line-height:1.55;resize:none;outline:none;tab-size:2;overflow:auto;white-space:pre;overflow-wrap:normal}
 .editor-area:focus{outline:none}
 @keyframes auracp-fade-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
 
@@ -523,6 +524,21 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
 .file-check{accent-color:var(--aura-strong);width:15px;height:15px;flex:none;margin:0;cursor:pointer}
 .file-row-grid.sel{background:var(--aura-glow)}
 .file-row-grid.sel:hover{background:color-mix(in srgb, var(--aura-glow) 80%, var(--surface-1))}
+/* Change 5: dim hidden files (dot-files) */
+.file-row-grid.hidden-file{opacity:0.65}
+/* Change 8: type-based icon colouring via data-type attribute */
+[data-type="php"] .file-ic{color:#8b5cf6}
+[data-type="js"] .file-ic{color:#f59e0b}
+[data-type="css"] .file-ic{color:#3b82f6}
+[data-type="html"] .file-ic{color:#f97316}
+[data-type="image"] .file-ic{color:#10b981}
+[data-type="video"] .file-ic{color:#ec4899}
+[data-type="audio"] .file-ic{color:#8b5cf6}
+[data-type="config"] .file-ic{color:#6b7280}
+[data-type="archive"] .file-ic{color:#d97706}
+[data-type="pdf"] .file-ic{color:#ef4444}
+/* Change 6: file-sel-toggle sizing */
+.file-sel-toggle{flex:none}
 /* v0.2.31: site row pointer-cursor + hover signal that the whole row opens
    the site detail. Manage button on the right stays as a focusable action;
    the row's role="link" tells screen readers it's navigable. */
@@ -812,6 +828,9 @@ tr.site-row:hover td:last-child .manage{opacity:1}
   .grid6{grid-template-columns:repeat(2,1fr)}
 }
 @media (max-width: 640px){
+  .fm-section .btn-label{display:none}
+  .fm-section .btn-ghost,.fm-section .btn-primary{padding:7px 10px !important}
+  .fm-section .btn-ghost svg,.fm-section .btn-primary svg{margin-right:0 !important}
   .topbar{gap:12px;padding:0 14px}
   .instance-pill{display:none}
   .nav button{font-size:0;padding:7px 10px}  /* icons-only on mobile */

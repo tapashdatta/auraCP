@@ -26,7 +26,7 @@
 {/if}
 
 <style>
-  .toast-stack{position:fixed;top:74px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;gap:10px;z-index:300;pointer-events:none}
+  .toast-stack{position:fixed;bottom:22px;right:22px;left:auto;top:auto;transform:none;display:flex;flex-direction:column-reverse;gap:10px;z-index:300;pointer-events:none;align-items:flex-end}
   .toast{pointer-events:auto;display:flex;align-items:center;gap:10px;min-width:240px;max-width:480px;padding:11px 16px 11px 14px;border-radius:12px;background:var(--surface-0);border:1px solid var(--line-2);color:var(--txt);font-size:13px;line-height:1.4;box-shadow:0 14px 28px -10px rgba(0,0,0,.3), 0 1px 0 rgba(255,255,255,.04) inset;cursor:pointer;text-align:left;animation:toast-slide-in .2s cubic-bezier(.2,.8,.2,1)}
   .toast:hover{transform:translateY(-1px)}
   .toast-ic{flex:none;display:grid;place-items:center;width:22px;height:22px;border-radius:50%}
@@ -45,12 +45,12 @@
   .toast-info .toast-ic{background:color-mix(in srgb, var(--info) 18%, transparent);color:var(--info)}
 
   @keyframes toast-slide-in{
-    from{opacity:0;transform:translateY(-10px) scale(.96)}
+    from{opacity:0;transform:translateY(10px) scale(.96)}
     to{opacity:1;transform:translateY(0) scale(1)}
   }
 
   @media (max-width:520px){
-    .toast-stack{top:64px;left:14px;right:14px;transform:none}
+    .toast-stack{bottom:14px;right:14px;left:14px;align-items:stretch}
     .toast{min-width:0;max-width:none;font-size:12.5px}
   }
 </style>

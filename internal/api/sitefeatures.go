@@ -11,6 +11,7 @@ import (
 
 	"github.com/auracp/auracp/internal/files"
 	"github.com/auracp/auracp/internal/logs"
+	"github.com/auracp/auracp/internal/paths"
 	"github.com/auracp/auracp/internal/store"
 )
 
@@ -64,7 +65,8 @@ func (s *Server) siteFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
-	entries, err := files.List(st.SiteUser, domain, r.URL.Query().Get("path"))
+	root := paths.SiteHome(st.SiteUser)
+	entries, err := files.List(root, r.URL.Query().Get("path"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -77,12 +79,12 @@ func (s *Server) siteFiles(w http.ResponseWriter, r *http.Request) {
 // v0.2.19: streams the multipart body part-by-part directly to disk via
 // MultipartReader, instead of the old ParseMultipartForm path that buffered
 // up to 256 MB before spilling to /tmp. The new flow has no memory cap on
-// upload size — it's bounded by available disk in the site's docroot — and
+// upload size — it's bounded by available disk in the site's root — and
 // surfaces partial-success per part the same way the old path did.
 //
 // Path field: we expect "path" to appear before "files" (FormData appends in
 // DOM order; our SPA does this correctly). If "files" come first we treat
-// path as empty (i.e. upload to the docroot).
+// path as empty (i.e. upload to the site home).
 func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 	domain := r.PathValue("domain")
 	st, err := s.store.SiteByDomain(domain)
@@ -95,6 +97,7 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expected multipart/form-data: " + err.Error()})
 		return
 	}
+	root := paths.SiteHome(st.SiteUser)
 	sub := ""
 	saved := 0
 	var errs []string
@@ -124,7 +127,7 @@ func (s *Server) uploadFiles(w http.ResponseWriter, r *http.Request) {
 			}
 			// SaveAt handles both flat (no slashes → basename → Save) and
 			// nested (creates intermediate dirs first).
-			if err := files.SaveAt(st.SiteUser, domain, sub, name, part); err != nil {
+			if err := files.SaveAt(st.SiteUser, root, sub, name, part); err != nil {
 				errs = append(errs, name+": "+err.Error())
 			} else {
 				saved++
@@ -148,8 +151,9 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
+	root := paths.SiteHome(st.SiteUser)
 	sub := r.URL.Query().Get("path")
-	f, fi, err := files.Open(st.SiteUser, domain, sub)
+	f, fi, err := files.Open(root, sub)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -168,8 +172,9 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
+	root := paths.SiteHome(st.SiteUser)
 	sub := r.URL.Query().Get("path")
-	if err := files.Delete(st.SiteUser, domain, sub); err != nil {
+	if err := files.Delete(root, sub); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -193,7 +198,8 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Rename(st.SiteUser, domain, in.Path, in.NewName); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Rename(root, in.Path, in.NewName); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -217,7 +223,8 @@ func (s *Server) mkdirFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Mkdir(st.SiteUser, domain, in.Path, in.Name); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Mkdir(st.SiteUser, root, in.Path, in.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -241,7 +248,8 @@ func (s *Server) touchFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Touch(st.SiteUser, domain, in.Path, in.Name); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Touch(st.SiteUser, root, in.Path, in.Name); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -258,8 +266,9 @@ func (s *Server) readTextFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err)
 		return
 	}
+	root := paths.SiteHome(st.SiteUser)
 	sub := r.URL.Query().Get("path")
-	content, err := files.ReadText(st.SiteUser, domain, sub)
+	content, err := files.ReadText(root, sub)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
@@ -289,7 +298,8 @@ func (s *Server) chmodFile(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "mode must be octal 0–0777 (e.g. 0644)"})
 		return
 	}
-	if err := files.Chmod(st.SiteUser, domain, in.Path, os.FileMode(n)); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Chmod(root, in.Path, os.FileMode(n)); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -311,10 +321,11 @@ func (s *Server) deleteManyFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
+	root := paths.SiteHome(st.SiteUser)
 	deleted := 0
 	var errs []string
 	for _, p := range in.Paths {
-		if err := files.Delete(st.SiteUser, domain, p); err != nil {
+		if err := files.Delete(root, p); err != nil {
 			errs = append(errs, p+": "+err.Error())
 			continue
 		}
@@ -340,7 +351,8 @@ func (s *Server) zipFiles(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Zip(st.SiteUser, domain, in.Paths, in.Dest); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Zip(st.SiteUser, root, in.Paths, in.Dest); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -361,7 +373,8 @@ func (s *Server) unzipFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.Unzip(st.SiteUser, domain, in.Path); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.Unzip(st.SiteUser, root, in.Path); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
@@ -385,12 +398,36 @@ func (s *Server) writeTextFile(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := files.WriteText(st.SiteUser, domain, in.Path, in.Content); err != nil {
+	root := paths.SiteHome(st.SiteUser)
+	if err := files.WriteText(st.SiteUser, root, in.Path, in.Content); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	s.audit(r, "site.files.edit", domain+"/"+in.Path)
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// POST /api/sites/{domain}/files/clone {"path": "sub/file"}
+func (s *Server) cloneFile(w http.ResponseWriter, r *http.Request) {
+	domain := r.PathValue("domain")
+	st, err := s.store.SiteByDomain(domain)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	var in struct{ Path string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	root := paths.SiteHome(st.SiteUser)
+	newName, err := files.Clone(root, st.SiteUser, in.Path)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	s.audit(r, "site.files.clone", domain+"/"+in.Path)
+	writeJSON(w, http.StatusOK, map[string]string{"name": newName})
 }
 
 // GET /api/sites/{domain}/cron

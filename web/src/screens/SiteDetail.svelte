@@ -713,6 +713,39 @@
 
   // ─── in-browser text editor ────────────────────────────────────────────
   let editor = $state({ open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' })
+  // Draggable editor window position (null = centered default)
+  let editorPos = $state(null) // { x, y } in px from top-left
+  let editorDrag = $state(null) // { startX, startY, origX, origY }
+  let pathEditMode = $state(false) // crumb home clicked → show editable path input
+  let pathEditVal = $state('')
+
+  function startEditorDrag(e) {
+    if (e.button !== 0) return
+    const el = e.currentTarget.closest('.modal-card')
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    editorDrag = { startX: e.clientX, startY: e.clientY, origX: rect.left, origY: rect.top }
+    e.preventDefault()
+  }
+  function onEditorMouseMove(e) {
+    if (!editorDrag) return
+    const dx = e.clientX - editorDrag.startX
+    const dy = e.clientY - editorDrag.startY
+    editorPos = { x: editorDrag.origX + dx, y: editorDrag.origY + dy }
+  }
+  function onEditorMouseUp() { editorDrag = null }
+
+  function openPathEdit() {
+    pathEditMode = true
+    pathEditVal = filePath
+  }
+  function commitPathEdit(e) {
+    if (e && e.key && e.key !== 'Enter') return
+    const cleaned = pathEditVal.replace(/^\/+/, '').replace(/\/+$/, '').split('/').filter(Boolean).join('/')
+    filePath = cleaned
+    pathEditMode = false
+    load('files')
+  }
   // Conservative extension whitelist for "open in editor"; everything else
   // downloads. Operators can always rename a file with a textual extension
   // to edit it if they really mean to.
@@ -728,6 +761,7 @@
   async function openEditor(name) {
     const sub = filePath ? `${filePath}/${name}` : name
     editor = { open: true, name, sub, content: '', original: '', busy: true, err: '' }
+    editorPos = null  // reset to centered on each open
     const r = await apiFetch(`${base}/files/text?path=${encodeURIComponent(sub)}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
@@ -883,6 +917,32 @@
   function isArchive(name) {
     return /\.(zip|tar|tgz|tar\.gz)$/i.test(name)
   }
+
+  // Returns a type string for a file name, used for icon colouring (change 8).
+  function fileType(name) {
+    const n = name.toLowerCase()
+    if (['.jpg','.jpeg','.png','.gif','.webp','.svg','.ico','.bmp','.tiff'].some(e => n.endsWith(e))) return 'image'
+    if (['.mp4','.mov','.avi','.mkv','.webm','.m4v'].some(e => n.endsWith(e))) return 'video'
+    if (['.mp3','.wav','.flac','.aac','.ogg'].some(e => n.endsWith(e))) return 'audio'
+    if (n.endsWith('.php')) return 'php'
+    if (['.js','.jsx','.ts','.tsx','.mjs','.cjs'].some(e => n.endsWith(e))) return 'js'
+    if (['.css','.scss','.sass','.less'].some(e => n.endsWith(e))) return 'css'
+    if (['.html','.htm'].some(e => n.endsWith(e))) return 'html'
+    if (['.json','.yaml','.yml','.toml','.env','.ini','.conf','.config'].some(e => n.endsWith(e))) return 'config'
+    if (['.zip','.tar','.gz','.tgz','.rar','.7z'].some(e => n.endsWith(e))) return 'archive'
+    if (n.endsWith('.pdf')) return 'pdf'
+    return 'text'
+  }
+
+  // Clone file handler (change 9).
+  async function cloneFile(name) {
+    const sub = filePath ? `${filePath}/${name}` : name
+    const r = await apiFetch(`${base}/files/clone`, { method: 'POST', body: JSON.stringify({ path: sub }) })
+    if (!r.ok) { const d = await r.json().catch(() => ({})); toastError(d.error || 'Clone failed'); return }
+    const d = await r.json()
+    toastSuccess(`Cloned to ${d.name}`)
+    load('files')
+  }
 </script>
 
 <div class="wrap fade">
@@ -896,15 +956,6 @@
       <h1>{site.domain}</h1>
       <div class="status" style="margin-top:4px"><span class="sdot s-{site.status || 'up'}"></span>{site.statusText || 'Online'}</div>
     </div>
-  </div>
-
-  <div class="site-meta">
-    <div class="m"><span class="k">App</span><span class="v">{site.app}</span></div>
-    <div class="sep"></div>
-    <div class="m"><span class="k">Site User</span><span class="v">{site.user}</span></div>
-    {#if site.node}<div class="sep"></div><div class="m"><span class="k">Node</span><span class="v">v{site.node} LTS</span></div>{/if}
-    <div class="sep"></div>
-    <div class="m"><span class="k">Document Root</span><span class="v">{site.root}</span></div>
   </div>
 
   <div class="tabs" role="tablist">
@@ -1406,29 +1457,38 @@
       <div class="section-h">
         <div>
           <h3>File Manager</h3>
-          <!-- Breadcrumb: clickable segments. Each jumps to that depth. -->
+          <!-- Breadcrumb: clickable segments. Home button toggles editable path. -->
           <div class="crumbs">
-            <button type="button" class="crumb home" onclick={() => jumpCrumb(-1)} aria-label="Document root">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 11l9-7 9 7v9a2 2 0 0 1-2 2h-4v-6h-6v6H5a2 2 0 0 1-2-2v-9z"/></svg>
-            </button>
-            {#each crumbs as seg, i}
-              <span class="crumb-sep">/</span>
-              <button type="button" class="crumb" onclick={() => jumpCrumb(i)}>{seg}</button>
-            {/each}
+            {#if pathEditMode}
+              <input class="crumb-path-input" type="text" bind:value={pathEditVal}
+                     onkeydown={commitPathEdit}
+                     onblur={() => { pathEditMode = false }}
+                     autofocus
+                     placeholder="path/to/folder"
+                     aria-label="Navigate to path">
+            {:else}
+              <button type="button" class="crumb home" onclick={openPathEdit} aria-label="Edit path">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M3 11l9-7 9 7v9a2 2 0 0 1-2 2h-4v-6h-6v6H5a2 2 0 0 1-2-2v-9z"/></svg>
+              </button>
+              {#each crumbs as seg, i}
+                <span class="crumb-sep">/</span>
+                <button type="button" class="crumb" onclick={() => jumpCrumb(i)}>{seg}</button>
+              {/each}
+            {/if}
           </div>
-          <p class="mono crumb-path">{site.root}{filePath ? '/' + filePath : ''}</p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-ghost" style="padding:7px 14px" onclick={mkdir} title="New folder">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M12 11v6M9 14h6"/></svg>
-            New Folder
+            <span class="btn-label">New Folder</span>
           </button>
           <button class="btn btn-ghost" style="padding:7px 14px" onclick={touchFile} title="New file">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M12 13v6M9 16h6"/></svg>
-            New File
+            <span class="btn-label">New File</span>
           </button>
           <button class="btn btn-primary" style="padding:7px 14px" onclick={() => fileInput.click()} disabled={uploadBusy}>
-            {uploadBusy ? 'Uploading…' : 'Upload'}
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <span class="btn-label">{uploadBusy ? 'Uploading…' : 'Upload'}</span>
           </button>
           <input type="file" multiple bind:this={fileInput}
                  onchange={(e) => { uploadFiles(e.target.files); e.target.value = '' }}
@@ -1505,33 +1565,34 @@
               <div><dt>Host</dt><dd class="mono">{sftpHost || site.domain}</dd></div>
               <div><dt>Port</dt><dd class="mono">22</dd></div>
               <div><dt>User</dt><dd class="mono">{site.user}</dd></div>
-              <div><dt>Path</dt><dd class="mono">{site.root}{filePath ? '/' + filePath : ''}</dd></div>
+              <div><dt>Path</dt><dd class="mono">/home/{site.user}{filePath ? '/' + filePath : ''}</dd></div>
             </dl>
             <p class="empty-fm-hint">No password? Add one in the <b>SSH/FTP</b> tab.</p>
           </div>
         {:else}
           {#each files as f}
-            <div class="file-row-grid" class:sel={selected[f.name]}>
-              <input type="checkbox" class="file-check" checked={!!selected[f.name]}
-                     onchange={() => toggleSel(f.name)} aria-label="Select {f.name}">
+            <div class="file-row-grid" class:sel={selected[f.name]} class:hidden-file={f.name.startsWith('.')} data-type={f.dir ? 'dir' : fileType(f.name)}>
+              <button type="button" role="switch" aria-checked={!!selected[f.name]}
+                      class="toggle toggle-sm file-sel-toggle" class:on={!!selected[f.name]}
+                      onclick={() => toggleSel(f.name)} aria-label="Select {f.name}"></button>
               {#if f.dir}
                 <button type="button" class="file-row k folder" onclick={() => openDir(f.name)} title="Open folder">
-                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="file-ic file-ic-folder"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.382a1.5 1.5 0 0 1 1.06.44L11.5 6.5h8A1.5 1.5 0 0 1 21 8v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11z"/></svg>
+                  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" class="file-ic file-ic-folder" style="width:18px;height:18px"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.382a1.5 1.5 0 0 1 1.06.44L11.5 6.5h8A1.5 1.5 0 0 1 21 8v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5v-11z"/></svg>
                   {f.name}
                 </button>
               {:else if isTextish(f.name)}
                 <button type="button" class="file-row k" onclick={() => openEditor(f.name)} title="Open in editor">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic" style="width:18px;height:18px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
                 </button>
               {:else if isArchive(f.name)}
                 <button type="button" class="file-row k archive" onclick={() => unzipItem(f.name)} title="Extract here">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M10 12v8M10 16h4"/></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic" style="width:18px;height:18px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M10 12v8M10 16h4"/></svg>
                   {f.name}
                 </button>
               {:else}
                 <button type="button" class="file-row k" onclick={() => downloadFile(f.name)} title="Download (binary)">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="file-ic" style="width:18px;height:18px"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>
                   {f.name}
                 </button>
               {/if}
@@ -1549,6 +1610,9 @@
                 {#if !f.dir}
                   <button type="button" class="file-act" onclick={() => downloadFile(f.name)} title="Download" aria-label="Download {f.name}">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>
+                  </button>
+                  <button type="button" class="file-act" onclick={() => cloneFile(f.name)} title="Clone" aria-label="Clone {f.name}">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
                   </button>
                 {/if}
                 <button type="button" class="file-act" onclick={() => openChmod(f)} title="Permissions" aria-label="Permissions for {f.name}">
@@ -1570,17 +1634,24 @@
       </div><!-- /.fm-split -->
     </div>
 
-    <!-- In-browser editor modal. Plain <textarea> with monospace styling —
-         deliberately lightweight (no CodeMirror; no Monaco). Files ≤ 1 MiB. -->
+    <!-- In-browser editor — draggable floating window. Drag the header to
+         reposition; z-index 600 sits above the topbar (z-index 50). -->
     {#if editor.open}
-      <div class="modal-back" onclick={closeEditor} role="presentation"></div>
-      <div class="modal-card" role="dialog" aria-label="Edit {editor.name}">
-        <div class="modal-head">
-          <div>
-            <h3>{editor.name}</h3>
-            <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px">{site.root}/{editor.sub}</p>
+      <div class="modal-back editor-back" onclick={closeEditor} role="presentation"></div>
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div class="modal-card editor-window" role="dialog" aria-label="Edit {editor.name}"
+           style={editorPos ? `left:${editorPos.x}px;top:${editorPos.y}px;transform:none` : ''}
+           onmousemove={onEditorMouseMove} onmouseup={onEditorMouseUp}>
+        <!-- Drag handle: the whole header row is the drag target -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="modal-head editor-drag-handle"
+             onmousedown={startEditorDrag}
+             style="cursor:{editorDrag ? 'grabbing' : 'grab'}">
+          <div style="min-width:0">
+            <h3 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.name}</h3>
+            <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.sub}</p>
           </div>
-          <div style="display:flex;gap:8px">
+          <div style="display:flex;gap:8px;flex:none">
             <button type="button" class="btn btn-ghost" onclick={closeEditor}>Cancel</button>
             <button type="button" class="btn btn-primary" onclick={saveEditor}
                     disabled={editor.busy || editor.content === editor.original}>
@@ -1594,7 +1665,7 @@
                   onkeydown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveEditor() } }}></textarea>
         <div class="modal-foot">
           <span class="mono">{editor.content.length} bytes · {editor.content.split('\n').length} lines</span>
-          <span style="color:var(--txt-2)">Ctrl/Cmd+S to save</span>
+          <span style="color:var(--txt-2)">Ctrl/Cmd+S · drag header to move</span>
         </div>
       </div>
     {/if}

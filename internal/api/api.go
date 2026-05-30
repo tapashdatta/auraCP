@@ -135,6 +135,7 @@ func Register(mux *http.ServeMux, s *store.Store, d Deps) *Server {
 	mux.Handle("POST /api/sites/{domain}/files/delete-many", srv.requirePerm("files", "delete", srv.deleteManyFiles))
 	mux.Handle("POST /api/sites/{domain}/files/zip", srv.requirePerm("files", "create", srv.zipFiles))
 	mux.Handle("POST /api/sites/{domain}/files/unzip", srv.requirePerm("files", "create", srv.unzipFile))
+	mux.Handle("POST /api/sites/{domain}/files/clone", srv.requirePerm("files", "create", srv.cloneFile))
 	mux.Handle("GET /api/sites/{domain}/cron", srv.requirePerm("cron", "read", srv.listCron))
 	mux.Handle("POST /api/sites/{domain}/cron", srv.requirePerm("cron", "create", srv.addCron))
 	mux.Handle("DELETE /api/sites/{domain}/cron/{id}", srv.requirePerm("cron", "delete", srv.deleteCron))

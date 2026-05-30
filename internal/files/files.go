@@ -1,5 +1,5 @@
-// Package files is a path-safe file browser scoped to a site's document root.
-// Listing reads as root; the path is strictly contained within the docroot so
+// Package files is a path-safe file browser scoped to a site's home directory.
+// Listing reads as root; the path is strictly contained within the root so
 // a crafted "sub" can never escape the site (no .. traversal, no symlink-out).
 // Uploads and downloads chown the file to the site user so site code can read
 // them without elevation and the panel never serves files outside the site.
@@ -16,9 +16,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-
-	"github.com/auracp/auracp/internal/paths"
-	"github.com/auracp/auracp/internal/validate"
 )
 
 type Entry struct {
@@ -28,29 +25,14 @@ type Entry struct {
 	Mode string `json:"mode"`
 }
 
-// List returns the entries of <docroot>/<sub>, rejecting any path that resolves
-// outside the document root. v0.2.23: sorted folders-first, then files, with
+// List returns the entries of <root>/<sub>, rejecting any path that resolves
+// outside root. v0.2.23: sorted folders-first, then files, with
 // case-insensitive alphabetical ordering inside each group.
-func List(user, domain, sub string) ([]Entry, error) {
-	if err := validate.Username(user); err != nil {
+func List(root, sub string) ([]Entry, error) {
+	target, err := resolveAt(root, sub)
+	if err != nil {
 		return nil, err
 	}
-	if err := validate.Domain(domain); err != nil {
-		return nil, err
-	}
-	root := paths.DocRoot(user, domain)
-	target := filepath.Clean(filepath.Join(root, sub))
-	// Containment check: target must be root or strictly under it.
-	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
-		return nil, fmt.Errorf("path escapes site root")
-	}
-	// Resolve symlinks and re-check, so a symlink inside can't point out.
-	if resolved, err := filepath.EvalSymlinks(target); err == nil {
-		if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
-			return nil, fmt.Errorf("path escapes site root")
-		}
-	}
-
 	des, err := os.ReadDir(target)
 	if err != nil {
 		return nil, err
@@ -85,21 +67,21 @@ func sortEntries(es []Entry, less func(a, b Entry) int) {
 	}
 }
 
-// resolve returns the absolute, contained target path, refusing any input that
-// would escape the docroot. Caller owns the validate.Username/.Domain checks.
-func resolve(user, domain, sub string) (string, string, error) {
-	if err := validate.Username(user); err != nil {
-		return "", "", err
-	}
-	if err := validate.Domain(domain); err != nil {
-		return "", "", err
-	}
-	root := paths.DocRoot(user, domain)
+// resolveAt returns the absolute, contained target path within root, refusing
+// any input that would escape root. root must be an absolute path.
+func resolveAt(root, sub string) (string, error) {
 	target := filepath.Clean(filepath.Join(root, sub))
+	// Containment check: target must be root or strictly under it.
 	if target != root && !strings.HasPrefix(target, root+string(os.PathSeparator)) {
-		return "", "", fmt.Errorf("path escapes site root")
+		return "", fmt.Errorf("path escapes site root")
 	}
-	return root, target, nil
+	// Resolve symlinks and re-check, so a symlink inside can't point out.
+	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+		if resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator)) {
+			return "", fmt.Errorf("path escapes site root")
+		}
+	}
+	return target, nil
 }
 
 // SaveAt is like Save but accepts a name that may contain forward-slashes,
@@ -108,9 +90,9 @@ func resolve(user, domain, sub string) (string, string, error) {
 // the folder drag-and-drop upload path so a dropped tree lands as a tree on
 // disk, not a flat directory.
 //
-// base + relPath are both relative to the docroot. relPath '..', '\', or
+// base + relPath are both relative to the root. relPath '..', '\', or
 // absolute components are rejected.
-func SaveAt(siteUser, domain, base, relPath string, body io.Reader) error {
+func SaveAt(siteUser, root, base, relPath string, body io.Reader) error {
 	if relPath == "" {
 		return fmt.Errorf("empty path")
 	}
@@ -135,7 +117,7 @@ func SaveAt(siteUser, domain, base, relPath string, body io.Reader) error {
 			fullSub = fullSub + "/" + joined
 		}
 		// Resolve to get the absolute target dir and ensure it exists.
-		_, dir, err := resolve(siteUser, domain, fullSub)
+		dir, err := resolveAt(root, fullSub)
 		if err != nil {
 			return err
 		}
@@ -143,23 +125,23 @@ func SaveAt(siteUser, domain, base, relPath string, body io.Reader) error {
 			return err
 		}
 		// chown each intermediate directory to the site user — walking from
-		// the deepest new dir up to the docroot, stopping when we hit an
+		// the deepest new dir up to the root, stopping when we hit an
 		// existing site-user-owned directory.
 		_ = chownToUser(dir, siteUser)
 	}
-	return Save(siteUser, domain, fullSub, name, body)
+	return Save(siteUser, root, fullSub, name, body)
 }
 
-// Save streams an uploaded file into <docroot>/<sub>/<name>, chowning it to
+// Save streams an uploaded file into <root>/<sub>/<name>, chowning it to
 // the site user so the application code reads it as itself. Overwrites
 // existing files (operator already had to click Upload).
-func Save(siteUser, domain, sub, name string, body io.Reader) error {
+func Save(siteUser, root, sub, name string, body io.Reader) error {
 	// Sanitise the filename: only the basename, no traversal markers.
 	clean := filepath.Base(filepath.Clean(name))
 	if clean == "" || clean == "." || clean == ".." || clean == "/" {
 		return fmt.Errorf("invalid filename: %q", name)
 	}
-	_, dir, err := resolve(siteUser, domain, sub)
+	dir, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
@@ -185,8 +167,8 @@ func Save(siteUser, domain, sub, name string, body io.Reader) error {
 
 // Open returns a *os.File for download. Caller is responsible for closing it
 // and copying the bytes to the HTTP response.
-func Open(siteUser, domain, sub string) (*os.File, os.FileInfo, error) {
-	_, target, err := resolve(siteUser, domain, sub)
+func Open(root, sub string) (*os.File, os.FileInfo, error) {
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -206,35 +188,35 @@ func Open(siteUser, domain, sub string) (*os.File, os.FileInfo, error) {
 	return f, fi, nil
 }
 
-// Delete removes a file (or empty directory). Refuses to nuke the docroot
+// Delete removes a file (or empty directory). Refuses to nuke the root
 // itself; that's a site-delete operation, not a file-manager one.
-func Delete(siteUser, domain, sub string) error {
-	root, target, err := resolve(siteUser, domain, sub)
+func Delete(root, sub string) error {
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
-	if target == root {
-		return fmt.Errorf("refusing to delete the document root itself")
+	if target == filepath.Clean(root) {
+		return fmt.Errorf("refusing to delete the site root itself")
 	}
 	return os.RemoveAll(target)
 }
 
 // Rename moves <sub> to a sibling with newName (basename only). New target
-// must stay inside the docroot. Refuses overwrites — caller must Delete first.
-func Rename(siteUser, domain, sub, newName string) error {
+// must stay inside the root. Refuses overwrites — caller must Delete first.
+func Rename(root, sub, newName string) error {
 	clean := filepath.Base(filepath.Clean(newName))
 	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
 		return fmt.Errorf("invalid name: %q", newName)
 	}
-	root, target, err := resolve(siteUser, domain, sub)
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
-	if target == root {
-		return fmt.Errorf("refusing to rename the document root")
+	if target == filepath.Clean(root) {
+		return fmt.Errorf("refusing to rename the site root")
 	}
 	dst := filepath.Join(filepath.Dir(target), clean)
-	if !strings.HasPrefix(filepath.Clean(dst), root) {
+	if !strings.HasPrefix(filepath.Clean(dst), filepath.Clean(root)) {
 		return fmt.Errorf("invalid target path")
 	}
 	if _, err := os.Lstat(dst); err == nil {
@@ -245,12 +227,12 @@ func Rename(siteUser, domain, sub, newName string) error {
 
 // Mkdir creates a new directory at <sub>/<name>, chowned to the site user so
 // the application can write into it.
-func Mkdir(siteUser, domain, sub, name string) error {
+func Mkdir(siteUser, root, sub, name string) error {
 	clean := filepath.Base(filepath.Clean(name))
 	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
 		return fmt.Errorf("invalid folder name: %q", name)
 	}
-	_, dir, err := resolve(siteUser, domain, sub)
+	dir, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
@@ -266,12 +248,12 @@ func Mkdir(siteUser, domain, sub, name string) error {
 
 // Touch creates an empty file at <sub>/<name>. Refuses to overwrite an
 // existing file (caller can use WriteText for that).
-func Touch(siteUser, domain, sub, name string) error {
+func Touch(siteUser, root, sub, name string) error {
 	clean := filepath.Base(filepath.Clean(name))
 	if clean == "" || clean == "." || clean == ".." || clean == "/" || strings.ContainsAny(clean, "/\\") {
 		return fmt.Errorf("invalid filename: %q", name)
 	}
-	_, dir, err := resolve(siteUser, domain, sub)
+	dir, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
@@ -294,8 +276,8 @@ const EditMaxBytes int64 = 1 << 20
 
 // ReadText opens <sub> as UTF-8-ish text. Refuses files > EditMaxBytes and
 // files that contain a NUL byte in the first 8 KiB (heuristic for binary).
-func ReadText(siteUser, domain, sub string) (string, error) {
-	_, target, err := resolve(siteUser, domain, sub)
+func ReadText(root, sub string) (string, error) {
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return "", err
 	}
@@ -329,16 +311,16 @@ func ReadText(siteUser, domain, sub string) (string, error) {
 // WriteText overwrites <sub> with content, preserving the original mode if it
 // existed and chowning to the site user. Refuses content > EditMaxBytes so
 // the editor can't be used to dump arbitrary blobs.
-func WriteText(siteUser, domain, sub, content string) error {
+func WriteText(siteUser, root, sub, content string) error {
 	if int64(len(content)) > EditMaxBytes {
 		return fmt.Errorf("content too large (%d bytes); editor limit is %d", len(content), EditMaxBytes)
 	}
-	root, target, err := resolve(siteUser, domain, sub)
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
-	if target == root {
-		return fmt.Errorf("refusing to overwrite the document root")
+	if target == filepath.Clean(root) {
+		return fmt.Errorf("refusing to overwrite the site root")
 	}
 	// Preserve mode if file exists, else 0644.
 	mode := os.FileMode(0o644)
@@ -379,13 +361,13 @@ func WriteText(siteUser, domain, sub, content string) error {
 // Chmod sets the file's permission bits. Caller passes a Unix mode in octal
 // (e.g. 0o644). The mode is masked to 0o777 so callers can't accidentally
 // flip setuid/setgid/sticky bits.
-func Chmod(siteUser, domain, sub string, mode os.FileMode) error {
-	root, target, err := resolve(siteUser, domain, sub)
+func Chmod(root, sub string, mode os.FileMode) error {
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
-	if target == root {
-		return fmt.Errorf("refusing to chmod the document root itself")
+	if target == filepath.Clean(root) {
+		return fmt.Errorf("refusing to chmod the site root itself")
 	}
 	return os.Chmod(target, mode&0o777)
 }
@@ -395,10 +377,10 @@ func Chmod(siteUser, domain, sub string, mode os.FileMode) error {
 // from filling the disk.
 const ZipMaxBytes int64 = 2 << 30 // 2 GiB
 
-// Zip archives <subs> into <docroot>/<destSub>. Refuses to overwrite. Walks
+// Zip archives <subs> into <root>/<destSub>. Refuses to overwrite. Walks
 // directories recursively. Each archive entry is stored with a relative
 // path so extraction reproduces the same tree.
-func Zip(siteUser, domain string, subs []string, destSub string) error {
+func Zip(siteUser, root string, subs []string, destSub string) error {
 	if len(subs) == 0 {
 		return fmt.Errorf("no files to archive")
 	}
@@ -409,20 +391,16 @@ func Zip(siteUser, domain string, subs []string, destSub string) error {
 	if !strings.HasSuffix(strings.ToLower(clean), ".zip") {
 		clean += ".zip"
 	}
-	root, _, err := resolve(siteUser, domain, "")
-	if err != nil {
-		return err
-	}
 	// Validate every source path; collect (absPath, relInsideRoot) pairs.
 	type src struct{ abs, rel string }
 	var srcs []src
 	for _, sub := range subs {
-		_, target, err := resolve(siteUser, domain, sub)
+		target, err := resolveAt(root, sub)
 		if err != nil {
 			return err
 		}
-		if target == root {
-			return fmt.Errorf("refusing to zip the entire document root")
+		if target == filepath.Clean(root) {
+			return fmt.Errorf("refusing to zip the entire site root")
 		}
 		srcs = append(srcs, src{abs: target, rel: filepath.Base(target)})
 	}
@@ -446,7 +424,7 @@ func Zip(siteUser, domain string, subs []string, destSub string) error {
 			if p == dest {
 				return nil
 			}
-			// Skip symlinks — don't follow out of the docroot accidentally.
+			// Skip symlinks — don't follow out of the root accidentally.
 			if info.Mode()&os.ModeSymlink != 0 {
 				return nil
 			}
@@ -513,10 +491,10 @@ func IsArchive(name string) bool {
 
 // Unzip extracts <sub> (a supported archive) into its containing directory.
 // Supports .zip, .tar.gz, .tgz, .tar. Every entry's final path is re-checked
-// for containment so a malicious archive can't "Zip Slip" out of the docroot.
+// for containment so a malicious archive can't "Zip Slip" out of the root.
 // Name kept as Unzip for API compatibility; covers all formats now.
-func Unzip(siteUser, domain, sub string) error {
-	root, target, err := resolve(siteUser, domain, sub)
+func Unzip(siteUser, root, sub string) error {
+	target, err := resolveAt(root, sub)
 	if err != nil {
 		return err
 	}
@@ -540,6 +518,56 @@ func Unzip(siteUser, domain, sub string) error {
 	}
 }
 
+// Clone copies <sub> to a sibling file named <stem>-copy<ext> (or
+// <stem>-copy2<ext> etc. if the copy already exists). Returns the new
+// filename on success.
+func Clone(root, siteUser, sub string) (string, error) {
+	target, err := resolveAt(root, sub)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(target)
+	if err != nil {
+		return "", err
+	}
+	if fi.IsDir() {
+		return "", fmt.Errorf("clone does not support directories")
+	}
+
+	base := filepath.Base(target)
+	dir := filepath.Dir(target)
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	newName := stem + "-copy" + ext
+	dst := filepath.Join(dir, newName)
+	// If copy already exists, append a counter.
+	for i := 2; ; i++ {
+		if _, err := os.Lstat(dst); os.IsNotExist(err) {
+			break
+		}
+		newName = fmt.Sprintf("%s-copy%d%s", stem, i, ext)
+		dst = filepath.Join(dir, newName)
+	}
+
+	in, err := os.Open(target)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fi.Mode().Perm())
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return "", err
+	}
+	out.Close()
+	_ = chownToUser(dst, siteUser)
+	return newName, nil
+}
+
 func unzipZip(siteUser, root, target string) error {
 	zr, err := zip.OpenReader(target)
 	if err != nil {
@@ -549,15 +577,21 @@ func unzipZip(siteUser, root, target string) error {
 
 	dir := filepath.Dir(target)
 	for _, f := range zr.File {
+		// Normalize path separators (some zips use \).
+		name := strings.ReplaceAll(f.Name, "\\", "/")
+		// Skip empty names.
+		if name == "" {
+			continue
+		}
 		// Reject absolute paths, traversal, and entries that, after join,
 		// escape the destination directory (the classic Zip Slip check).
-		if strings.HasPrefix(f.Name, "/") || strings.Contains(f.Name, "..") {
+		if strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
 			return fmt.Errorf("archive contains unsafe path: %q", f.Name)
 		}
-		dst := filepath.Join(dir, f.Name)
+		dst := filepath.Join(dir, name)
 		clean := filepath.Clean(dst)
 		if clean != dir && !strings.HasPrefix(clean, dir+string(os.PathSeparator)) {
-			return fmt.Errorf("archive entry escapes docroot: %q", f.Name)
+			return fmt.Errorf("archive entry escapes extraction dir: %q", f.Name)
 		}
 		if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes site root: %q", f.Name)
@@ -583,12 +617,13 @@ func unzipZip(siteUser, root, target string) error {
 		rc, err := f.Open()
 		if err != nil {
 			w.Close()
-			return err
+			return fmt.Errorf("open %q: %w", f.Name, err)
 		}
-		if _, err := io.Copy(w, rc); err != nil {
+		buf := make([]byte, 512*1024)
+		if _, err := io.CopyBuffer(w, rc, buf); err != nil {
 			rc.Close()
 			w.Close()
-			return err
+			return fmt.Errorf("write %q: %w", f.Name, err)
 		}
 		rc.Close()
 		w.Close()
@@ -627,6 +662,10 @@ func unzipTar(siteUser, root, target string, gzipped bool) error {
 		if err != nil {
 			return fmt.Errorf("tar read failed: %w", err)
 		}
+		// Skip empty names.
+		if h.Name == "" {
+			continue
+		}
 		// Same safety checks as zip; tar is even more permissive on disk
 		// layout so we're strict about absolute / traversal / symlink entries.
 		if strings.HasPrefix(h.Name, "/") || strings.Contains(h.Name, "..") {
@@ -635,7 +674,7 @@ func unzipTar(siteUser, root, target string, gzipped bool) error {
 		dst := filepath.Join(dir, h.Name)
 		clean := filepath.Clean(dst)
 		if clean != dir && !strings.HasPrefix(clean, dir+string(os.PathSeparator)) {
-			return fmt.Errorf("archive entry escapes docroot: %q", h.Name)
+			return fmt.Errorf("archive entry escapes extraction dir: %q", h.Name)
 		}
 		if clean != root && !strings.HasPrefix(clean, root+string(os.PathSeparator)) {
 			return fmt.Errorf("archive entry escapes site root: %q", h.Name)
@@ -658,16 +697,17 @@ func unzipTar(siteUser, root, target string, gzipped bool) error {
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(w, tr); err != nil {
+			buf := make([]byte, 512*1024)
+			if _, err := io.CopyBuffer(w, tr, buf); err != nil {
 				w.Close()
-				return err
+				return fmt.Errorf("write %q: %w", h.Name, err)
 			}
 			w.Close()
 			_ = chownToUser(clean, siteUser)
 		default:
 			// Symlinks / hardlinks / devices: silently skip. A WordPress
 			// backup tarball won't have any; a malicious one with symlinks
-			// pointing out of the docroot just won't materialise them.
+			// pointing out of the root just won't materialise them.
 		}
 	}
 	return nil
