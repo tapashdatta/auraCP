@@ -402,11 +402,11 @@ td .mono{color:var(--txt-2);font-size:12.5px}
   .hide-on-mobile{display:none !important}
 }
 
-.tabs{display:flex;flex-wrap:nowrap;gap:3px;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-pill);padding:4px;margin-bottom:22px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;width:fit-content;max-width:100%}
+.tabs{display:flex;flex-wrap:nowrap;gap:3px;background:var(--surface-1);border:1px solid var(--line);border-radius:var(--radius-pill);padding:4px;margin-bottom:22px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;width:100%}
 .tabs::-webkit-scrollbar{display:none}
 /* Tabs are now <button role=tab>; remove UA button chrome via the global
    reset; visual styling sits on .tab itself. */
-.tab{padding:7px 14px;color:var(--txt-2);font-weight:500;font-size:13px;white-space:nowrap;border-bottom:none;margin-bottom:0;transition:.1s;cursor:pointer;background:transparent;display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-pill)}
+.tab{padding:7px 14px;color:var(--txt-2);font-weight:500;font-size:13px;white-space:nowrap;border-bottom:none;margin-bottom:0;transition:.1s;cursor:pointer;background:transparent;display:inline-flex;align-items:center;justify-content:center;gap:7px;border-radius:var(--radius-pill);flex:1;min-width:0}
 .tab:hover{color:var(--txt);background:var(--surface-2)}
 .tab.active{color:var(--solid-fg);background:var(--solid-bg);font-weight:600}
 .tab .num{font-family:var(--fs-mono);font-size:10.5px;color:var(--txt-3);margin-left:6px}
