@@ -37,6 +37,32 @@
     }
   }
 
+  // v0.3.2-E: ImportModal follows the same dynamic-import pattern as
+  // ExportModal so it doesn't bloat the main grid chunk.
+  /** @type {any} */
+  let ImportModalComponent = $state(null)
+  let importModalLoading = $state(false)
+  let importOpen = $state(false)
+  async function ensureImportModal() {
+    if (ImportModalComponent || importModalLoading) return
+    importModalLoading = true
+    try {
+      const mod = await import('../lib/components/ImportModal.svelte')
+      ImportModalComponent = mod.default
+    } finally {
+      importModalLoading = false
+    }
+  }
+  function openImportModal() {
+    ensureImportModal().then(() => { importOpen = true })
+  }
+  function onImported() {
+    // After a successful import, refresh the visible grid so the new
+    // rows appear without a manual reload. The composable owns the
+    // refetch; we trigger it via the existing reload entry point.
+    try { void grid?.reload?.() } catch { /* ignore */ }
+  }
+
   // Svelte action for autofocus + select-all on edit-input mount. Avoids
   // the autofocus attribute (which Svelte's a11y rules flag) while keeping
   // the same user experience.
@@ -434,6 +460,14 @@
       {#if grid.view.filters.size > 0}
         <button class="btn btn--ghost btn--sm" onclick={() => grid.clearAllFilters()}>Clear filters</button>
       {/if}
+      <!-- v0.3.2-E: Import button. Lazy-loads ImportModal on first open
+           so the modal code is not shipped with the main grid chunk. -->
+      <button
+        class="btn btn--sm"
+        type="button"
+        onclick={openImportModal}
+        title="Import CSV or NDJSON into this table"
+      >Import</button>
       <div class="rg-toolbar__export rg-toolbar__export--pos">
         <button
           bind:this={exportBtn}
@@ -705,6 +739,18 @@
         filter={exportFilterPayload}
         sort={exportSortPayload}
         defaultFormat={exportFormat}
+      />
+    {/if}
+
+    {#if id && schema && table && ImportModalComponent}
+      <!-- v0.3.2-E: mirrors the ExportModal mount block. The modal
+           component is dynamic-imported on first open. -->
+      <ImportModalComponent
+        bind:open={importOpen}
+        connId={id}
+        schema={schema}
+        table={table}
+        onImported={onImported}
       />
     {/if}
 

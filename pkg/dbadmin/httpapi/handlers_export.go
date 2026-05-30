@@ -676,35 +676,6 @@ func exportPredicatesToRows(in []exportPredicate) ([]rows.Predicate, error) {
 	return out, nil
 }
 
-func handleImport(s *server) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		connID := dbadmin.ConnectionID(r.PathValue("id"))
-		setAuditAction(r.Context(), dbadmin.ActionImport, dbadmin.Target{ConnectionID: connID})
-		user, _ := userFrom(r.Context())
-		if err := authorize(s, r.Context(), user, connID, dbadmin.ActionImport); err != nil {
-			writeMappedErr(w, r, err)
-			return
-		}
-		// 64 MiB multipart upload ceiling. Best-effort parse — full
-		// importer is a later PR.
-		//
-		// DEF-31: ParseMultipartForm spools form parts > the in-memory
-		// threshold (8 MiB here) into $TMPDIR. Without RemoveAll on
-		// the way out, every error path leaves tmp files behind. We
-		// defer the cleanup unconditionally so the disk is reclaimed
-		// on every exit path.
-		if err := r.ParseMultipartForm(8 << 20); err != nil {
-			writeError(w, r, http.StatusBadRequest, CodeInvalidInput, "invalid multipart body")
-			return
-		}
-		defer func() {
-			if r.MultipartForm != nil {
-				_ = r.MultipartForm.RemoveAll()
-			}
-		}()
-		writeJSON(w, http.StatusOK, importResponse{
-			RowsImported: 0,
-			JobID:        newRequestID(),
-		})
-	}
-}
+// handleImport lives in handlers_import.go (v0.3.2-E). This file used
+// to carry a stub for it pre-import-PR; the real implementation now
+// owns its own file alongside handlers_export.go.

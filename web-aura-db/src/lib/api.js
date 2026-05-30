@@ -528,6 +528,102 @@ export class AuraDBClient {
       return { total: null }
     }
   }
+
+  /**
+   * importTable streams a CSV / NDJSON upload into a target table via
+   * the multipart /connections/{id}/import endpoint (v0.3.2-E).
+   * Mirrors exportTable's shape — the modal owns the AbortController +
+   * the onProgress callback; the api method handles CSRF, multipart
+   * assembly, and the canonical error envelope.
+   *
+   * @param {string} connId
+   * @param {{
+   *   schema: string,
+   *   table: string,
+   *   format: 'csv'|'ndjson',
+   *   onConflict?: 'error'|'skip'|'update',
+   *   file: File|Blob,
+   *   signal?: AbortSignal,
+   *   onProgress?: (uploadedBytes:number)=>void,
+   * }} opts
+   * @returns {Promise<{
+   *   rowsImported: number,
+   *   skipped: number,
+   *   errors: Array<{rowIndex:number, code:string, message:string}>,
+   *   totalErrors: number,
+   *   bytes: number,
+   *   truncated: boolean,
+   *   format: string,
+   *   jobId: string,
+   * }>}
+   */
+  async importTable(connId, opts) {
+    if (!connId || !opts || !opts.schema || !opts.table || !opts.format || !opts.file) {
+      throw new AuraDBError(0, 'invalid-input', 'connId, schema, table, format, file required')
+    }
+    const fd = new FormData()
+    fd.append('schema', opts.schema)
+    fd.append('table', opts.table)
+    fd.append('format', opts.format)
+    if (opts.onConflict) fd.append('onConflict', opts.onConflict)
+    fd.append('file', opts.file)
+
+    // FormData + fetch does not surface upload progress directly. The
+    // onProgress callback is invoked once with the final size after
+    // submit completes so the modal can render a "uploaded N MB" pill;
+    // a future XHR-based path could surface per-chunk progress.
+    const res = await fetch(`${BASE}/connections/${enc(connId)}/import`, {
+      method: 'POST',
+      headers: {
+        'X-CSRF-Token': csrfToken(),
+        Accept: 'application/json',
+      },
+      body: fd,
+      credentials: 'same-origin',
+      signal: opts.signal,
+    })
+    if (res.status === 401) {
+      if (typeof location !== 'undefined') {
+        const ret = '/dbadmin/' + (location.hash || '')
+        location.href = '/login?next=' + encodeURIComponent(ret)
+      }
+      throw new AuraDBError(401, 'unauthenticated', 'session expired')
+    }
+    if (!res.ok) {
+      let env = /** @type {any} */ ({})
+      try { env = await res.json() } catch { /* non-JSON */ }
+      const e = (env && typeof env === 'object' && env.error && typeof env.error === 'object') ? env.error : env
+      let detail = e.details !== undefined ? e.details : (e.detail !== undefined ? e.detail : env.detail)
+      if (res.status === 409) {
+        const ra = parseRetryAfterSeconds(res.headers.get('retry-after'))
+        if (ra != null) {
+          detail = (detail && typeof detail === 'object') ? { ...detail, retryAfter: ra } : { retryAfter: ra }
+        }
+      }
+      throw new AuraDBError(
+        res.status,
+        e.code || env.code || 'unknown',
+        e.message || env.message || res.statusText || 'import failed',
+        detail,
+        e.request_id || env.request_id,
+      )
+    }
+    /** @type {any} */
+    const body = await res.json()
+    if (opts.onProgress && body && typeof body.bytes === 'number') {
+      try { opts.onProgress(body.bytes) } catch { /* ignore */ }
+    }
+    return {
+      rowsImported: Number(body.rowsImported) || 0,
+      skipped: Number(body.skipped) || 0,
+      errors: Array.isArray(body.errors) ? body.errors : [],
+      totalErrors: Number(body.totalErrors) || 0,
+      bytes: Number(body.bytes) || 0,
+      truncated: Boolean(body.truncated),
+      format: String(body.format || ''),
+      jobId: String(body.jobId || res.headers.get('x-aura-import-jobid') || ''),
+    }
+  }
 }
 
 /**

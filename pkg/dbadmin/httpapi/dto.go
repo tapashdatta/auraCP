@@ -384,9 +384,53 @@ type savedQueryDTO struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+// importResponse is the wire-form result of POST /connections/{id}/import.
+//
+// v0.3.2-E: extended from the {rowsImported, jobId} stub to carry the
+// full outcome envelope. The handler emits one of these once the upload
+// is fully consumed; per-row errors are accumulated under Errors (capped
+// to importMaxResponseErrors so a pathologically broken file does not
+// bloat the response body).
 type importResponse struct {
-	RowsImported int64  `json:"rowsImported"`
-	JobID        string `json:"jobId"`
+	// RowsImported counts successful INSERTs + UPDATEs (conflict=update
+	// path). Rows skipped via conflict=skip are NOT counted here — see
+	// Skipped.
+	RowsImported int64 `json:"rowsImported"`
+
+	// Skipped counts rows the handler ignored because of an
+	// onConflict=skip directive. Always 0 when onConflict != "skip".
+	Skipped int64 `json:"skipped"`
+
+	// Errors lists per-row decode / driver errors. Capped at
+	// importMaxResponseErrors. When the file produced more errors than
+	// the cap, TotalErrors holds the full count and Errors holds only
+	// the first N.
+	Errors      []importRowError `json:"errors,omitempty"`
+	TotalErrors int64            `json:"totalErrors"`
+
+	// Bytes is the size of the consumed upload (file part only).
+	Bytes int64 `json:"bytes"`
+
+	// Truncated is true when the import stopped because it hit
+	// importMaxRowsHardCap (more rows were available in the file).
+	Truncated bool `json:"truncated"`
+
+	// Format echoes the requested wire format.
+	Format string `json:"format"`
+
+	// JobID is the per-request correlation ID also surfaced via the
+	// X-Aura-Import-JobID response header. Pair this with the audit
+	// log to recover the full event timeline.
+	JobID string `json:"jobId"`
+}
+
+// importRowError reports one per-row failure. RowIndex is 1-based and
+// counts data rows only (CSV header line is not counted; for NDJSON
+// the first object is row 1).
+type importRowError struct {
+	RowIndex int64  `json:"rowIndex"`
+	Code     string `json:"code"`
+	Message  string `json:"message"`
 }
 
 type auditEventDTO struct {
