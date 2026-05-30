@@ -307,6 +307,7 @@
     .hero h1{font-size:26px}
     .hero-grid{gap:10px}
     .hero-card{padding:12px 14px;gap:8px}
+    .hero-card-server{display:none}
     :global(.hero-num){font-size:32px !important}
     :global(.hero-num small){display:none}
     .mix-row{grid-template-columns:60px 1fr 22px;gap:7px}
