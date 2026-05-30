@@ -166,8 +166,6 @@ input,select{font-family:inherit}
 .nav button{padding:8px 14px;border-radius:var(--radius-pill);color:var(--txt-2);font-weight:500;font-size:13.5px;transition:.1s;position:relative;cursor:pointer}
 .nav button:hover{color:var(--txt);background:var(--surface-1)}
 .nav button.active{color:var(--solid-fg);background:var(--solid-bg)}
-.instance-pill{display:flex;align-items:center;gap:8px;padding:6px 12px 6px 10px;border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--surface-1);font-size:12.5px;color:var(--txt-2)}
-.instance-pill .mono{color:var(--txt);font-size:12px}
 /* Update-available badge in the top bar — amber pill so it stands out
    without being alarming. Click upgrades in place (v0.2.15+). */
 .update-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border-radius:var(--radius-pill);background:var(--warn-soft);color:#8a5a05;font-size:12.5px;font-weight:600;cursor:pointer;border:1px solid color-mix(in srgb, var(--warn) 35%, transparent);transition:.1s}
@@ -179,6 +177,21 @@ input,select{font-family:inherit}
 .icon-btn{width:36px;height:36px;border-radius:var(--radius-pill);display:grid;place-items:center;border:1px solid var(--line);background:var(--surface-1);color:var(--txt-2);transition:.1s}
 .icon-btn:hover{color:var(--txt);border-color:var(--line-2);background:var(--surface-2)}
 .avatar{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;font-weight:700;font-size:13px;background:linear-gradient(135deg,var(--aura-strong),var(--info));color:#fff;box-shadow:0 0 0 2px var(--surface-0), var(--shadow)}
+
+/* Hamburger — hidden on desktop, shown ≤640px (see media block). Same chrome
+   as .icon-btn so it sits flush next to the theme toggle. */
+.hamburger{display:none;width:36px;height:36px;border-radius:var(--radius-pill);place-items:center;border:1px solid var(--line);background:var(--surface-1);color:var(--txt-2);transition:.1s;flex:none}
+.hamburger:hover{color:var(--txt);border-color:var(--line-2);background:var(--surface-2)}
+.mobile-scrim{position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.4);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);animation:auracp-fade-in .12s ease}
+.mobile-menu{position:fixed;z-index:81;top:84px;right:14px;left:14px;display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:16px;background:var(--surface-0);border:1px solid var(--line-2);box-shadow:var(--shadow-lg);animation:auracp-fade-in .14s ease}
+.mobile-menu .mm-item{display:flex;align-items:center;padding:12px 14px;border-radius:10px;font-size:15px;font-weight:500;color:var(--txt);text-align:left;background:none;border:none;cursor:pointer;transition:.1s}
+.mobile-menu .mm-item:hover{background:var(--surface-1)}
+.mobile-menu .mm-item.active{background:var(--solid-bg);color:var(--solid-fg);font-weight:600}
+.mobile-menu .mm-item.danger{color:var(--down)}
+.mobile-menu .mm-div{height:1px;background:var(--line);margin:6px 4px}
+.mobile-menu .mm-user{padding:6px 14px 8px}
+.mobile-menu .mm-user .menu-email{font-size:13px;color:var(--txt);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mobile-menu .mm-user .menu-role{font-size:11px;color:var(--txt-3);margin-top:1px}
 
 .wrap{max-width:1240px;margin:0 auto;padding:30px 26px 80px}
 
@@ -837,12 +850,10 @@ tr.site-row:hover td:last-child .manage{opacity:1}
   .fm-section .btn-ghost,.fm-section .btn-primary{padding:7px 10px !important}
   .fm-section .btn-ghost svg,.fm-section .btn-primary svg{margin-right:0 !important}
   .topbar{gap:12px;padding:0 14px}
-  .instance-pill{display:none}
-  /* icons-only on mobile: square, flex-centered circles so the active
-     pill is a clean round and the icon sits dead-centre (the inline SVG
-     vertical-align/margin from TopBar are overridden here). */
-  .nav button{font-size:0;padding:0;width:36px;height:36px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%;flex:none}
-  .nav button svg{margin:0 !important;width:18px !important;height:18px !important;vertical-align:middle}
+  /* Mobile: inline nav + avatar fold into the hamburger drawer. */
+  .nav{display:none}
+  .avatar-wrap{display:none}
+  .hamburger{display:grid}
   .topbar .brand{font-size:17px}
   .wrap{padding:18px 14px 56px}
   .ph{flex-direction:column;align-items:flex-start;gap:14px}

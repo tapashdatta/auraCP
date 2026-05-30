@@ -7,8 +7,8 @@
   import { confirmDialog } from '../dialog.svelte.js'
 
   let theme = $state(getTheme())
-  let menu = $state(false)
-  let host = $state('')
+  let menu = $state(false)        // desktop avatar dropdown
+  let mobileMenu = $state(false)  // mobile hamburger drawer
   let updateAvailable = $state(false)
   let updateLatest = $state('')
   let updateCurrent = $state('')
@@ -17,8 +17,10 @@
   function flip() { theme = toggleTheme() }
   const initials = $derived((session.user?.email || 'A')[0].toUpperCase())
   const isAdmin = $derived(session.user?.role === 'ROLE_ADMIN')
-  async function doLogout() { menu = false; await logout() }
-  function openAccount() { menu = false; go('account') }
+  async function doLogout() { menu = false; mobileMenu = false; await logout() }
+  function openAccount() { menu = false; mobileMenu = false; go('account') }
+  // Navigate + close whichever menu is open (used by both desktop + mobile).
+  function navTo(view) { mobileMenu = false; menu = false; go(view) }
 
   // One-click in-place upgrade. Same flow the Updates card on Instance uses,
   // but reachable from any screen — no detour through Settings.
@@ -44,8 +46,6 @@
   }
 
   onMount(async () => {
-    const r = await apiFetch('/api/instance')
-    if (r.ok) { const d = await r.json(); host = d.hostname || d.os || '' }
     // Cheap check (server caches 1h) so the badge appears on first paint.
     const u = await apiFetch('/api/instance/update')
     if (u.ok) {
@@ -62,17 +62,17 @@
     <span class="gem"></span>aura<span>CP</span>
   </button>
   <nav class="nav" aria-label="Primary">
-    <button type="button" class:active={ui.view === 'sites'}    onclick={() => go('sites')}>
+    <button type="button" class:active={ui.view === 'sites'}    onclick={() => navTo('sites')}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
       Sites
     </button>
     {#if isAdmin}
-      <button type="button" class:active={ui.view === 'users'}  onclick={() => go('users')}>
+      <button type="button" class:active={ui.view === 'users'}  onclick={() => navTo('users')}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Users
       </button>
     {/if}
-    <button type="button" class:active={ui.view === 'instance'} onclick={() => go('instance')}>
+    <button type="button" class:active={ui.view === 'instance'} onclick={() => navTo('instance')}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" style="width:14px;height:14px;vertical-align:-2px;margin-right:6px"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Settings
     </button>
@@ -86,7 +86,6 @@
       <span>{upgrading ? 'Upgrading…' : `Update ${updateLatest}`}</span>
     </button>
   {/if}
-  {#if host}<div class="instance-pill"><span class="sdot s-up"></span><span class="mono">{host}</span></div>{/if}
   <button class="icon-btn" onclick={flip} title="Toggle theme" aria-label="Toggle theme">
     {#if theme === 'dark'}
       <!-- Switch to light: sun with rounded rays -->
@@ -108,6 +107,7 @@
       </svg>
     {/if}
   </button>
+  <!-- Desktop: avatar dropdown. Hidden on mobile (folded into the hamburger). -->
   <div class="avatar-wrap">
     <button class="avatar" onclick={() => menu = !menu} aria-label="Account menu">{initials}{initials === 'I' ? 'L' : ''}</button>
     {#if menu}
@@ -121,4 +121,30 @@
       </div>
     {/if}
   </div>
+
+  <!-- Mobile: hamburger that opens a drawer with nav + profile. -->
+  <button class="hamburger" onclick={() => mobileMenu = !mobileMenu} aria-label="Menu" aria-expanded={mobileMenu}>
+    {#if mobileMenu}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    {:else}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+    {/if}
+  </button>
 </div>
+
+{#if mobileMenu}
+  <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
+  <div class="mobile-scrim" onclick={() => mobileMenu = false}></div>
+  <nav class="mobile-menu" aria-label="Primary mobile">
+    <button type="button" class="mm-item" class:active={ui.view === 'sites'} onclick={() => navTo('sites')}>Sites</button>
+    {#if isAdmin}<button type="button" class="mm-item" class:active={ui.view === 'users'} onclick={() => navTo('users')}>Users</button>{/if}
+    <button type="button" class="mm-item" class:active={ui.view === 'instance'} onclick={() => navTo('instance')}>Settings</button>
+    <div class="mm-div"></div>
+    <div class="mm-user">
+      <div class="menu-email">{session.user?.email}</div>
+      <div class="menu-role mono">{session.user?.role}</div>
+    </div>
+    <button type="button" class="mm-item" onclick={openAccount}>Account &amp; Security</button>
+    <button type="button" class="mm-item danger" onclick={doLogout}>Log out</button>
+  </nav>
+{/if}
