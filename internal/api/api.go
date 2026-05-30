@@ -390,6 +390,25 @@ func (s *Server) createSite(w http.ResponseWriter, r *http.Request) {
 	}
 	s.audit(r, "site.create", rec.Domain)
 
+	// Mirror the auto-provisioned WordPress database into Aura DB so it shows
+	// up as a connection (the manual Database tab does this via createDatabase;
+	// the WP flow provisions its DB directly through s.dbs.Create, so without
+	// this the WP database — and its tables — never appear in Aura DB).
+	// Best-effort: the site + DB exist regardless of enrollment.
+	if in.Type == "wordpress" && in.WPInstall && dbCreated && s.ensureConnHook != nil {
+		owner := ""
+		if u, ok := s.currentUser(r); ok {
+			owner = strconv.FormatInt(u.ID, 10)
+		}
+		if err := s.ensureConnHook(r.Context(), EnsureConnParams{
+			Engine: "mariadb", Database: in.WPDBName, Username: in.WPDBUser,
+			Password: in.WPDBPass, OwnerID: owner,
+		}); err != nil {
+			slog.Warn("aura-db connection enroll failed (wordpress)",
+				"domain", rec.Domain, "database", in.WPDBName, "err", err)
+		}
+	}
+
 	// v0.2.34: include the WP install summary on success so the panel can
 	// surface the admin credentials in a one-shot modal. Nothing else
 	// returns the password from the API; it's not stored in cleartext.
