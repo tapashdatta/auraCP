@@ -1,5 +1,5 @@
 <script>
-  import { go, ui } from '../lib/store.svelte.js'
+  import { go, ui, setDetailTab } from '../lib/store.svelte.js'
   import { detailTabs } from '../lib/data.js'
   import { apiFetch } from '../lib/api.js'
   import { brandIcons, tabIcons } from '../lib/icons.js'
@@ -7,7 +7,11 @@
   import { toast, toastSuccess, toastError } from '../lib/toast.svelte.js'
 
   const site = ui.site || { domain: '', user: '', app: '', node: null, root: '' }
-  let active = $state('settings')
+  // Restore the active tab from the hash (set by App.svelte on popstate /
+  // initial load via ui._tab). Clear it after reading so it doesn't persist
+  // across navigations if the user opens a different site.
+  let active = $state(ui._tab || 'settings')
+  ui._tab = null
 
   // live data per tab
   let dbs = $state([])
@@ -369,7 +373,11 @@
   async function getJSON(url, fallback) {
     try { const r = await apiFetch(url); return r.ok ? await r.json() : fallback } catch { return fallback }
   }
-  function setTab(t) { active = t; load(t) }
+  function setTab(t) {
+    active = t
+    load(t)
+    setDetailTab(site.domain, t)
+  }
   $effect(() => { load('settings') })
 
   async function addDb() {
@@ -989,9 +997,8 @@
                   class="toggle" class:on={isOn('force_https')}
                   onclick={() => toggleConfig('force_https')}></button>
         </div>
-        <div class="kv"><span class="k">HTTP/2</span><span class="v">enabled when cert is issued</span></div>
         <div class="field" style="margin-top:14px"><label>
-          <span class="label-text">Document root <span class="hint">Point at a subdirectory (e.g. <span class="mono">/home/{site.user}/htdocs/{site.domain}/public</span>) for Laravel / Statamic / Symfony</span> {#if savedFlash['docroot']}<span class="saved-flash">✓ Saved</span>{/if}</span>
+          <span class="label-text">Document root {#if savedFlash['docroot']}<span class="saved-flash">✓ Saved</span>{/if}</span>
           <input class="input" bind:value={docRoot} oninput={() => docRootDirty = true} onblur={saveDocRoot}>
         </label></div>
       </div></div>
