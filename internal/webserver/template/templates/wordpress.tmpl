@@ -20,7 +20,7 @@ server {
     ssl_prefer_server_ciphers off;
 
     location ^~ /.well-known/acme-challenge/ {
-        root /var/lib/auracp/acme/;
+        alias /var/lib/auracp/acme/;
         default_type "text/plain";
         try_files $uri =404;
     }

@@ -26,7 +26,7 @@ server {
     # ACME HTTP-01 challenge — always plaintext on :80, even after the
     # cert lands. Renewals need it.
     location ^~ /.well-known/acme-challenge/ {
-        root /var/lib/auracp/acme/;
+        alias /var/lib/auracp/acme/;
         default_type "text/plain";
         try_files $uri =404;
     }
