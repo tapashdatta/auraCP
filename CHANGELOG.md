@@ -2,6 +2,14 @@
 
 All notable changes to auraCP.
 
+## v0.3.10 — 2026-05-30
+
+Fix mobile nav hidden entirely (was display:none at ≤640px — now shows
+icon-only buttons with labels hidden via font-size:0). Remove the dead
+≤540px icon-only rule that was superseded by the wider breakpoint.
+Also remove the grey background and border from site-type card icons
+(site creation chooser) — icons now float directly on the card surface.
+
 ## v0.3.9 — 2026-05-30
 
 Update brand icons on the site-type chooser to official marks:

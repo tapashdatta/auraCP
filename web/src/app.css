@@ -296,7 +296,7 @@ td .mono{color:var(--txt-2);font-size:12.5px}
 .site-card:hover{transform:translateY(-3px);border-color:var(--line-2)}
 .site-card:hover::before{opacity:1}
 .site-card:hover .go{color:var(--aura-strong)}
-.site-card .ico{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:var(--surface-2);border:1px solid var(--line);margin-bottom:16px;font-size:20px;font-family:var(--fs-mono)}
+.site-card .ico{width:48px;height:48px;border-radius:12px;display:grid;place-items:center;background:none;border:none;margin-bottom:16px;font-size:20px;font-family:var(--fs-mono)}
 .site-card h3{font-family:var(--fs-display);font-weight:700;font-size:18px;letter-spacing:-.01em}
 .site-card p{color:var(--txt-3);font-size:12.5px;margin-top:6px;min-height:34px}
 .site-card .go{margin-top:14px;font-size:12.5px;font-weight:600;color:var(--txt-3);display:flex;align-items:center;gap:6px;transition:.1s}
@@ -428,11 +428,6 @@ td .mono{color:var(--txt-2);font-size:12.5px}
   .tab .tab-ic svg{width:18px;height:18px}
   /* Restore font size for the active tab so the user has *some* anchor; but
      only on slightly larger phones — sub-540 still icon-only. */
-}
-@media (max-width:540px){
-  .topbar .nav button{font-size:0;padding:7px 11px}
-  .topbar .nav button svg{margin-right:0 !important;width:16px;height:16px}
-  .topbar .brand{font-size:15px}
 }
 /* v0.2.21: brand-icon containers for sites. The .brand modifier swaps the
    default centered-glyph background for a sized SVG that fills the box. */
@@ -818,7 +813,9 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 }
 @media (max-width: 640px){
   .topbar{gap:12px;padding:0 14px}
-  .nav,.instance-pill{display:none}          /* brand click + avatar menu cover nav on phones */
+  .instance-pill{display:none}
+  .nav button{font-size:0;padding:7px 10px}  /* icons-only on mobile */
+  .nav button svg{margin-right:0 !important;width:16px;height:16px}
   .topbar .brand{font-size:17px}
   .wrap{padding:18px 14px 56px}
   .ph{flex-direction:column;align-items:flex-start;gap:14px}
