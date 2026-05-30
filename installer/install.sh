@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.14"
+AURACP_VERSION="0.3.15"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -217,6 +217,21 @@ parse_args() {
   return 0
 }
 
+# mongodb_supported — returns 0 (true) only on officially supported combinations.
+# Source: https://www.mongodb.com/docs/v8.0/administration/production-notes/#std-label-prod-notes-supported-platforms
+#   Debian  12 (bookworm) — amd64 only
+#   Ubuntu 22.04 (jammy)  — amd64 + arm64
+#   Ubuntu 24.04 (noble)  — amd64 + arm64
+# NOT supported: Debian 13 (trixie) on any arch; Debian on arm64 (any version).
+mongodb_supported() {
+  case "${OS_ID:-}:${OS_CODENAME:-}:${ARCH:-}" in
+    debian:bookworm:amd64) return 0 ;;
+    ubuntu:jammy:amd64|ubuntu:jammy:arm64) return 0 ;;
+    ubuntu:noble:amd64|ubuntu:noble:arm64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # ──────────────────────────────────────────────────────────────────────────
 # upstream-repo probes
 # ──────────────────────────────────────────────────────────────────────────
@@ -375,6 +390,11 @@ tui_components() {
   case "$chosen" in *MARIADB*) OPT_MARIADB=yes;; esac
   case "$chosen" in *POSTGRES*) OPT_POSTGRES=yes;; esac
   case "$chosen" in *MONGODB*) OPT_MONGODB=yes;; esac
+  if yesno "$OPT_MONGODB" && ! mongodb_supported; then
+    whiptail --title "MongoDB unavailable" --msgbox \
+      "MongoDB 8.0 does not publish server packages for ${OS_ID} ${OS_CODENAME} ${ARCH}.\n\nSupported combinations:\n  Debian 12 (bookworm) — amd64 only\n  Ubuntu 22.04 (jammy)  — amd64 + arm64\n  Ubuntu 24.04 (noble)  — amd64 + arm64\n\nMongoDB will be skipped." 14 64 < /dev/tty || true
+    OPT_MONGODB=no
+  fi
   case "$chosen" in *NODE*) OPT_NODE=yes;; esac
   case "$chosen" in *PHP*) OPT_PHP=yes;; esac
   case "$chosen" in *PYTHON*) OPT_PYTHON=yes;; esac
@@ -554,7 +574,12 @@ select_readline() {
   fi
   OPT_PYTHON=$(ask "Install Python 3?" "$OPT_PYTHON")
   OPT_REDIS=$(ask "Install Redis?" "$OPT_REDIS")
-  OPT_MONGODB=$(ask "Install MongoDB ${MONGODB_VERSION}?" "$OPT_MONGODB")
+  if mongodb_supported; then
+    OPT_MONGODB=$(ask "Install MongoDB ${MONGODB_VERSION}?" "$OPT_MONGODB")
+  else
+    OPT_MONGODB=no
+    warn "MongoDB: no server packages for ${OS_ID} ${OS_CODENAME} ${ARCH} — skipping (supported: Debian 12 amd64, Ubuntu 22.04/24.04 amd64+arm64)"
+  fi
   OPT_TYPESENSE=$(ask "Install Typesense search server?" "$OPT_TYPESENSE")
   OPT_DOCKER=$(ask "Install Docker engine?" "$OPT_DOCKER")
   OPT_SECURITY=$(ask "Enable security hardening (UFW + fail2ban)?" "$OPT_SECURITY")
@@ -609,7 +634,13 @@ build_plan() {
         typesense_l docker_l security_l panel_l
   yesno "$OPT_MARIADB"   && mariadb_l="install  (${MARIADB_VERSION})"   || mariadb_l="skip"
   yesno "$OPT_POSTGRES"  && postgres_l="install  (${POSTGRES_VERSION})"  || postgres_l="skip"
-  yesno "$OPT_MONGODB"   && mongodb_l="install  (${MONGODB_VERSION})"    || mongodb_l="skip"
+  if ! mongodb_supported; then
+    mongodb_l="unavailable (${OS_ID} ${OS_CODENAME} ${ARCH})"
+  elif yesno "$OPT_MONGODB"; then
+    mongodb_l="install  (${MONGODB_VERSION})"
+  else
+    mongodb_l="skip"
+  fi
   yesno "$OPT_NODE"      && node_l="install  (${NODE_MAJOR})"            || node_l="skip"
   yesno "$OPT_PHP"       && php_l="install  (${PHP_VERSIONS})"           || php_l="skip"
   yesno "$OPT_PYTHON"    && python_l="install"  || python_l="skip"
@@ -1010,39 +1041,27 @@ install_redis() {
 }
 
 install_mongodb() {
+  # Guard: only run on officially supported platform+arch combos.
+  # Supported per https://www.mongodb.com/docs/v8.0/administration/production-notes/
+  #   Debian 12 (bookworm) amd64 | Ubuntu 22.04 (jammy) amd64+arm64 | Ubuntu 24.04 (noble) amd64+arm64
+  if ! mongodb_supported; then
+    warn "MongoDB skipped — not supported on ${OS_ID} ${OS_CODENAME} ${ARCH}"
+    return 0
+  fi
   msg "Installing MongoDB ${MONGODB_VERSION} (repo.mongodb.org)…"
   run "install -d -m 0755 /usr/share/keyrings"
   run "curl -fsSL 'https://www.mongodb.org/static/pgp/server-${MONGODB_VERSION}.asc' | gpg --dearmor -o /usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg"
-  # mongodb.org publishes per-distro, per-codename repos. Debian 13 (trixie) doesn't have
-  # official packages yet — the bookworm repo is binary-compatible and works fine.
-  local repo_os repo_cn repo_comp
+  local repo_os repo_comp
   if [ "${OS_ID:-}" = "ubuntu" ]; then
-    repo_os="ubuntu"; repo_cn="${OS_CODENAME}"; repo_comp="multiverse"
+    repo_os="ubuntu"; repo_comp="multiverse"
   else
     repo_os="debian"; repo_comp="main"
-    case "${OS_CODENAME:-}" in
-      trixie) repo_cn="bookworm" ;;   # no trixie packages yet — bookworm is compat
-      *)      repo_cn="${OS_CODENAME}" ;;
-    esac
   fi
-  # Pin to the system's native arch only. Specifying arch=amd64,arm64 causes apt
-  # to fetch package indices for both architectures; on AWS arm64 hosts Debian 13
-  # often has foreign-arch amd64 registered, which makes apt try (and fail) to
-  # resolve amd64 packages whose deps (libcurl4, etc.) were removed in trixie.
-  echo "deb [ arch=${ARCH} signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${repo_cn}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
+  echo "deb [ arch=${ARCH} signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${OS_CODENAME}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
     | run "tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list >/dev/null"
   wait_apt_lock
   run "apt-get update -y"
-  # The mongodb-org meta-package depends on mongodb-mongosh, which MongoDB does not
-  # consistently publish for arm64 in Debian repos. When it's absent the meta-package
-  # is also absent from the index. Fall back to the individual server + router packages,
-  # which are always present and are all Aura DB needs to connect to MongoDB.
-  if [ "$DRY_RUN" -eq 1 ] || apt-cache show mongodb-org >/dev/null 2>&1; then
-    run "apt-get install -y mongodb-org"
-  else
-    warn "mongodb-org meta-package not in index for ${ARCH}/${repo_cn} — installing server packages"
-    run "apt-get install -y mongodb-org-server mongodb-org-mongos mongodb-org-database-tools-extra"
-  fi
+  run "apt-get install -y mongodb-org"
   run "systemctl enable --now mongod"
   ok "MongoDB ${MONGODB_VERSION} ready (mongod listening on 127.0.0.1:27017)."
 }
