@@ -25,11 +25,17 @@
 // Non-goals for the v0.3.x line:
 //   - JWT-encoded sessions. Sessions are server-side rows; revocation
 //     is a SQL DELETE.
-//   - WebAuthn / passkeys. Stubbed via config toggle but unimplemented
-//     in PR #9; deferred to a later PR with the upstream go-webauthn lib.
 //   - Per-database DEKs / two-tier KEK→DEK encryption. KEK seals
 //     records directly; DEK split is reserved for v0.4 when per-tenant
 //     encryption-at-rest separation is requested.
+//
+// WebAuthn / FIDO2 step-up (v0.3.2-D) is supported via
+// github.com/go-webauthn/webauthn. Enable by setting
+// auth.mfa.webauthn_enabled=true plus auth.mfa.webauthn.{rp_id,
+// rp_origins, rp_display_name}; the schema gains webauthn_credentials
+// and webauthn_challenges tables in migration v4. See
+// mfa_webauthn.go for the library glue and auth_webauthn.go for the
+// step-up branch wired into Auth.VerifyStepUp / Auth.Login.
 //
 // Documented design decisions (with rationales):
 //
@@ -53,8 +59,11 @@
 //  5. No JWT for sessions. Server-side state in the sessions table;
 //     revocation is "DELETE FROM sessions WHERE token_hash = ?".
 //
-//  6. TOTP first; WebAuthn deferred. VerifyStepUp accepts a
-//     discriminator in the JSON body ("totp" or "recovery_code"); a
-//     future "webauthn" path slots in without changing the wire
-//     contract.
+//  6. Multi-factor: TOTP, recovery codes, and WebAuthn. VerifyStepUp
+//     accepts a discriminator in the JSON body ("totp", "recovery_code",
+//     or "webauthn"); the engine wire contract stays stable across
+//     factors. WebAuthn (added in v0.3.2-D) registers credentials at
+//     /webauthn/register/* and verifies assertions either inline in
+//     the /step-up/verify body (factor = webauthn) or via a dedicated
+//     /webauthn/login/* ceremony for password-less login.
 package standalone

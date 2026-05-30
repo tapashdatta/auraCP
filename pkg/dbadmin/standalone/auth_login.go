@@ -23,8 +23,18 @@ type LoginRequest struct {
 	Username string
 	Password string
 	TOTPCode string // optional; required when user.MFARequired
-	IPClass  string
-	UAHash   string
+
+	// WebAuthnChallengeID + WebAuthnAssertion drive the WebAuthn /
+	// FIDO2 login factor (v0.3.2-D). When set, Login uses them in
+	// place of TOTPCode and Auth.cfg.WebAuthnEnabled must be true.
+	// The assertion bytes are the raw browser JSON
+	// (navigator.credentials.get → { id, rawId, response, ... })
+	// passed straight to protocol.ParseCredentialRequestResponseBody.
+	WebAuthnChallengeID string
+	WebAuthnAssertion   []byte
+
+	IPClass string
+	UAHash  string
 }
 
 // LoginResult is returned on success.
@@ -81,41 +91,59 @@ func (a *Auth) Login(ctx context.Context, req LoginRequest) (*LoginResult, error
 	// MFA gate.
 	var matchedTOTPStep int64
 	if user.MFARequired {
-		if req.TOTPCode == "" {
-			// SEC-03: password was correct but TOTP missing. Don't
-			// hand attackers an unbounded password-correctness oracle —
-			// count the attempt against the per-user lockout. We skip
-			// the IP-scope bump so a real user mid-flow isn't punished.
-			a.recordUserScopeFailure(ctx, req)
-			return nil, ErrMFARequired
-		}
-		if len(user.MFASecretEnc) == 0 {
-			// User flagged required but no secret enrolled — admin error.
-			a.recordUserScopeFailure(ctx, req)
-			return nil, ErrMFARequired
-		}
-		secret, derr := open(a.kek.Bytes(), user.MFASecretEnc, mfaAAD(user.ID))
-		if derr != nil {
-			return nil, derr
-		}
-		step, terr := VerifyTOTP(secret, req.TOTPCode, now)
-		if terr != nil {
+		switch {
+		case a.cfg.WebAuthnEnabled && len(req.WebAuthnAssertion) > 0:
+			// v0.3.2-D: WebAuthn login. We pass matchedTOTPStep=0 to
+			// the session creator so the TOTP replay watermark
+			// (SEC-02) is not advanced — the WebAuthn factor uses its
+			// own per-credential sign_count counter, which the
+			// verifyWebAuthnAssertion helper advanced via
+			// Store.UpdateWebAuthnSignCount.
+			assert := &webAuthnAssert{
+				ChallengeID: req.WebAuthnChallengeID,
+				Assertion:   req.WebAuthnAssertion,
+			}
+			if verr := a.verifyWebAuthnAssertion(ctx, user, assert); verr != nil {
+				a.recordLoginFailure(ctx, req)
+				return nil, ErrInvalidCredentials
+			}
+		case req.TOTPCode != "":
+			if len(user.MFASecretEnc) == 0 {
+				// User flagged required but no secret enrolled — admin error.
+				a.recordUserScopeFailure(ctx, req)
+				return nil, ErrMFARequired
+			}
+			secret, derr := open(a.kek.Bytes(), user.MFASecretEnc, mfaAAD(user.ID))
+			if derr != nil {
+				return nil, derr
+			}
+			step, terr := VerifyTOTP(secret, req.TOTPCode, now)
+			if terr != nil {
+				for i := range secret {
+					secret[i] = 0
+				}
+				a.recordLoginFailure(ctx, req)
+				return nil, ErrInvalidCredentials
+			}
 			for i := range secret {
 				secret[i] = 0
 			}
-			a.recordLoginFailure(ctx, req)
-			return nil, ErrInvalidCredentials
+			// SEC-02 replay window: a code that matches at step N is only
+			// valid if N is strictly greater than the last accepted step.
+			if step <= user.LastTOTPStep {
+				a.recordLoginFailure(ctx, req)
+				return nil, ErrInvalidCredentials
+			}
+			matchedTOTPStep = step
+		default:
+			// SEC-03: password was correct but no second factor
+			// supplied. Don't hand attackers an unbounded
+			// password-correctness oracle — count the attempt against
+			// the per-user lockout. We skip the IP-scope bump so a
+			// real user mid-flow isn't punished.
+			a.recordUserScopeFailure(ctx, req)
+			return nil, ErrMFARequired
 		}
-		for i := range secret {
-			secret[i] = 0
-		}
-		// SEC-02 replay window: a code that matches at step N is only
-		// valid if N is strictly greater than the last accepted step.
-		if step <= user.LastTOTPStep {
-			a.recordLoginFailure(ctx, req)
-			return nil, ErrInvalidCredentials
-		}
-		matchedTOTPStep = step
 	}
 
 	if needsRehash {

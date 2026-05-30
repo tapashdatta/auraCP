@@ -142,6 +142,49 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_table_grants_user_conn ON table_grants(user_id, connection_id);
 		`,
 	},
+	{
+		Version: 4,
+		// v0.3.2-D: WebAuthn / FIDO2 step-up. Two append-only tables:
+		//
+		//   webauthn_credentials — one row per registered authenticator.
+		//   The credential public key (and AAGUID / transports) is NOT
+		//   sensitive so no KEK seal is applied. sign_count is the
+		//   WebAuthn replay counter — a non-monotonic update is rejected
+		//   in UpdateWebAuthnSignCount via "WHERE sign_count < ?", which
+		//   mirrors SEC-02-style replay defense for TOTP.
+		//
+		//   webauthn_challenges — short-lived per-ceremony state. Rows
+		//   are written by /webauthn/{register,login}/begin and consumed
+		//   exactly once by /finish. Expired rows are wiped on every
+		//   Begin* call and on session revocation cascade. kind is
+		//   "register" or "assert".
+		SQL: `
+		CREATE TABLE IF NOT EXISTS webauthn_credentials (
+			user_id        TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			credential_id  BLOB NOT NULL,
+			public_key     BLOB NOT NULL,
+			sign_count     INTEGER NOT NULL DEFAULT 0,
+			aaguid         BLOB,
+			transports     TEXT NOT NULL DEFAULT '',
+			name           TEXT NOT NULL DEFAULT '',
+			attestation    BLOB,
+			created_at     INTEGER NOT NULL,
+			last_used_at   INTEGER,
+			PRIMARY KEY (user_id, credential_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_webauthn_user ON webauthn_credentials(user_id);
+
+		CREATE TABLE IF NOT EXISTS webauthn_challenges (
+			challenge_id   TEXT PRIMARY KEY,
+			user_id        TEXT REFERENCES users(id) ON DELETE CASCADE,
+			session_blob   BLOB NOT NULL,
+			kind           TEXT NOT NULL,
+			created_at     INTEGER NOT NULL,
+			expires_at     INTEGER NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_webauthn_chal_expires ON webauthn_challenges(expires_at);
+		`,
+	},
 }
 
 // migrate brings the database up to the latest schema version.

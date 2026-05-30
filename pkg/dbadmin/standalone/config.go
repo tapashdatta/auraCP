@@ -91,10 +91,31 @@ type Argon2Config struct {
 
 // MFAConfig captures multi-factor policy.
 type MFAConfig struct {
-	RequiredFor      []string `yaml:"required_for"`
-	TOTPEnabled      bool     `yaml:"totp_enabled"`
-	WebAuthnEnabled  bool     `yaml:"webauthn_enabled"`
-	RecoveryCodes    int      `yaml:"recovery_codes"`
+	RequiredFor      []string         `yaml:"required_for"`
+	TOTPEnabled      bool             `yaml:"totp_enabled"`
+	WebAuthnEnabled  bool             `yaml:"webauthn_enabled"`
+	WebAuthn         WebAuthnConfig   `yaml:"webauthn"`
+	RecoveryCodes    int              `yaml:"recovery_codes"`
+}
+
+// WebAuthnConfig captures the Relying Party identity that the
+// go-webauthn library needs at every Begin* / Validate* call.
+//
+// RPID must be the effective domain of the panel (i.e. "panel.example.com"
+// — not a URL, no scheme/port). RPOrigins is the list of fully qualified
+// origins ("https://panel.example.com") the browser is permitted to use
+// when generating credentials; an empty list defaults to a single
+// origin derived from RPID. RPDisplayName is the human-readable name
+// the browser surfaces in the security key prompt; defaults to
+// "aura-db" when empty.
+//
+// When MFA.WebAuthnEnabled is false, every field here is ignored;
+// the registration / assertion endpoints return 404 and the step-up
+// branch is dormant.
+type WebAuthnConfig struct {
+	RPID          string   `yaml:"rp_id"`
+	RPDisplayName string   `yaml:"rp_display_name"`
+	RPOrigins     []string `yaml:"rp_origins"`
 }
 
 // RateLimitConfig extends dbadmin.RateLimitConfig with the lockout
@@ -513,6 +534,8 @@ func (c *Config) AuthRuntime() AuthRuntimeConfig {
 		LoginPerUser15m: c.RateLimits.LoginPerUser15m,
 		Escalation:      c.LockoutEscalation(),
 		StepUpTTL:       DefaultStepUpTTL(),
+		WebAuthnEnabled: c.Auth.MFA.WebAuthnEnabled,
+		WebAuthn:        c.Auth.MFA.WebAuthn,
 	}
 }
 
