@@ -148,9 +148,11 @@
         notice = 'Could not load the vhost. Save anything in Settings to trigger a reload, or check `journalctl -u auracpd`.'
       }
     }
-    else if (tab === 'cache' || tab === 'ssl' || tab === 'security') config = await getJSON(`${base}/config`, {})
+    else if (tab === 'security') config = await getJSON(`${base}/config`, {})
     else if (tab === 'sshftp') sshUsers = await getJSON(`${base}/ssh-users`, [])
-    if (tab === 'ssl') sslStatus = await getJSON(`${base}/ssl`, null)
+    // SSL/TLS is now part of the Security tab; load('ssl') is still called
+    // internally by renewCert/recheckSSL to refresh just the cert status.
+    if (tab === 'ssl' || tab === 'security') sslStatus = await getJSON(`${base}/ssl`, null)
   }
 
   async function saveVhost() {
@@ -951,8 +953,8 @@
     <div class="fade">
       <div class="section"><div class="section-h"><div><h3>General</h3><p>Runtime, HTTPS, and docroot for this site</p></div></div><div class="section-b" style="padding-top:4px">
         <!-- v0.2.57: Domain row removed — already shown in the h1 + site
-             header at the top of the page. Duplication was operator-flagged. -->
-        <div class="kv"><span class="k">Application</span><span class="v">{site.app}</span></div>
+             header at the top of the page. v0.3.28: Application row removed
+             too (the app type is shown in the site header badge). -->
         <div class="kv">
           <span class="k">Force HTTPS redirect</span>
           <button type="button" role="switch" aria-checked={isOn('force_https')}
@@ -968,6 +970,12 @@
             <button type="button" class="btn btn-ghost" onclick={saveDocRoot} disabled={!docRootDirty || busy}>Save</button>
           </div>
         </label></div>
+      </div></div>
+
+      <!-- v0.3.28: Cache moved here from its own tab. -->
+      <div class="section"><div class="section-h"><div><h3>Cache</h3><p>nginx fastcgi_cache / proxy_cache (per-site, opt-in)</p></div></div><div class="section-b" style="padding-top:4px">
+        <div class="kv"><span class="k">Full-page cache</span><span class="kv-right">{#if savedFlash['cache']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cache')} aria-label="Toggle full-page cache" class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></button></span></div>
+        <div class="kv"><span class="k">Default TTL</span><span class="v">{config.cache_ttl || '600s'}</span></div>
       </div></div>
       {#if site.type === 'nodejs'}
         <div class="section"><div class="section-h"><div><h3>Node.js runtime</h3>
@@ -1229,13 +1237,30 @@
       </div>
     </div>
 
-  {:else if active === 'cache'}
-    <div class="section fade"><div class="section-h"><div><h3>Cache</h3><p>nginx fastcgi_cache / proxy_cache (per-site, opt-in)</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Full-page cache</span><span class="kv-right">{#if savedFlash['cache']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('cache')} aria-label="Toggle full-page cache" class="toggle" class:on={isOn('cache')} onclick={() => toggleConfig('cache')}></button></span></div>
-      <div class="kv"><span class="k">Default TTL</span><span class="v">{config.cache_ttl || '600s'}</span></div>
+  {:else if active === 'security'}
+    <!-- v0.3.28: Security tab merges access controls + SSL/TLS (was 2 tabs). -->
+    <div class="section fade"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
+      <div class="kv"><span class="k">Basic authentication</span><span class="kv-right">{#if savedFlash['basic_auth']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></span></div>
+      {#if isOn('basic_auth')}
+        <div class="two" style="margin-top:8px">
+          <div class="field"><label>
+            <span class="label-text">Username</span>
+            <input class="input" bind:value={basicAuth.user}>
+          </label></div>
+          <div class="field"><label>
+            <span class="label-text">Password</span>
+            <input class="input" type="password" bind:value={basicAuth.password}>
+          </label></div>
+        </div>
+        <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
+      {/if}
+      <div class="kv"><span class="k">Block bad bots</span><span class="kv-right">{#if savedFlash['block_bots']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></span></div>
+      <div class="hint" style="margin-left:0">
+        Blocks the SEO scraper set by User-Agent: <span class="mono">AhrefsBot</span>, <span class="mono">SemrushBot</span>, <span class="mono">MJ12bot</span>, <span class="mono">DotBot</span>, <span class="mono">PetalBot</span>.
+        Returns <span class="mono">403</span> at the nginx layer — no PHP / app workload spent on them.
+      </div>
     </div></div>
 
-  {:else if active === 'ssl'}
     <!-- v0.2.42: SSL/TLS — HTTP-01 is the default and only path unless
          the operator explicitly opts in to Cloudflare DNS-01. No automatic
          fallback. New: pre-flight reachability probe answers "would
@@ -1325,29 +1350,6 @@
           {/if}
         {/if}
       </div></div>
-
-  {:else if active === 'security'}
-    <div class="section fade"><div class="section-h"><div><h3>Security</h3><p>Access controls</p></div></div><div class="section-b" style="padding-top:4px">
-      <div class="kv"><span class="k">Basic authentication</span><span class="kv-right">{#if savedFlash['basic_auth']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('basic_auth')} aria-label="Toggle basic authentication" class="toggle" class:on={isOn('basic_auth')} onclick={() => toggleConfig('basic_auth')}></button></span></div>
-      {#if isOn('basic_auth')}
-        <div class="two" style="margin-top:8px">
-          <div class="field"><label>
-            <span class="label-text">Username</span>
-            <input class="input" bind:value={basicAuth.user}>
-          </label></div>
-          <div class="field"><label>
-            <span class="label-text">Password</span>
-            <input class="input" type="password" bind:value={basicAuth.password}>
-          </label></div>
-        </div>
-        <button class="btn btn-ghost" onclick={saveBasicAuth} disabled={busy || !basicAuth.user || !basicAuth.password}>Set credentials</button>
-      {/if}
-      <div class="kv"><span class="k">Block bad bots</span><span class="kv-right">{#if savedFlash['block_bots']}<span class="saved-flash">✓ Saved</span>{/if}<button type="button" role="switch" aria-checked={isOn('block_bots')} aria-label="Toggle bot blocking" class="toggle" class:on={isOn('block_bots')} onclick={() => toggleConfig('block_bots')}></button></span></div>
-      <div class="hint" style="margin-left:0">
-        Blocks the SEO scraper set by User-Agent: <span class="mono">AhrefsBot</span>, <span class="mono">SemrushBot</span>, <span class="mono">MJ12bot</span>, <span class="mono">DotBot</span>, <span class="mono">PetalBot</span>.
-        Returns <span class="mono">403</span> at the nginx layer — no PHP / app workload spent on them.
-      </div>
-    </div></div>
 
   {:else if active === 'sshftp'}
     <div class="section fade"><div class="section-h"><div><h3>SSH / FTP Users</h3><p>Chroot-jailed to the site home — extra accounts get their own credentials</p></div></div>

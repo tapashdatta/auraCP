@@ -619,6 +619,7 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 /* v0.2.23: Danger Zone on a site's Settings tab. Red top border + slight tint
    so destructive actions feel distinct from the rest of the page. */
 .danger-zone{border-top:2px solid color-mix(in srgb, var(--down) 60%, transparent);margin-top:18px}
+.danger-zone .section-h{padding-top:0}
 .danger-zone h3{color:var(--down)}
 .danger-row{display:flex;align-items:center;gap:18px;justify-content:space-between;flex-wrap:wrap}
 .danger-row > div{flex:1;min-width:280px}

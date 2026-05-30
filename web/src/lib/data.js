@@ -25,8 +25,6 @@ export const detailTabs = [
   { id:'settings', label:'Settings' },
   { id:'vhost', label:'Vhost' },
   { id:'databases', label:'DB' },
-  { id:'cache', label:'Cache' },
-  { id:'ssl', label:'SSL' },
   { id:'security', label:'Security' },
   { id:'sshftp', label:'SSH/FTP' },
   { id:'files', label:'File Manager' },
