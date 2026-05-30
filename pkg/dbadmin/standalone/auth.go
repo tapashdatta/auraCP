@@ -263,6 +263,63 @@ func (a *Auth) HasPermission(u dbadmin.User, connID dbadmin.ConnectionID, action
 	return have >= min, nil
 }
 
+// HasTablePermission implements dbadmin.Auth. See the interface comment
+// for the contract. v0.3.2-B: connection-level role is the precondition;
+// when at least one row exists in table_grants for (user, connection),
+// every touched table must have a grant ≥ action.MinRole or the
+// statement is denied. Empty Schema on a Target matches any row for
+// that table name (single-database engines often leave Schema blank).
+func (a *Auth) HasTablePermission(u dbadmin.User, connID dbadmin.ConnectionID, action dbadmin.Action, tables []dbadmin.Target) (bool, error) {
+	// Always run the connection-level check first. Bypassing it would
+	// leak existence (knowing a table exists implies knowing the
+	// connection exists).
+	ok, err := a.HasPermission(u, connID, action)
+	if err != nil || !ok {
+		return ok, err
+	}
+	if len(tables) == 0 || connID == "" || u.ID == "" {
+		return ok, nil
+	}
+	min := action.MinRole()
+	if min == dbadmin.RoleNone {
+		return false, nil
+	}
+	// Additive policy: only consult table_grants when at least one row
+	// exists for (user, conn). Hosts that never call GrantTable see
+	// pure connection-level authorization.
+	var any int
+	if err := a.store.DB.QueryRowContext(context.Background(),
+		`SELECT 1 FROM table_grants WHERE user_id = ? AND connection_id = ? LIMIT 1`,
+		u.ID, string(connID)).Scan(&any); err != nil {
+		// sql.ErrNoRows → no table grants for this (user, conn);
+		// connection-level grant alone authorizes.
+		return true, nil
+	}
+	for _, t := range tables {
+		if t.Object == "" {
+			continue
+		}
+		var role int
+		row := a.store.DB.QueryRowContext(context.Background(),
+			`SELECT role FROM table_grants
+			 WHERE user_id = ? AND connection_id = ? AND table_name = ?
+			   AND (schema_name = ? OR schema_name = '')
+			 ORDER BY CASE WHEN schema_name = ? THEN 0 ELSE 1 END
+			 LIMIT 1`,
+			u.ID, string(connID), t.Object, t.Schema, t.Schema)
+		if err := row.Scan(&role); err != nil {
+			// No grant for this table → fail closed (the user has
+			// opted into the table-grants matrix and this table is
+			// not in it).
+			return false, nil
+		}
+		if dbadmin.Role(role) < min {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 // StepUpRequired implements dbadmin.Auth.
 func (a *Auth) StepUpRequired(action dbadmin.Action) bool {
 	return action.RequiresStepUp()

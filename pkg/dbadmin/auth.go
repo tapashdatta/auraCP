@@ -69,6 +69,36 @@ type Auth interface {
 	// denial. Errors are reserved for I/O failures.
 	HasPermission(User, ConnectionID, Action) (bool, error)
 
+	// HasTablePermission refines HasPermission with per-table grants
+	// (PR #2.5 / v0.3.2-B). Behavior:
+	//
+	//   - The connection-level check is a precondition: this method
+	//     MUST first verify the user holds at least Action.MinRole on
+	//     the connection (i.e., HasPermission would have returned true).
+	//     A table grant NEVER bypasses the connection-level grant —
+	//     knowing a table exists implies knowing the connection exists.
+	//
+	//   - When tables is empty/nil (no parsed targets, fallback parse,
+	//     or non-SQL action), implementations MUST behave identically
+	//     to HasPermission. Hosts that want stricter "refuse on
+	//     unknown targets" behavior can intercept at the engine layer.
+	//
+	//   - When tables is non-empty, implementations apply the
+	//     additive-grant policy: if the user has at least one table
+	//     grant on (connectionID, *, *) the touched tables MUST each
+	//     resolve to a row whose role meets Action.MinRole. If no
+	//     table grants exist for (user, connection) the
+	//     connection-level role alone authorizes the action — the
+	//     table-grants matrix is opt-in per (user, connection).
+	//
+	//   - Multi-statement queries (the engine passes the union of
+	//     touched tables) fail closed: deny if ANY touched table
+	//     denies the action.
+	//
+	// Return false for denial; reserve errors for I/O failures
+	// (matches HasPermission contract).
+	HasTablePermission(u User, conn ConnectionID, action Action, tables []Target) (bool, error)
+
 	// StepUpRequired reports whether the action requires fresh MFA
 	// verification beyond the standing session.
 	//

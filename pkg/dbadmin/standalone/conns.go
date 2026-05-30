@@ -457,6 +457,122 @@ func (c *Connections) ListGrants(ctx context.Context, connID dbadmin.ConnectionI
 	return out, rows.Err()
 }
 
+// TableGrantRow is the public shape returned by ListTableGrants.
+// Aliased to dbadmin.TableGrant so the engine's TableGrantStore
+// interface can speak a single shape across backends.
+type TableGrantRow = dbadmin.TableGrant
+
+// GrantTable upserts a per-table role grant. role == RoleNone delegates
+// to RevokeTable. v0.3.2-B.
+//
+// Precondition: the user must already hold a connection-level grant on
+// connID — table grants refine connection grants and never bypass them.
+// We do not enforce that here (the engine route does); the row is
+// written regardless so admins can pre-stage grants in any order.
+func (c *Connections) GrantTable(ctx context.Context, granter, userID string, connID dbadmin.ConnectionID, schema, table string, role dbadmin.Role) error {
+	if table == "" {
+		return fmt.Errorf("%w: table name required", dbadmin.ErrInvalidInput)
+	}
+	if role == dbadmin.RoleNone {
+		return c.RevokeTable(ctx, granter, userID, connID, schema, table)
+	}
+	now := c.clock().UnixNano()
+	tx, err := c.store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("standalone: grant-table: begin: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback()
+		}
+	}()
+	var one int
+	if err = tx.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = ?`, userID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = dbadmin.ErrNotFound
+			return err
+		}
+		return fmt.Errorf("standalone: grant-table: lookup user: %w", err)
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT 1 FROM connections WHERE id = ?`, string(connID)).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			err = dbadmin.ErrNotFound
+			return err
+		}
+		return fmt.Errorf("standalone: grant-table: lookup connection: %w", err)
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO table_grants (user_id, connection_id, schema_name, table_name, role, granted_by, granted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, connection_id, schema_name, table_name) DO UPDATE SET
+			role = excluded.role,
+			granted_by = excluded.granted_by,
+			granted_at = excluded.granted_at`,
+		userID, string(connID), schema, table, int(role), granter, now); err != nil {
+		return fmt.Errorf("standalone: grant-table: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("standalone: grant-table: commit: %w", err)
+	}
+	return nil
+}
+
+// RevokeTable deletes a single (user, conn, schema, table) row. Returns
+// ErrNotFound if no matching row exists. v0.3.2-B.
+func (c *Connections) RevokeTable(ctx context.Context, _ string, userID string, connID dbadmin.ConnectionID, schema, table string) error {
+	res, err := c.store.DB.ExecContext(ctx, `
+		DELETE FROM table_grants
+		WHERE user_id = ? AND connection_id = ? AND schema_name = ? AND table_name = ?`,
+		userID, string(connID), schema, table)
+	if err != nil {
+		return fmt.Errorf("standalone: revoke-table: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return dbadmin.ErrNotFound
+	}
+	return nil
+}
+
+// ListTableGrants enumerates per-table grants on a connection. Optional
+// userID filter; pass "" for all users. v0.3.2-B.
+func (c *Connections) ListTableGrants(ctx context.Context, connID dbadmin.ConnectionID, userID string) ([]TableGrantRow, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if userID == "" {
+		rows, err = c.store.DB.QueryContext(ctx, `
+			SELECT user_id, connection_id, schema_name, table_name, role, granted_by, granted_at
+			FROM table_grants WHERE connection_id = ?`, string(connID))
+	} else {
+		rows, err = c.store.DB.QueryContext(ctx, `
+			SELECT user_id, connection_id, schema_name, table_name, role, granted_by, granted_at
+			FROM table_grants WHERE connection_id = ? AND user_id = ?`, string(connID), userID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TableGrantRow{}
+	for rows.Next() {
+		var (
+			g           TableGrantRow
+			connStr     string
+			roleInt     int
+			grantedAtNs int64
+		)
+		if err := rows.Scan(&g.UserID, &connStr, &g.Schema, &g.Table, &roleInt, &g.GrantedBy, &grantedAtNs); err != nil {
+			return nil, err
+		}
+		g.ConnectionID = dbadmin.ConnectionID(connStr)
+		g.Role = dbadmin.Role(roleInt)
+		g.GrantedAt = time.Unix(0, grantedAtNs).UTC()
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────
 
 type connectionScanner interface {

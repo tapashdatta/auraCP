@@ -64,6 +64,28 @@ var migrations = []string{
 		BEGIN
 			DELETE FROM aura_db_grants WHERE user_id = CAST(OLD.id AS TEXT);
 		END`,
+	// v0.3.2-B: per-table grants matrix. Same shape as standalone
+	// table_grants — additive refinement of aura_db_grants. CASCADE on
+	// connection deletion via declarative FK; CASCADE on panel_user
+	// deletion via the trigger below (mirrors FIX-INT-6: panel_users.id
+	// is INTEGER while user_id here is TEXT, so a declarative FK is
+	// awkward).
+	`CREATE TABLE IF NOT EXISTS aura_db_table_grants (
+		user_id       TEXT NOT NULL,
+		connection_id TEXT NOT NULL REFERENCES aura_db_connections(id) ON DELETE CASCADE,
+		schema_name   TEXT NOT NULL DEFAULT '',
+		table_name    TEXT NOT NULL,
+		role          INTEGER NOT NULL,
+		granted_by    TEXT NOT NULL,
+		granted_at    INTEGER NOT NULL,
+		PRIMARY KEY (user_id, connection_id, schema_name, table_name)
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_aura_db_table_grants_user_conn ON aura_db_table_grants(user_id, connection_id)`,
+	`CREATE TRIGGER IF NOT EXISTS trg_aura_db_table_grants_cascade_panel_user
+		AFTER DELETE ON panel_users
+		BEGIN
+			DELETE FROM aura_db_table_grants WHERE user_id = CAST(OLD.id AS TEXT);
+		END`,
 }
 
 // RunMigrations applies the Aura DB schema additions to the panel's

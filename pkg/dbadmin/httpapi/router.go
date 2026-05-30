@@ -138,6 +138,12 @@ func (s *server) routes() http.Handler {
 	// Audit.
 	mux.Handle("GET /connections/{id}/audit", read(defaultTimeout, handleListAudit(s)))
 
+	// Per-table grants (v0.3.2-B). The {schema} segment may be the
+	// literal "_" to denote an empty schema (single-DB engines).
+	mux.Handle("GET /connections/{id}/grants/tables", read(defaultTimeout, handleListTableGrants(s)))
+	mux.Handle("POST /connections/{id}/grants/tables/{schema}/{table}", write(defaultTimeout, handleGrantTable(s)))
+	mux.Handle("DELETE /connections/{id}/grants/tables/{schema}/{table}", write(defaultTimeout, handleRevokeTable(s)))
+
 	// Step-up.
 	mux.Handle("POST /step-up/initiate", chain(handleStepUpInitiate(s),
 		shutdownGate(s),

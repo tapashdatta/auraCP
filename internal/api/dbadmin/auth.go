@@ -1,6 +1,7 @@
 package dbadmin
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -123,6 +124,64 @@ func (a *panelAuth) HasPermission(u dbadmin.User, cid dbadmin.ConnectionID, act 
 		return false, nil
 	}
 	return have >= min, nil
+}
+
+// HasTablePermission refines HasPermission with the per-table grants
+// matrix (aura_db_table_grants). v0.3.2-B. See the interface comment
+// for the contract.
+//
+// ROLE_ADMIN short-circuits as in HasPermission — admins bypass the
+// table-grants matrix by design. The connection-level check is the
+// precondition (existence-leak guard) for non-admins; once it passes,
+// the additive table-grants policy decides per-statement.
+func (a *panelAuth) HasTablePermission(u dbadmin.User, cid dbadmin.ConnectionID, act dbadmin.Action, tables []dbadmin.Target) (bool, error) {
+	ok, err := a.HasPermission(u, cid, act)
+	if err != nil || !ok {
+		return ok, err
+	}
+	// ROLE_ADMIN: keep the FIX-INT-14 fast path. Admins never hit
+	// aura_db_table_grants.
+	if u.Attrs != nil && u.Attrs["role"] == "ROLE_ADMIN" {
+		return true, nil
+	}
+	if len(tables) == 0 || cid == "" || u.ID == "" {
+		return ok, nil
+	}
+	min := act.MinRole()
+	if min == dbadmin.RoleNone {
+		return false, nil
+	}
+	// Additive: probe aura_db_table_grants for ANY row matching
+	// (user, conn). If none exist this user opted out of per-table
+	// authorization on this connection — connection-level grant alone
+	// authorizes.
+	var probe int
+	if err := a.store.DB.QueryRowContext(context.Background(),
+		`SELECT 1 FROM aura_db_table_grants WHERE user_id = ? AND connection_id = ? LIMIT 1`,
+		u.ID, string(cid)).Scan(&probe); err != nil {
+		// sql.ErrNoRows → no opt-in; allow.
+		return true, nil
+	}
+	for _, t := range tables {
+		if t.Object == "" {
+			continue
+		}
+		var role int
+		row := a.store.DB.QueryRowContext(context.Background(),
+			`SELECT role FROM aura_db_table_grants
+			 WHERE user_id = ? AND connection_id = ? AND table_name = ?
+			   AND (schema_name = ? OR schema_name = '')
+			 ORDER BY CASE WHEN schema_name = ? THEN 0 ELSE 1 END
+			 LIMIT 1`,
+			u.ID, string(cid), t.Object, t.Schema, t.Schema)
+		if err := row.Scan(&role); err != nil {
+			return false, nil
+		}
+		if dbadmin.Role(role) < min {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // StepUpRequired delegates to the canonical default. Hosts MAY require

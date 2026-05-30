@@ -438,6 +438,20 @@ type SSHTunnel struct {
 	KnownHostsPath string
 }
 
+// TableGrant is the canonical wire/store shape for one per-table grant
+// row (v0.3.2-B). The dbadmin engine consumes this shape from any
+// ConnectionStore that implements the per-table grants surface; hosts
+// are responsible for mapping it to/from their persistence layer.
+type TableGrant struct {
+	UserID       string
+	ConnectionID ConnectionID
+	Schema       string
+	Table        string
+	Role         Role
+	GrantedBy    string
+	GrantedAt    time.Time
+}
+
 // Target identifies what an action targets, for audit purposes. Empty
 // fields are valid (e.g., a connection-create event has no Schema or
 // Object).

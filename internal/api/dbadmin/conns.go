@@ -379,6 +379,89 @@ func (c *panelConns) Grant(ctx context.Context, panelUserID, connectionID, grant
 	return err
 }
 
+// TableGrantRow aliases dbadmin.TableGrant so the panel adapter speaks
+// the same shape as standalone. v0.3.2-B.
+type TableGrantRow = dbadmin.TableGrant
+
+// GrantTable upserts a per-table grant into aura_db_table_grants.
+// role == RoleNone delegates to RevokeTable. v0.3.2-B.
+//
+// Signature matches standalone.Connections.GrantTable so the engine's
+// TableGrantStore interface can hold either backend by value.
+func (c *panelConns) GrantTable(ctx context.Context, granter, userID string, connID dbadmin.ConnectionID, schema, table string, role dbadmin.Role) error {
+	if table == "" {
+		return dbadmin.ErrInvalidInput
+	}
+	if role == dbadmin.RoleNone {
+		return c.RevokeTable(ctx, granter, userID, connID, schema, table)
+	}
+	_, err := c.st.DB.ExecContext(ctx, `
+		INSERT INTO aura_db_table_grants (user_id, connection_id, schema_name, table_name, role, granted_by, granted_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(user_id, connection_id, schema_name, table_name) DO UPDATE SET
+			role = excluded.role,
+			granted_by = excluded.granted_by,
+			granted_at = excluded.granted_at`,
+		userID, string(connID), schema, table, int(role), granter, time.Now().Unix())
+	return err
+}
+
+// RevokeTable deletes a single per-table grant. Returns ErrNotFound
+// when no matching row exists. v0.3.2-B.
+func (c *panelConns) RevokeTable(ctx context.Context, _ string, userID string, connID dbadmin.ConnectionID, schema, table string) error {
+	res, err := c.st.DB.ExecContext(ctx, `
+		DELETE FROM aura_db_table_grants
+		WHERE user_id = ? AND connection_id = ? AND schema_name = ? AND table_name = ?`,
+		userID, string(connID), schema, table)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return dbadmin.ErrNotFound
+	}
+	return nil
+}
+
+// ListTableGrants returns per-table grants on a connection, optionally
+// filtered by user. v0.3.2-B.
+func (c *panelConns) ListTableGrants(ctx context.Context, connID dbadmin.ConnectionID, userID string) ([]TableGrantRow, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if userID == "" {
+		rows, err = c.st.DB.QueryContext(ctx, `
+			SELECT user_id, connection_id, schema_name, table_name, role, granted_by, granted_at
+			FROM aura_db_table_grants WHERE connection_id = ?`, string(connID))
+	} else {
+		rows, err = c.st.DB.QueryContext(ctx, `
+			SELECT user_id, connection_id, schema_name, table_name, role, granted_by, granted_at
+			FROM aura_db_table_grants WHERE connection_id = ? AND user_id = ?`, string(connID), userID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []TableGrantRow{}
+	for rows.Next() {
+		var (
+			g         TableGrantRow
+			connStr   string
+			roleInt   int
+			grantedAt int64
+		)
+		if err := rows.Scan(&g.UserID, &connStr, &g.Schema, &g.Table, &roleInt, &g.GrantedBy, &grantedAt); err != nil {
+			return nil, err
+		}
+		g.ConnectionID = dbadmin.ConnectionID(connStr)
+		g.Role = dbadmin.Role(roleInt)
+		g.GrantedAt = time.Unix(grantedAt, 0).UTC()
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // ---- helpers ----
 
 func newConnectionID() (string, error) {

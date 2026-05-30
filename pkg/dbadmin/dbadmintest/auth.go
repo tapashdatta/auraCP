@@ -137,6 +137,14 @@ func (a *Auth) HasPermission(u dbadmin.User, conn dbadmin.ConnectionID, action d
 	return action.MinRole() <= role, nil
 }
 
+// HasTablePermission applies the same policy as HasPermission and
+// ignores the tables argument — the in-memory test backend does not
+// model the per-table grants matrix. Tests that need to drive table
+// grants should compose their own Auth on top of this one.
+func (a *Auth) HasTablePermission(u dbadmin.User, conn dbadmin.ConnectionID, action dbadmin.Action, _ []dbadmin.Target) (bool, error) {
+	return a.HasPermission(u, conn, action)
+}
+
 // StepUpRequired reports the canonical default per Action.RequiresStepUp.
 func (a *Auth) StepUpRequired(action dbadmin.Action) bool {
 	return action.RequiresStepUp()

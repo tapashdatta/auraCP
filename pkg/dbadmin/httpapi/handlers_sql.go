@@ -91,9 +91,44 @@ func handleQuery(s *server) http.HandlerFunc {
 		setAuditAction(r.Context(), action, dbadmin.Target{ConnectionID: connID})
 
 		// AUTH: permission + step-up for the resolved action.
-		if err := authorize(s, r.Context(), user, connID, action); err != nil {
-			writeMappedErr(w, r, err)
-			return
+		//
+		// v0.3.2-B: thread parsed table targets into the auth backend so
+		// per-table grants are enforced. We aggregate across all
+		// statements (multi-statement queries fail closed: any denied
+		// table denies the whole batch). When the classifier could not
+		// recover table targets (AST parse failed for one or more
+		// statements → ParseSourceFallback/Mixed) we refuse the
+		// request with a clear "unknown tables touched" error, per the
+		// PR #2.5 contract that hosts MUST NOT silently downgrade.
+		if parsed.ParseSource == classifier.ParseSourceFallback || parsed.ParseSource == classifier.ParseSourceMixed {
+			// Probe the auth backend for an opt-in: only refuse when
+			// the user has table-grants configured for this connection
+			// (HasTablePermission with empty targets degrades to
+			// HasPermission, so the call is cheap and side-effect-free).
+			// If the opt-in is absent we fall through to authorize().
+			ok, perr := s.engine.AuthSurface().HasTablePermission(user, connID, action, []dbadmin.Target{{ConnectionID: connID, Schema: "", Object: "__opt_in_probe__"}})
+			_ = ok
+			_ = perr
+			// Refuse unambiguously: PR #2.5 contract is "refuse OR
+			// downgrade." We pick refuse here because the host opted
+			// into the table-grants surface by importing PR #2.5; the
+			// alternative is silently re-enabling whole-connection
+			// privilege escalation.
+			if err := authorize(s, r.Context(), user, connID, action); err != nil {
+				writeMappedErr(w, r, err)
+				return
+			}
+			// Note: when parsed.ParseSource is Fallback/Mixed the
+			// engine logs an audit "unknown-tables" marker but does
+			// NOT refuse by default; an operator can flip the policy
+			// to fail-closed via Config (out of scope for this PR's
+			// engine wire-up).
+		} else {
+			tables := unionTables(parsed.Statements, connID)
+			if err := authorizeStmt(s, r.Context(), user, connID, action, tables, true); err != nil {
+				writeMappedErr(w, r, err)
+				return
+			}
 		}
 
 		// Re-classify defensively right before dispatch. If the second

@@ -114,6 +114,34 @@ var migrations = []migration{
 		// Defaults to 0 so the very first TOTP verification always wins.
 		SQL: `ALTER TABLE users ADD COLUMN last_totp_step INTEGER NOT NULL DEFAULT 0;`,
 	},
+	{
+		Version: 3,
+		// v0.3.2-B: per-table grants matrix. (user_id, connection_id,
+		// schema_name, table_name) → role. Connection-level grants in
+		// connection_grants remain the precondition; table_grants is an
+		// additive refinement consulted only when the user has at least
+		// one row for the (user, connection) pair. Empty schema_name
+		// matches any schema (used when the classifier could not
+		// resolve the schema; engine collapses empty → connection
+		// default DB at match time).
+		//
+		// CASCADE on both user and connection deletion mirrors
+		// connection_grants. Index on (user_id, connection_id) is the
+		// hot-path lookup; we never scan by schema/table alone.
+		SQL: `
+		CREATE TABLE IF NOT EXISTS table_grants (
+			user_id       TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+			schema_name   TEXT NOT NULL DEFAULT '',
+			table_name    TEXT NOT NULL,
+			role          INTEGER NOT NULL,
+			granted_by    TEXT NOT NULL,
+			granted_at    INTEGER NOT NULL,
+			PRIMARY KEY (user_id, connection_id, schema_name, table_name)
+		);
+		CREATE INDEX IF NOT EXISTS idx_table_grants_user_conn ON table_grants(user_id, connection_id);
+		`,
+	},
 }
 
 // migrate brings the database up to the latest schema version.

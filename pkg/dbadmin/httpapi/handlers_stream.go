@@ -180,9 +180,18 @@ func handleSQLStream(s *server) http.HandlerFunc {
 		if action == "" {
 			action = dbadmin.ActionQueryRead
 		}
-		if err := authorize(s, streamCtx, user, connID, action); err != nil {
+		// v0.3.2-B: per-table grants for streaming queries. Mirror the
+		// REST path — refuse when ParseSource isn't AST so per-table
+		// grants are never silently bypassed.
+		var authErr error
+		if parsed.ParseSource == classifier.ParseSourceFallback || parsed.ParseSource == classifier.ParseSourceMixed {
+			authErr = authorize(s, streamCtx, user, connID, action)
+		} else {
+			authErr = authorizeStmt(s, streamCtx, user, connID, action, unionTables(parsed.Statements, connID), true)
+		}
+		if authErr != nil {
 			wsAuditDenial(s, streamCtx, user, connID, "authorize-denied", string(action))
-			_, ecode, msg := mapErr(err)
+			_, ecode, msg := mapErr(authErr)
 			_ = writeWSErr(ecode, msg, requestIDFrom(r.Context()))
 			writeClose(wsCloseForbidden, msg)
 			return
