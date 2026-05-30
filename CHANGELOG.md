@@ -2,6 +2,38 @@
 
 All notable changes to auraCP.
 
+## v0.3.7 — 2026-05-30
+
+Fix: a fresh reinstall failed to create a site user with
+`useradd: exit status 9: useradd: group <user> exists`, leaving an
+orphan group behind from a prior install.
+
+Root cause: v0.2.61 added `gpasswd -a www-data <site-user>` (so nginx
+can traverse the 0750 home). That makes `www-data` a *secondary* member
+of the per-site group, and `userdel` refuses to reap a group that still
+has members — so deleting/uninstalling a site removed the *user* but
+left the *group*. On reinstall, the default `useradd` then tried to
+create that user's private group, which already existed → exit 9.
+
+Fix (panel / `internal/osuser`):
+  - `Create` now pre-creates the primary group with `groupadd -f` and
+    calls `useradd --no-user-group --gid <user>`, so it reuses an
+    existing group instead of colliding with it. It also genuinely
+    tolerates a pre-existing user now (idempotent re-run).
+  - `Delete` reaps the same-name group best-effort after `userdel`
+    (groupdel safely refuses if a shared "extra" user still has it as a
+    primary group), so deletes stop leaving orphans.
+  - `installer/uninstall.sh` runs `groupdel` after `userdel` in both
+    site-user removal loops, so a future uninstall leaves no trace.
+
+Operator note: to clear an orphan group on an already-affected host,
+`sudo groupdel <site-user>` (e.g. `sudo groupdel b-garuda`) and retry.
+
+This is the first tag on the **single unified 0.3.x line** — the panel
+and Aura DB now ship under one version going forward (the parallel
+0.2.x patch line is retired; `aura-db-foundation` already carried every
+0.2.x fix through v0.2.62).
+
 ## v0.3.6 — 2026-05-30
 
 Remove WebAuthn / FIDO2 entirely. It was speculative scope: redundant

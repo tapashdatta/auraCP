@@ -155,6 +155,10 @@ if getent group auracp-sftp >/dev/null 2>&1; then
     [ -n "$u" ] || continue
     run "pkill -9 -u $u 2>/dev/null"
     run "userdel -rf $u"
+    # v0.3.7: userdel leaves the same-name group behind when www-data is
+    # still a secondary member (v0.2.61). Reap the orphan so a later
+    # reinstall's `useradd` doesn't fail with `group $u exists` (exit 9).
+    getent group "$u" >/dev/null 2>&1 && run "groupdel $u 2>/dev/null"
   done
   run "groupdel auracp-sftp"
 fi
@@ -182,6 +186,10 @@ if [ -d /home ]; then
       run "pkill -9 -u $u 2>/dev/null"
       run "userdel -rf $u 2>/dev/null"
     fi
+    # v0.3.7: reap the orphan same-name group userdel leaves behind when
+    # www-data is still a member (v0.2.61) — otherwise a reinstall's
+    # `useradd` fails with `group $u exists` (exit 9).
+    getent group "$u" >/dev/null 2>&1 && run "groupdel $u 2>/dev/null"
     # userdel -r removes the home; if user-not-found we still want
     # the directory gone (operator may have already `userdel`'d the
     # account by hand, leaving stale /home/<u>).

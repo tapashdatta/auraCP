@@ -31,11 +31,29 @@ func (m *Manager) Create(ctx context.Context, user, domain string) error {
 		return err
 	}
 	home := paths.SiteHome(user)
+	// Pre-create the same-name primary group, then point useradd at it
+	// with --no-user-group/--gid instead of letting useradd create its
+	// own user-private group. This makes Create robust against an orphan
+	// group left by a prior install: the v0.2.61 `gpasswd -a www-data
+	// <user>` (below) makes www-data a *secondary* member of the
+	// site-user group, and userdel refuses to reap a group that still has
+	// members — so the group <user> survives uninstall. On reinstall the
+	// default `useradd` then died with `useradd: group <user> exists`
+	// (exit 9). `groupadd -f` is a no-op when the group already exists, so
+	// we simply reuse it.
+	if _, err := m.R.Run(ctx, "groupadd", "-f", user); err != nil {
+		return fmt.Errorf("create user group: %w", err)
+	}
 	if _, err := m.R.Run(ctx, "useradd",
-		"--create-home", "--home-dir", home,
-		"--shell", "/bin/bash", "--groups", paths.SFTPGroup, user); err != nil {
-		// useradd exits 9 if the user already exists; surface other errors.
-		return fmt.Errorf("create user: %w", err)
+		"--create-home", "--home-dir", home, "--shell", "/bin/bash",
+		"--no-user-group", "--gid", user, "--groups", paths.SFTPGroup, user); err != nil {
+		// useradd exits 9 when the *user* already exists. Treat that as an
+		// idempotent re-run: fall through to the dir/perm fixups after
+		// re-asserting SFTP-group membership. Surface anything else.
+		if _, idErr := m.R.Run(ctx, "id", user); idErr != nil {
+			return fmt.Errorf("create user: %w", err)
+		}
+		_, _ = m.R.Run(ctx, "usermod", "-aG", paths.SFTPGroup, user)
 	}
 	for _, d := range []string{paths.DocRoot(user, domain), paths.LogDir(user)} {
 		if _, err := m.R.Run(ctx, "mkdir", "-p", d); err != nil {
@@ -97,6 +115,12 @@ func (m *Manager) Delete(ctx context.Context, user string) error {
 	if _, err := m.R.Run(ctx, "userdel", "--remove", "--force", user); err != nil {
 		return fmt.Errorf("delete user: %w", err)
 	}
+	// userdel leaves the same-name group behind whenever www-data is still
+	// a secondary member (added in v0.2.61 so nginx can traverse the home).
+	// Reap it so a later reinstall's useradd doesn't trip over an orphan
+	// group (exit 9). Best-effort: groupdel correctly refuses if a shared
+	// "extra" user still has this as their primary group.
+	_, _ = m.R.Run(ctx, "groupdel", user)
 	return nil
 }
 
