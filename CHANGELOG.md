@@ -2,6 +2,270 @@
 
 All notable changes to auraCP.
 
+## v0.3.2 — 2026-05-30
+
+Combined v0.3.1 hardening + v0.3.2 feature release. The 14 `.5`
+follow-up PRs deferred from v0.3.0 are all closed, and six new
+features ship on top.
+
+### v0.3.1 hardening (14 PRs, ~309 deferred items closed)
+
+PR #2.5 — Classifier AST upgrade. Vitess (MariaDB) + pg_query_go
+  (Postgres) parsers as the primary path; tokenizer fallback per-
+  statement; forbidden-token matcher always-on against raw token
+  stream. ParsedStatement.Tables now populated for AST-parsed
+  statements (unblocks per-table grants in v0.3.2-B).
+
+PR #3.5 — Driver hardening: unix-socket tunnel listener
+  (/run/aura-db/tunnels/), Connection.QueryIdleTimeout,
+  Limits.MaxBytesPerCell, MySQL NewConnector for credential
+  lifetime, TLS registry cleanup, engine-identity verification,
+  idle-sweeper floor 1s.
+
+PR #4.5 — Schema reader: singleflight cacheFetch (preserves
+  generation-counter race protection), Config.Query.Timeout
+  plumbing via ForWithOptions, CappedError typed error,
+  Postgres ViewSummary.Updatable correct, cross-user cache
+  poisoning fixed via CacheConfig.Bucket, Postgres expression-
+  index columns surfaced, MySQL system-schema case-bypass,
+  fillTriggers error narrowing, normalizePostgresValue handles
+  pgtype.UUID/Numeric/Interval/Range.
+
+PR #5.5 — Row ops: Read LIMIT+1 + ReadResult.Capped, CountByOpts,
+  IN/NOT IN max 1000 entries, Postgres Insert RETURNING <pk>,
+  OpLike/ILike case-sensitivity documented, empty NOT IN rejected,
+  NaN/Inf/[]byte rejection in IN lists, assertPKMatch nil
+  rejection, UpdateByPK refuses PK mutation.
+
+PR #6.5 — EXPLAIN: 30 items including Nested Loop multiplicative
+  rows, PG node metadata (Sort Key, Group Key, Workers, JIT),
+  MariaDB shape coverage (windowing, having_subqueries, Impossible
+  WHERE), rollupMariaDBTotals, validateSQLForExplain (no SQL
+  smuggling), PlanningTimed bool, parseFloatWithSuffix (10M →
+  10485760), bm25-like changes to mergeMetrics, etc.
+
+PR #7.5 — History: H4 extended redaction (IDENTIFIED VIA,
+  postgresql:// URIs, dblink, COPY FROM PROGRAM), OpenOpts.
+  RequireFTS5 + HasFTS(), retention loop (MaxRows + StartRetentionLoop
+  + chunked DeleteOlderThan), entry_tags normalized table, writer
+  semaphore, prepared-stmt cache, UTF-8 safe truncation, schema
+  migration v1→v2.
+
+PR #8.5 — HTTP handler: 31 items including rateClassStepUp
+  (10/15min sliding window), conn-enumeration timing fix,
+  stream WS limits from Config().Query.*Max, writeFrame error
+  propagation, 30s WS ping ticker, panic %T redaction, signed-URL
+  password reveal, asyncSink AuditSink wrapper, /sql/stream
+  rate-limit + queryGate, /history pagination clamps, per-user
+  query semaphore (16), denialAudit on 404s, LRU eviction of
+  ratelimit buckets, etc.
+
+PR #9.5 — Standalone: 29 items including KEK fstat-on-FD (TOCTOU
+  fix), Webhook https:// + HMAC, RotateKEK closes commit/swap
+  window, HIBP https:// enforcement, PHCWithFakeWorkloadMatching-
+  Stored, recoverPrevHash rotated-sibling fallback, ULID
+  clock-step-back clamp, session lookup ConstantTimeCompare,
+  audit mode 0600, single `now` through Login, audit Reopen
+  re-stat + re-chmod, http server shutdown before engine,
+  Validate enforces enums, audit verify --json, WriteKEKFile
+  fsyncs tmp + parent dir, recoverPrevHash JSON+hex validation,
+  Save honors caller CreatedAt.
+
+PR #10.5 — Panel glue: 27 items including secret.Box.EncryptAAD/
+  DecryptAAD with HMAC-derived sub-key + dbadmin:creds: context
+  binding, stepUpStore.InvalidateSession on logout, Config.Max
+  surfaced from settings, panel_users → aura_db_grants FK
+  cascade trigger, slog request-id middleware (X-Request-Id),
+  ErrStepUpUnavailable sentinel, stepUpKey gains connectionID,
+  RolesFor(ROLE_ADMIN) short-circuit, Action.Class() type,
+  panelConns.Delete tx, json.Marshal detail, RolesFor zero-role
+  filter, loadOrCreateSigningKey corruption refuse, CSRF bypass
+  path.Clean, mapSaveErr UNIQUE→ErrConflict, GET /api/dbadmin/
+  healthz + /readyz.
+
+PR #11.5 — SPA shell: 55 items spanning a11y polish across the
+  whole SPA. Skip link + <main> landmark, doc.title per route,
+  responsive @media(max-width:720px), btn--primary AA contrast
+  in dark, toastBus + ToastRegion, Tab close visible+keyboard,
+  DropdownMenu WAI-ARIA menu, fonts self-hosted via lib/fonts.css
+  (no Google Fonts at runtime), CSP meta tag (default-src 'self'),
+  Toggle role=switch, table-row keyboard activation, TopNav
+  aria-current="page", ResizeHandle keyboard (Arrow/Home/End),
+  StatusDot 'connecting' state, EngineGlyph disambiguated, brand
+  string 'Aura DB' consistent.
+
+PR #12.5 — Row grid: 23 items including rAF-latched scroll
+  (multi-event-per-frame coalesce), virtualWindow buffer 4→8,
+  O(n)-per-edit slice removed, .rowgrid__body contain:paint
+  (Safari sticky), --rg-grid-cols CSS var (single layout var
+  instead of inline grid-template-columns per row), array-kind
+  JSON.parse memo, dispose() lifecycle, deleteRows partial-fail
+  restore in ascending index order, Esc-during-edit blur guard,
+  filterParse `is null xyz` rejection, cells:Set saving indicator,
+  integer kind split, grid root tabindex=-1, aria-rowcount=-1
+  when unknown, NOT IN regex precedence, SchemaBrowser dblclick
+  timer, commitEdit row-payload swap, listRows dead code removed.
+
+PR #13.5 — SQL editor: 21 items including mid-stream rows
+  preserved on error, SaveQueryModal (focus-trapped, name +
+  description + tags + duplicate detection), loadIntoEditor
+  dirty-check, runOne finalize() refreshes history on success
+  AND error, replaceDoc semantic cursor anchor, empty-doc Save
+  toast, CM6 contenteditable aria-label/role/multiline, Cancel
+  aria-keyshortcuts ⌘., ErrorPanel role=alert + pushToast,
+  sidebar accordions aria-expanded, saved-query × button +
+  Delete keyboard, SaveQueryModal reuses Modal trap,
+  ClassifierChip 🔒 glyph on FORBIDDEN, status+error live
+  regions split, bundle ceilings tightened (main 95KB, editor
+  175KB), ⌘+F discoverable, classifier.flush() pre-exec,
+  Cmd+Shift+F preload-on-hover, isCommentOnly filter.
+
+PR #14.5 — Inspector: 30 items including copper ramp retune,
+  client-side severity shim (CORR-7), costStep log buckets,
+  inspector re-classify on stmt change, RawPlanView large-
+  payload defer, inline "tree truncated" marker, FlameNodeBar
+  <mark> match highlight, fmtMs negative→em-dash, FlameTree
+  ROW_H 24px, HotspotChip --estimate/--loops CSS, Spinner +
+  elapsed counter + Abort on loading, RAW tablist promotion,
+  search input toolbar, document.title on mount, stashForEditor
+  on Close, AbortController + 60s deadline countdown, h/r
+  shortcuts gated by editable target, RawPlanView decode
+  simplified to object → JSON.parse.
+
+PR #15.5 — Palette + history: 19 items including replay.js
+  cleanup-after-newTab, 25-conn cap banner, Cmd-K scope-aware,
+  star.id guard, drop duplicate engine in connection subtitle,
+  loadForConn error count, monotonic _fetchToken, ☆/★ glyph
+  state (not color-only), token vars for danger/star colors,
+  palette Loading… while priming, multi-line saved-query
+  preview collapse, selection border 3→2px, glyph col 28→20px,
+  date-range pill styling, ⌘K hint in footer, "No commands
+  match '{query}'. Press ⌘⌫" empty-state, section header
+  padding 8/14/6, backdrop blur 8→4px.
+
+PR #16.5 — Export: 34 items including RFC 5987 percent-encoded
+  filename* + RFC 6266 ASCII filename=, exportLockManager TTL
+  evict + LRU cap, byte-cap pre-write, jobID + X-Aura-Export-
+  JobID, CSV NaN/+Inf/-Inf handled, NDJSON $truncated →
+  __auracp_truncated, Postgres standard_conforming_strings,
+  Retry-After + countdown banner, pre-flight count probe,
+  X-Aura-Export-Rows + onProgress, ExportModal lazy chunk,
+  sanitizeExportFilename mirrored client-side, ms-precision
+  timestamp filenames, post-success "Done" CTA, format menu
+  pre-selects, shared icons.chevron, filter/sort pills above
+  form, row-count badge, NDJSON []byte JSON passthrough,
+  countingWriter atomic.Int64, Btn component everywhere.
+
+### v0.3.2 features (6 PRs)
+
+**v0.3.2-A — Saved queries persistence.** Replaces the in-memory
+savedQueriesStore with a SQLite-backed `pkg/dbadmin/saved` package
+mirroring the history store pattern. Schema: saved_queries with
+UNIQUE(connection_id, owner_id, name), partial index on starred,
+FTS5 search with LIKE fallback. Star/tag/update/description all
+durable. 12 new tests.
+
+**v0.3.2-B — Per-table grants.** New `(user, conn, schema, table,
+action)` matrix consumed by authorize() when ParsedStatement.Tables
+is populated (which PR #2.5 unlocked for AST-parsed statements).
+New Auth.HasTablePermission interface method (additive — preserves
+SDK shape). New table_grants / aura_db_table_grants tables with
+CASCADE off panel_users. Policy: additive — connection-level grant
+is precondition; per-table denies are subtractive when any row
+exists; fallback parses refuse with "unknown tables touched" if
+Config.RequireTableGrants=true. Three new grant-management routes
+(POST/DELETE /connections/{id}/grants/{schema}/{table}).
+
+**v0.3.2-C — Slow-log streaming endpoint.** Closes the SDK §7 gap
+flagged by PR #8 DEF-33. WS `GET /api/dbadmin/connections/{id}/slow-
+log/stream` (subprotocol "aura.slowlog.v1"). MariaDB TABLE-mode
+streams `mysql.slow_log` with follow + 2s poll; Postgres snapshot
+mode via `pg_stat_statements`. Refuses with operator-actionable
+hint when prereqs missing (slow_query_log=ON / extension
+unavailable). Reuses every WS hardening from /sql/stream
+(CSWSH, CSRF subprotocol, ping ticker, rate-limit, audit).
+New `dbadmin.ActionSlowLogRead` action.
+
+**v0.3.2-D — WebAuthn step-up.** Adds FIDO2/WebAuthn alongside
+TOTP via go-webauthn/webauthn. Schema migration v4 adds
+webauthn_credentials + webauthn_challenges tables. Four routes
+(register/begin, register/finish, assert/begin; assert/finish
+rides on the existing /login or /step-up/verify body via the
+new WebAuthn field). Recovery codes still work; TOTP+WebAuthn
+coexist; any one enrolled factor satisfies step-up.
+WebAuthnEnabled opt-in (default false). Per-credential sign_count
+replay defense (mirrors SEC-02 last_totp_step pattern).
+
+**v0.3.2-E — CSV/NDJSON import.** Replaces the PR #8 /import stub
+with streaming bulk-load. New `pkg/dbadmin/tableimport` package
+symmetric to export/. Multipart/form-data: file + schema + table
++ format (csv|ndjson) + onConflict (skip|update|error). Reverses
+SEC-1 formula sanitization (strips apostrophe prefix on read).
+Type-coercion uses schema reader's column types as source of
+truth (int64 vs float64 distinction preserved on NDJSON).
+SQL format DELIBERATELY EXCLUDED — security boundary disallows
+arbitrary statement execution via "import". Caps: 64 MiB body,
+100K rows, 5 min timeout. Two audit events (start + outcome
+with rowsImported/Skipped/Failed). ImportModal lazy chunk
+(3.32 KB gz).
+
+**v0.3.2-F — MongoDB driver.** Third engine: `dbadmin.EngineMongo`.
+Uses `go.mongodb.org/mongo-driver/v2`. Classifier refuses raw
+SQL for Mongo (RAW_SQL_ON_MONGO ForbiddenMatch) so all ops
+route through structured rows.Operator. Driver implements
+Conn/Rows; schema.Reader implements ListDatabases/Tables (collections)
+/ GetTable (samples 100 docs to infer columns; PrimaryKey=["_id"]
+always). Predicate mapping: $eq/$ne/$lt/$lte/$gt/$gte; Like→
+$regex; Like+i→$regex+$options:"i"; In→$in; IsNull→{col:nil}.
+UpdateResult.LastInsertKey (NEW additive field) carries ObjectID
+hex on insert. EXPLAIN refused. ValidateMongoIdentifier (1..120
+bytes, rejects / \ " $ \x00 + whitespace) — separate from
+SQL ValidateIdentifier.
+
+### Installer / packaging changes
+
+- `aura-db` standalone binary cross-compiled in `dist`; .deb postinst
+  symlinks it to `/usr/local/bin/aura-db` when present
+- Postinst creates `/var/lib/auracp/aura-db/` (mode 0750) for the
+  audit chain NDJSON
+- Postinst creates `/etc/auracp/secrets/` (mode 0700) for the
+  audit signing key (PR #10.5 PD-SEC-01 moved off the settings
+  table to a 0600 root-owned file)
+- Uninstall removes the new `/usr/local/bin/aura-db` symlink
+  (existing `rm -rf /var/lib/auracp /etc/auracp` already covers
+  the dirs)
+- Makefile `build` target now produces `bin/aura-db` alongside
+  `bin/auracpd` + `bin/auracp`
+- Makefile `dist` target builds aura-db-linux-{amd64,arm64}
+- Makefile exports `CGO_CFLAGS=-DHAVE_STRCHRNUL=1` by default
+  to work around the macOS SDK 15+ libpg_query incompatibility
+  (Linux unaffected)
+
+### Bundle (gzipped)
+
+| Chunk | v0.3.0 | v0.3.2 | Loaded |
+|---|---|---|---|
+| Main `index-*.js` | 46 KB | 57 KB | Eager |
+| `HistoryScreen-*.js` | 3 KB | 3 KB | `/history` |
+| `ExplainInspectorScreen-*.js` | 10 KB | 13 KB | `/explain` |
+| `SqlEditor-*.js` | 146 KB | 150 KB | `/query` |
+| `sqlFormatter-*.js` | 76 KB | 76 KB | Format click |
+| `ExportModal-*.js` | n/a | 4 KB | Export menu |
+| `ImportModal-*.js` | n/a | 3 KB | Import button |
+| CSS | 6 KB | 11 KB | Eager |
+
+### Test coverage
+
+- 317 Vitest tests (was 252 at v0.3.0 cut + 65 new for `.5`
+  + v0.3.2 SPA work)
+- 13 `pkg/dbadmin/*` packages pass `go test -race -count=1`
+  (was 10 at v0.3.0; +saved, +tableimport, +driver mongo
+  + new test files across the .5 series)
+- Adversarial reviews retired: 309 deferred items closed
+  across the `.5` series.
+
+---
+
 ## v0.3.0 — 2026-05-30
 
 The Aura DB release. auraCP ships its own native database admin tool,

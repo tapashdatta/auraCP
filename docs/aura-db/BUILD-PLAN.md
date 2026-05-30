@@ -663,3 +663,39 @@ PRs without their tests are blocked at review. We do not retroactively
 | 18  | Release v0.3.0                         | ✓ done   | (this tag)   |
 
 This table is the single source of truth for v0.3.0 progress.
+
+---
+
+## v0.3.2 — release marker
+
+Combined v0.3.1 hardening + v0.3.2 feature release. See CHANGELOG.md
+for the full breakdown. v0.3.1 closed the 14 `.5` follow-up PRs
+(309 deferred items). v0.3.2 added saved-queries persistence,
+per-table grants, slow-log streaming endpoint, WebAuthn step-up,
+CSV/NDJSON import, and the MongoDB driver.
+
+| PR  | Title                                  | Status   | Merge commit |
+| --- | -------------------------------------- | -------- | ------------ |
+| 2.5 | Classifier AST upgrade                 | ✓ done   | a3d1299      |
+| 3.5 | Driver hardening                       | ✓ done   | 2ad859c      |
+| 4.5 | Schema reader follow-up                | ✓ done   | 1dcd865      |
+| 5.5 | Row ops engine-parity + limits         | ✓ done   | 8ab898b      |
+| 6.5 | EXPLAIN polish                         | ✓ done   | bf2f20e      |
+| 7.5 | History redaction/retention            | ✓ done   | bf3964e      |
+| 8.5 | HTTP handler hardening                 | ✓ done   | 4e4ff53      |
+| 9.5 | Standalone hardening                   | ✓ done   | 0c1bee8      |
+| 10.5| Panel glue hardening                   | ✓ done   | 3cf8d37      |
+| 11.5| SPA shell hardening                    | ✓ done   | 8ec33da      |
+| 12.5| Row grid hardening                     | ✓ done   | ca5f6c7      |
+| 13.5| SQL editor hardening                   | ✓ done   | c44e586      |
+| 14.5| Inspector hardening                    | ✓ done   | e319fb2      |
+| 15.5| Palette + history hardening            | ✓ done   | f446a6d      |
+| 16.5| Export hardening                       | ✓ done   | a4d7f89      |
+| A   | Saved queries persistence              | ✓ done   | 2195609      |
+| B   | Per-table grants                       | ✓ done   | af807ce      |
+| C   | Slow-log streaming endpoint            | ✓ done   | 71c3344      |
+| D   | WebAuthn step-up                       | ✓ done   | fbb8e25      |
+| E   | CSV/NDJSON import                      | ✓ done   | 175823e      |
+| F   | MongoDB driver                         | ✓ done   | ebdc3d7      |
+| —   | Installer / uninstaller / Makefile     | ✓ done   | (this commit)|
+| —   | Release v0.3.2                         | ✓ done   | (this tag)   |

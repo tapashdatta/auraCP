@@ -2,7 +2,7 @@
 # classifier (PR #2.5) pulls libpg_query through pg_query_go/v5 which
 # requires cgo for the AST path. CGO_ENABLED=0 builds remain valid —
 # they degrade Postgres to the PR #2 tokenizer fallback.
-VERSION ?= 0.3.0
+VERSION ?= 0.3.2
 LDFLAGS := -s -w -X main.version=$(VERSION)
 GO := go
 
@@ -43,14 +43,21 @@ ui-dbadmin:
 build: ui-dbadmin
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/auracpd ./cmd/auracpd
 	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/auracp  ./cmd/auracp
+	$(GO) build -trimpath -ldflags="$(LDFLAGS)" -o bin/aura-db ./cmd/aura-db
 
 ## dist: cross-compile release binaries for Debian/Ubuntu on x86-64 and ARM64
+## v0.3.2: aura-db standalone binary joins auracpd + auracp. CGO_ENABLED=0
+## degrades the Postgres AST classifier to the tokenizer fallback (per PR
+## #2.5 contract) — acceptable for the cross-compile path; the audit-verify
+## tooling + MFA + WebAuthn paths are all pure Go.
 dist: ui
 	@mkdir -p dist
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/auracpd-linux-amd64 ./cmd/auracpd
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/auracpd-linux-arm64 ./cmd/auracpd
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/auracp-linux-amd64  ./cmd/auracp
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/auracp-linux-arm64  ./cmd/auracp
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/aura-db-linux-amd64 ./cmd/aura-db
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags="$(LDFLAGS)" -o dist/aura-db-linux-arm64 ./cmd/aura-db
 	@ls -lh dist/
 
 ## deb: build .deb packages for amd64 + arm64 (run after `make dist`)

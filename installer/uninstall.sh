@@ -204,7 +204,7 @@ auracp_pkgs=$(dpkg-query -W -f='${Package} ${db:Status-Status}\n' 'auracp*' 2>/d
 run "rm -f /etc/systemd/system/auracpd.service"
 run "rm -rf /etc/systemd/system/auracpd.service.d"
 run "rm -rf /opt/auracp /etc/auracp /var/lib/auracp"
-run "rm -f /usr/local/bin/auracp /usr/local/bin/auracpd /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall /usr/local/bin/auracp-update"
+run "rm -f /usr/local/bin/auracp /usr/local/bin/auracpd /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall /usr/local/bin/auracp-update /usr/local/bin/aura-db"
 run "systemctl daemon-reload"
 ok "Panel removed."
 

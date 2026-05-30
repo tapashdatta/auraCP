@@ -29,6 +29,12 @@ mkdir -p "$PKG/DEBIAN" \
 
 install -m 0755 "$BIND/auracpd-linux-$ARCH" "$PKG/opt/auracp/bin/auracpd"
 install -m 0755 "$BIND/auracp-linux-$ARCH"  "$PKG/opt/auracp/bin/auracp"
+# v0.3.2: aura-db standalone binary. Optional — integrated /dbadmin/
+# mount inside auracpd is the default UX. The standalone binary is
+# shipped so operators can run the engine + SPA without auracpd
+# (separate host, separate audit chain, separate KEK) when they
+# want database admin isolated from the panel.
+[ -f "$BIND/aura-db-linux-$ARCH" ] && install -m 0755 "$BIND/aura-db-linux-$ARCH" "$PKG/opt/auracp/bin/aura-db" || true
 install -m 0644 "$ROOT/packaging/auracpd.service" "$PKG/etc/systemd/system/auracpd.service"
 # v0.2.15: watchdog timer that survives the "Restart=always didn't fire after
 # clean stop" systemd corner case during in-panel upgrades.
@@ -73,10 +79,23 @@ set -e
 dpkg --configure -a 2>/dev/null || true
 mkdir -p /var/lib/auracp /etc/auracp
 chmod 700 /etc/auracp
+# v0.3.2: Aura DB audit chain NDJSON + secrets directory. Chain
+# file lives under /var/lib/auracp/aura-db/audit.ndjson (mode 0600
+# created lazily by the engine on first event). Secrets dir holds
+# the audit signing key (PR #10.5 PD-SEC-01 fix: was in the panel
+# settings table — moved to a 0600 root-owned file).
+mkdir -p /var/lib/auracp/aura-db /etc/auracp/secrets
+chmod 0750 /var/lib/auracp/aura-db
+chmod 0700 /etc/auracp/secrets
 ln -sf /opt/auracp/bin/auracp             /usr/local/bin/auracp
 ln -sf /opt/auracp/installer/install.sh   /usr/local/bin/auracp-install
 ln -sf /opt/auracp/installer/uninstall.sh /usr/local/bin/auracp-uninstall
 ln -sf /opt/auracp/installer/update.sh    /usr/local/bin/auracp-update
+# v0.3.2: aura-db standalone CLI symlink. Optional; only present
+# when the build pipeline shipped the dist/aura-db-linux-* binary.
+if [ -f /opt/auracp/bin/aura-db ]; then
+  ln -sf /opt/auracp/bin/aura-db /usr/local/bin/aura-db
+fi
 if [ -d /run/systemd/system ]; then
   systemctl daemon-reload || true
   systemctl enable auracpd >/dev/null 2>&1 || true
@@ -197,7 +216,7 @@ if [ -d /run/systemd/system ]; then
   systemctl stop auracpd || true
   systemctl disable auracpd >/dev/null 2>&1 || true
 fi
-rm -f /usr/local/bin/auracp /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall /usr/local/bin/auracp-update
+rm -f /usr/local/bin/auracp /usr/local/bin/auracp-install /usr/local/bin/auracp-uninstall /usr/local/bin/auracp-update /usr/local/bin/aura-db
 exit 0
 EOF
 
