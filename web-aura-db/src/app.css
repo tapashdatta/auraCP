@@ -406,24 +406,119 @@ summary:focus-visible,
 }
 
 /* ============================================================
-   LeftTree
+   Sidebar (connection switcher + schema tree) — prototype "Studio"
    ============================================================ */
-.tree {
+.sidebar {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--surface);
+  min-height: 0;
+  background: var(--bg-elev);
   overflow: hidden;
 }
-.tree__filter {
-  height: 28px;
-  padding: 4px 8px;
+
+/* Connection switcher (top box) */
+.conn-switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 11px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface-sunk);
+}
+.conn-switch__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.conn-switch__name {
+  font-size: var(--fs-ui);
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn-switch__sub {
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conn-switch__btn {
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-pill);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mute);
+  flex-shrink: 0;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.conn-switch__btn:hover { background: var(--surface-hover); color: var(--text); }
+
+/* Section labels (SCHEMAS / CONNECTIONS) + trailing count */
+.side-section__label {
+  display: flex;
+  align-items: center;
+  padding: 12px 14px 6px;
+  font-size: var(--fs-meta);
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+.side-section__label--top { padding-top: 14px; }
+.side-count {
+  margin-left: auto;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--text-mute);
+}
+
+/* Flat connection row (no-active-connection mode) */
+.side-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 12px;
+  text-align: left;
+  color: var(--text-dim);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.side-row:hover { background: var(--surface-hover); color: var(--text); }
+.side-row__meta { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.side-row__name { font-size: var(--fs-ui); color: var(--text); }
+.side-row__sub { font-size: var(--fs-meta); color: var(--text-mute); }
+
+/* Connection-status footer */
+.conn-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+}
+.conn-foot--btn { padding: 10px; }
+.conn-foot--btn .btn { width: 100%; }
+
+.tree__hint { padding: 8px 14px; font-size: var(--fs-body); color: var(--text-mute); }
+
+/* ============================================================
+   Schema tree (within the sidebar)
+   ============================================================ */
+.tree__filter {
+  padding: 4px 10px 8px;
   display: flex;
   align-items: center;
 }
-.tree__list { flex: 1; overflow: auto; padding: 4px 0; }
+.tree__list { flex: 1; overflow: auto; padding: 2px 6px 8px; }
 .tree__empty {
   padding: 24px 16px;
   color: var(--text-dim);
@@ -1500,8 +1595,141 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 }
 
 /* ============================================================
+   Connect screen — prototype split hero + credential form
+   ============================================================ */
+.connect {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+.connect__hero {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+  padding: 48px 56px;
+  border-right: 1px solid var(--border);
+  background:
+    radial-gradient(120% 90% at 0% 0%, var(--accent-bg) 0%, transparent 55%),
+    var(--bg-elev);
+}
+.connect__brand { display: flex; align-items: center; gap: 10px; }
+.connect__brandname { font-size: var(--fs-title); font-weight: 600; letter-spacing: -0.01em; }
+.connect__headline {
+  margin: 0;
+  font-size: 38px;
+  line-height: 1.1;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--text);
+  max-width: 13ch;
+}
+.connect__lede {
+  margin: 0;
+  font-size: var(--fs-ui);
+  line-height: 1.6;
+  color: var(--text-dim);
+  max-width: 46ch;
+}
+.connect__chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+
+.connect__panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 48px;
+  min-width: 0;
+}
+.connect__form {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.connect__formhead { margin-bottom: 2px; }
+.connect__title { margin: 0 0 4px; font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.02em; }
+.connect__row { display: flex; gap: 12px; }
+.connect__grow { flex: 1; min-width: 0; }
+.connect__port { width: 92px; flex: 0 0 92px; }
+.connect__check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-ui);
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+}
+.connect__check input { width: 15px; height: 15px; accent-color: var(--accent); }
+.connect__actions { display: flex; gap: 8px; margin-top: 4px; }
+.connect__actions .btn { flex: 1; }
+
+/* Segmented driver toggle */
+.seg { display: flex; gap: 4px; flex-wrap: wrap; }
+.seg__btn {
+  flex: 1;
+  min-width: 72px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
+  background: var(--surface-elev);
+  color: var(--text-dim);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
+}
+.seg__btn:hover { color: var(--text); border-color: var(--border-strong); }
+.seg__btn--on,
+.seg__btn--on:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* Input with a trailing affix button (password reveal) */
+.input-affix { position: relative; display: flex; }
+.input-affix .input { padding-right: 36px; }
+.input-affix__btn {
+  position: absolute;
+  right: 2px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 30px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mute);
+  border-radius: var(--r-pill);
+}
+.input-affix__btn:hover { color: var(--text); }
+
+/* Brand logo mark (prototype .logo-mark) */
+.logo-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: -0.04em;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-dim) 100%);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset, 0 2px 4px rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
+}
+.logo-mark--lg { width: 30px; height: 30px; border-radius: 8px; font-size: 15px; }
+
+/* ============================================================
    PR #11 a11y-08 + PR #14.5 A11Y-7 + PR #15.5 D-7 — narrow viewport
-   pass. Below 720px we collapse the LeftTree into a slide-out drawer
+   pass. Below 720px we collapse the sidebar into a slide-out drawer
    (controlled by a class on .shell) and stack the explain inspector
    columns. Above 720px nothing changes.
    ============================================================ */
@@ -1511,7 +1739,7 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
   .shell__body {
     grid-template-columns: var(--rail-w) 1fr;
   }
-  .tree {
+  .sidebar {
     position: fixed;
     left: var(--rail-w);
     top: 0;
@@ -1522,9 +1750,12 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
     transition: transform var(--t-norm);
     border-right: 1px solid var(--border);
   }
-  .shell--tree-open .tree {
+  .shell--tree-open .sidebar {
     transform: translateX(0);
   }
+  .connect { grid-template-columns: 1fr; }
+  .connect__hero { padding: 28px 22px; }
+  .connect__headline { font-size: 26px; }
   .center-pane { border-left: 0; }
   .topbar__burger { display: flex; }
   .shell__scrim {
