@@ -496,24 +496,24 @@ button.file-row:hover .file-ic{color:var(--aura-strong)}
    heavy CodeMirror dependency — just a plain textarea that grows to fit. */
 /* v0.2.48: modal overlay was z-index:100 with rgba(0,0,0,.42) — visually
    left the floating topbar peeking through (its sticky stacking context
-   sits at 50 but the translucent backdrop didn't fully hide it). Bumped
-   to z-index:500 and opacity .72 + heavier blur so the editor is a
-   focused-context modal, not a card-over-pane. Card +1 above the back. */
-.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%);z-index:500;animation:auracp-fade-in .12s ease}
-/* Editor back is dimmer and sits below editor-window */
-.editor-back{z-index:598}
+   The sticky topbar uses backdrop-filter which can create a stacking context
+   that wins over lower z-index overlays in some browsers. Using z-index:9000+
+   ensures the overlay always renders above the topbar (z-index:50) regardless
+   of stacking context quirks. */
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%);z-index:9000;animation:auracp-fade-in .12s ease}
+/* Editor overlay inherits from modal-back; editor card sits one step above */
+.editor-back{z-index:9000}
 .modal-card{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
   width:min(960px, calc(100vw - 32px));
   height:min(720px, calc(100dvh - 32px));
   background:var(--surface-0);border:1px solid var(--line);border-radius:14px;
   box-shadow:0 24px 64px rgba(0,0,0,.32);
-  display:flex;flex-direction:column;z-index:501;
+  display:flex;flex-direction:column;z-index:9001;
   animation:auracp-fade-in .14s ease;overflow:hidden}
-/* Editor window sits above the sticky topbar (z-index 50) */
-.editor-window{z-index:600}
-.modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none}
+.editor-window{z-index:9001}
+.modal-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 22px 14px;border-bottom:1px solid var(--line);flex:none;background:var(--surface-1);border-radius:14px 14px 0 0}
 .modal-head h3{margin:0 0 4px;font-size:15.5px;font-weight:600}
-.modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 22px;border-top:1px solid var(--line);font-size:11.5px;color:var(--txt-3);font-family:var(--fs-mono);flex:none}
+.modal-foot{display:flex;justify-content:space-between;align-items:center;padding:10px 22px;border-top:1px solid var(--line);font-size:11.5px;color:var(--txt-3);font-family:var(--fs-mono);flex:none;background:var(--surface-1);border-radius:0 0 14px 14px}
 .editor-area{flex:1;min-height:0;width:100%;padding:18px 22px;border:none;background:var(--surface-0);color:var(--txt);font-family:var(--fs-mono);font-size:13px;line-height:1.55;resize:none;outline:none;tab-size:2;overflow:auto;white-space:pre;overflow-wrap:normal}
 .editor-area:focus{outline:none}
 @keyframes auracp-fade-in{from{opacity:0;transform:scale(.98)}to{opacity:1;transform:scale(1)}}
