@@ -2,6 +2,15 @@
 
 All notable changes to auraCP.
 
+## v0.3.8 — 2026-05-30
+
+Mobile: site-type chooser ("What kind of site?") now shows a 2-column
+card grid on phones (≤640 px) instead of collapsing to a single column.
+Card padding, icon size, and heading size are compacted to fit cleanly at
+that width. Very small phones (≤380 px) drop to 1 column.
+
+The nav is already hidden on mobile (existing behaviour, no change).
+
 ## v0.3.7 — 2026-05-30
 
 Fix: a fresh reinstall failed to create a site user with

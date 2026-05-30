@@ -825,7 +825,12 @@ tr.site-row:hover td:last-child .manage{opacity:1}
   .ph h1{font-size:25px}
   .ph .btn,.ph .btn-primary{align-self:stretch;justify-content:center}
   .stats{grid-template-columns:1fr 1fr;gap:10px}
-  .grid6{grid-template-columns:1fr}
+  .grid6{grid-template-columns:repeat(2,1fr);gap:10px} /* 2-col on mobile */
+  .site-card{padding:16px 14px}
+  .site-card .ico{width:36px;height:36px;margin-bottom:10px;font-size:16px}
+  .site-card h3{font-size:15px}
+  .site-card p{min-height:unset}
+  .site-card .go{margin-top:10px}
   .two{grid-template-columns:1fr}            /* stacked form fields */
   .form-wrap{max-width:100%}
   .toolbar{flex-wrap:wrap}
@@ -839,4 +844,5 @@ tr.site-row:hover td:last-child .manage{opacity:1}
 }
 @media (max-width: 380px){
   .stats{grid-template-columns:1fr}
+  .grid6{grid-template-columns:1fr}   /* single column on very small phones */
 }
