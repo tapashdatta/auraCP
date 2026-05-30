@@ -33,3 +33,5 @@ auracp.db*
 # of the panel source.
 auraDBPrototype.html
 aura-db
+auracpd
+graphify-out
