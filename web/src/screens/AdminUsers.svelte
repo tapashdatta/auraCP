@@ -356,7 +356,28 @@
          per-user permissions haven't been overridden in the user form. -->
     <div class="role-cards fade">
       {#if rolesMsg}<div class="card" style="grid-column:1/-1;padding:12px 16px;background:var(--surface-1)"><span class="mono" style="color:var(--txt)">{rolesMsg}</span></div>{/if}
-      {#each ['ROLE_ADMIN', 'ROLE_SITE_MANAGER', 'ROLE_USER'] as role}
+
+      <!-- Admin: compact locked card — full access is a fixed property of the role, not a tunable. -->
+      <div class="card role-card admin-lock-card">
+        <div class="section-h">
+          <div>
+            <h3><span class="role-chip role-ROLE_ADMIN">{roleLabel['ROLE_ADMIN']}</span></h3>
+            <p>{roleHint['ROLE_ADMIN']}</p>
+          </div>
+        </div>
+        <div class="section-b">
+          <div class="admin-access-row">
+            <div>
+              <span class="admin-access-lbl">Full access — all resources &amp; actions</span>
+              <span class="admin-access-sub">This cannot be restricted</span>
+            </div>
+            <button type="button" role="switch" aria-checked="true" disabled
+                    class="toggle on admin-lock-toggle" title="Admin always has full access"></button>
+          </div>
+        </div>
+      </div>
+
+      {#each ['ROLE_SITE_MANAGER', 'ROLE_USER'] as role}
         <div class="card role-card">
           <div class="section-h">
             <div>
@@ -366,17 +387,15 @@
               </h3>
               <p>{roleHint[role]}</p>
             </div>
-            {#if role !== 'ROLE_ADMIN'}
-              <div style="display:flex;gap:6px;flex-wrap:wrap">
-                {#if roles[role]?.customized}
-                  <button class="btn btn-ghost" style="padding:6px 10px" onclick={() => resetRole(role)} title="Reset to compiled defaults">Reset</button>
-                {/if}
-                <button class="btn btn-primary" style="padding:6px 12px" onclick={() => saveRole(role)}
-                        disabled={!rolesDirty[role] || rolesBusy[role]}>
-                  {rolesBusy[role] ? 'Saving…' : 'Save'}
-                </button>
-              </div>
-            {/if}
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              {#if roles[role]?.customized}
+                <button class="btn btn-ghost" style="padding:6px 10px" onclick={() => resetRole(role)} title="Reset to compiled defaults">Reset</button>
+              {/if}
+              <button class="btn btn-primary" style="padding:6px 12px" onclick={() => saveRole(role)}
+                      disabled={!rolesDirty[role] || rolesBusy[role]}>
+                {rolesBusy[role] ? 'Saving…' : 'Save'}
+              </button>
+            </div>
           </div>
           <div class="section-b" style="padding-top:6px">
             <table class="perm-grid">
@@ -387,22 +406,15 @@
                   <tr><td><span class="mono">{r}</span></td>
                     {#each ACT as a}
                       <td style="text-align:center;vertical-align:middle">
-                        {#if role === 'ROLE_ADMIN'}
-                          <span class="perm-dot on" aria-label="always allowed"></span>
-                        {:else}
-                          <button type="button" role="switch" aria-checked={!!p[a]} aria-label="{r} {a}"
-                                  class="toggle toggle-sm" class:on={!!p[a]}
-                                  onclick={() => toggleRolePerm(role, r, a)}></button>
-                        {/if}
+                        <button type="button" role="switch" aria-checked={!!p[a]} aria-label="{r} {a}"
+                                class="toggle toggle-sm" class:on={!!p[a]}
+                                onclick={() => toggleRolePerm(role, r, a)}></button>
                       </td>
                     {/each}
                   </tr>
                 {/each}
               </tbody>
             </table>
-            {#if role === 'ROLE_ADMIN'}
-              <p style="margin:10px 6px 0;font-size:12px;color:var(--txt-3)">Admins always have full access — the matrix is shown for reference, not for editing.</p>
-            {/if}
           </div>
         </div>
       {/each}
@@ -473,4 +485,12 @@
   .perm-dot.on{background:var(--up);border-color:var(--up)}
   /* v0.2.21: "customised" pill next to a role title — signals admin override. */
   .custom-pill{display:inline-flex;align-items:center;margin-left:8px;padding:2px 8px;border-radius:var(--radius-pill);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;background:color-mix(in srgb, var(--warn) 16%, var(--surface-1));color:var(--warn);border:1px solid color-mix(in srgb, var(--warn) 32%, transparent)}
+
+  /* Admin locked card — compact, no permission matrix. */
+  .admin-lock-card{align-self:start}
+  .admin-access-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:2px 0}
+  .admin-access-lbl{display:block;font-size:13.5px;font-weight:500;color:var(--txt)}
+  .admin-access-sub{display:block;font-size:11.5px;color:var(--txt-3);margin-top:2px}
+  .admin-lock-toggle{cursor:not-allowed !important}
+  .admin-lock-toggle:disabled{opacity:1}
 </style>

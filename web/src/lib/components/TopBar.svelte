@@ -89,9 +89,23 @@
   {#if host}<div class="instance-pill"><span class="sdot s-up"></span><span class="mono">{host}</span></div>{/if}
   <button class="icon-btn" onclick={flip} title="Toggle theme" aria-label="Toggle theme">
     {#if theme === 'dark'}
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M5 5l1.5 1.5M17.5 17.5L19 19M2 12h2M20 12h2M5 19l1.5-1.5M17.5 6.5L19 5"/></svg>
+      <!-- Switch to light: sun with rounded rays -->
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="4.5" fill="currentColor" stroke="none" opacity=".9"/>
+        <line x1="12" y1="2"   x2="12" y2="5"/>
+        <line x1="12" y1="19"  x2="12" y2="22"/>
+        <line x1="4.22" y1="4.22"  x2="6.34" y2="6.34"/>
+        <line x1="17.66" y1="17.66" x2="19.78" y2="19.78"/>
+        <line x1="2"  y1="12"  x2="5"  y2="12"/>
+        <line x1="19" y1="12"  x2="22" y2="12"/>
+        <line x1="4.22" y1="19.78" x2="6.34" y2="17.66"/>
+        <line x1="17.66" y1="6.34"  x2="19.78" y2="4.22"/>
+      </svg>
     {:else}
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      <!-- Switch to dark: crescent moon -->
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none" opacity=".85">
+        <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+      </svg>
     {/if}
   </button>
   <div class="avatar-wrap">
