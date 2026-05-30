@@ -713,27 +713,38 @@
 
   // ─── in-browser text editor ────────────────────────────────────────────
   let editor = $state({ open: false, name: '', sub: '', content: '', original: '', busy: false, err: '' })
-  // Draggable editor window position (null = centered default)
-  let editorPos = $state(null) // { x, y } in px from top-left
-  let editorDrag = $state(null) // { startX, startY, origX, origY }
-  let pathEditMode = $state(false) // crumb home clicked → show editable path input
+  // Draggable editor window
+  let editorPos = $state(null)    // { x, y } fixed px from viewport top-left; null = CSS-centered
+  let editorDragging = $state(false)
+  let pathEditMode = $state(false)
   let pathEditVal = $state('')
 
   function startEditorDrag(e) {
     if (e.button !== 0) return
-    const el = e.currentTarget.closest('.modal-card')
-    if (!el) return
-    const rect = el.getBoundingClientRect()
-    editorDrag = { startX: e.clientX, startY: e.clientY, origX: rect.left, origY: rect.top }
     e.preventDefault()
+    // Find current pixel position of the card (works whether centered via CSS
+    // transform or already positioned via left/top).
+    const card = e.currentTarget.closest('.editor-window')
+    if (!card) return
+    const rect = card.getBoundingClientRect()
+    const startX = e.clientX, startY = e.clientY
+    const origX = rect.left,  origY = rect.top
+    editorDragging = true
+
+    function onMove(ev) {
+      editorPos = {
+        x: Math.max(0, Math.min(origX + ev.clientX - startX, window.innerWidth  - rect.width)),
+        y: Math.max(0, Math.min(origY + ev.clientY - startY, window.innerHeight - rect.height)),
+      }
+    }
+    function onUp() {
+      editorDragging = false
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup',   onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup',   onUp)
   }
-  function onEditorMouseMove(e) {
-    if (!editorDrag) return
-    const dx = e.clientX - editorDrag.startX
-    const dy = e.clientY - editorDrag.startY
-    editorPos = { x: editorDrag.origX + dx, y: editorDrag.origY + dy }
-  }
-  function onEditorMouseUp() { editorDrag = null }
 
   function openPathEdit() {
     pathEditMode = true
@@ -1641,12 +1652,12 @@
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <div class="modal-card editor-window" role="dialog" aria-label="Edit {editor.name}"
            style={editorPos ? `left:${editorPos.x}px;top:${editorPos.y}px;transform:none` : ''}
-           onmousemove={onEditorMouseMove} onmouseup={onEditorMouseUp}>
+           class:dragging={editorDragging}>
         <!-- Drag handle: the whole header row is the drag target -->
         <!-- svelte-ignore a11y_no_static_element_interactions -->
         <div class="modal-head editor-drag-handle"
              onmousedown={startEditorDrag}
-             style="cursor:{editorDrag ? 'grabbing' : 'grab'}">
+             style="cursor:{editorDragging ? 'grabbing' : 'grab'}">
           <div style="min-width:0">
             <h3 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.name}</h3>
             <p class="mono" style="margin:0;color:var(--txt-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{editor.sub}</p>
