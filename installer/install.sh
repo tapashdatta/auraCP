@@ -33,7 +33,7 @@ set -euo pipefail
 # ──────────────────────────────────────────────────────────────────────────
 # config & defaults
 # ──────────────────────────────────────────────────────────────────────────
-AURACP_VERSION="0.3.12"
+AURACP_VERSION="0.3.13"
 PANEL_PORT="${AURACP_PORT:-8443}"
 PANEL_DOMAIN="${AURACP_PANEL_DOMAIN:-}"   # optional: front the panel at this domain
 NODE_MAJOR="24"                         # Node 24 LTS baseline
@@ -1025,7 +1025,11 @@ install_mongodb() {
       *)      repo_cn="${OS_CODENAME}" ;;
     esac
   fi
-  echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${repo_cn}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
+  # Pin to the system's native arch only. Specifying arch=amd64,arm64 causes apt
+  # to fetch package indices for both architectures; on AWS arm64 hosts Debian 13
+  # often has foreign-arch amd64 registered, which makes apt try (and fail) to
+  # resolve amd64 packages whose deps (libcurl4, etc.) were removed in trixie.
+  echo "deb [ arch=${ARCH} signed-by=/usr/share/keyrings/mongodb-server-${MONGODB_VERSION}.gpg ] https://repo.mongodb.org/apt/${repo_os} ${repo_cn}/mongodb-org/${MONGODB_VERSION} ${repo_comp}" \
     | run "tee /etc/apt/sources.list.d/mongodb-org-${MONGODB_VERSION}.list >/dev/null"
   wait_apt_lock
   run "apt-get update -y"
