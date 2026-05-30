@@ -272,12 +272,13 @@
   .activity-card .empty{border-top:none}
 
   .feed{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:14px}
-  .feed li{display:flex;gap:11px;align-items:flex-start;font-size:12.5px}
+  .feed li{display:flex;gap:11px;align-items:center;font-size:12.5px}
   .feed-dot{width:7px;height:7px;border-radius:50%;background:var(--aura);box-shadow:0 0 0 3px var(--aura-glow);flex:none;margin-top:5px}
-  .feed-body{min-width:0;flex:1}
-  .feed-action{font-weight:600;color:var(--txt);font-size:12.5px}
-  .feed-target{color:var(--txt-2);font-size:12px;font-family:var(--fs-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:1px}
-  .feed-meta{font-size:11px;color:var(--txt-3);margin-top:3px}
+  /* Single-line row: action · target (flex, truncates) · meta (pushed right). */
+  .feed-body{min-width:0;flex:1;display:flex;align-items:baseline;gap:8px}
+  .feed-action{font-weight:600;color:var(--txt);font-size:12.5px;flex:none}
+  .feed-target{color:var(--txt-2);font-size:12px;font-family:var(--fs-mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  .feed-meta{font-size:11px;color:var(--txt-3);margin-left:auto;flex:none;white-space:nowrap}
 
   .empty{text-align:center;padding:32px 16px;color:var(--txt-3)}
   .hint{color:var(--txt-3);font-size:12.5px}
