@@ -11,8 +11,7 @@
 {{bot_map}}
 
 server {
-    listen 80;
-    listen [::]:80;
+    {{http_listen}}
     {{ssl_listen}}
 
     {{server_name}}

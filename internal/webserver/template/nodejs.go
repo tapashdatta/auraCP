@@ -12,8 +12,9 @@ func Nodejs() *Template {
 			processor.BotMap,
 			processor.ServerName,
 			processor.Root,
+			processor.HttpListen, // omit listen 80 from main block when force_https owns :80
 			processor.SslListen,
-			processor.ForceHttps, // v0.2.57: conditional :80 → :443 301 redirect
+			processor.ForceHttps, // dedicated redirect server block, ACME-safe
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,

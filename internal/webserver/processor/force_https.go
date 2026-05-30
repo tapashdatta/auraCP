@@ -1,36 +1,59 @@
-// {{force_https}} → an `if ($scheme = "http")` 301 redirect block that
-// makes nginx force every plain-HTTP request to its HTTPS counterpart.
+// {{force_https}} → emits a dedicated HTTP-only server block that redirects
+// all plain-HTTP traffic to HTTPS, EXCEPT /.well-known/acme-challenge/ which
+// is served directly so LE HTTP-01 renewals work even with force_https on.
 //
 // Emitted ONLY when BOTH conditions hold:
 //   1. ctx.CertPath != ""       — a cert is actually issued. Redirecting
 //                                 to HTTPS before the cert lands would
-//                                 trap visitors in a TLS handshake
-//                                 failure loop.
-//   2. ctx.ForceHttps == true   — operator has the toggle on in
-//                                 Settings → General.
+//                                 trap visitors in a TLS handshake failure.
+//   2. ctx.ForceHttps == true   — operator has the toggle on in Settings.
 //
-// When either condition is false the placeholder is replaced with the
-// empty string, leaving the site serving both schemes (same vhost,
-// `listen 80;` + `listen 443 ssl;`).
+// Why a separate server block instead of `if ($scheme = "http")`:
+// nginx's `if` runs in the REWRITE phase, which fires BEFORE location
+// matching. An `if ($scheme = "http") { return 301; }` at server scope
+// therefore intercepts ACME challenge requests too — the
+// `location ^~ /.well-known/acme-challenge/` block never gets a chance
+// to run. The curl symptom is: GET /.well-known/acme-challenge/<token>
+// → 301 → https://domain/... → LE validation fails with 404.
 //
-// Why `if ($scheme)` and not a separate `server { listen 80; return
-// 301 ...; }` block: keeping a single server block per site is the
-// design invariant of the v0.2.52 template system — one file, one
-// vhost, one source of truth. The if-block sits next to the ACME
-// challenge location, which itself short-circuits the redirect on the
-// LE renewal path (location ^~ /.well-known/acme-challenge/ runs
-// before any server-scope `if`).
+// A standalone `server { listen 80; }` block with a dedicated ACME
+// location is the canonical nginx pattern for this:
+//   location ^~ /.well-known/acme-challenge/ { serve file }
+//   location /                               { return 301 https://... }
+// Location matching runs in the CONTENT phase so the more-specific
+// ACME prefix wins cleanly.
+//
+// The main server block (listen 80 + 443) stays in place so that
+// plain-HTTP requests still work during the window between site creation
+// and first cert issuance.
 package processor
 
-const phForceHttps = "{{force_https}}"
+import "fmt"
 
-const forceHttpsBlock = `if ($scheme = "http") {
-        return 301 https://$host$request_uri;
-    }`
+const phForceHttps = "{{force_https}}"
 
 func ForceHttps(in string, ctx *SiteContext) string {
 	if ctx.CertPath == "" || !ctx.ForceHttps {
 		return Replace(in, phForceHttps, "")
 	}
-	return Replace(in, phForceHttps, forceHttpsBlock)
+	block := fmt.Sprintf(`
+# Force HTTPS — separate server block so the ACME challenge location
+# is matched in the content phase (before the redirect fires).
+server {
+    listen 80;
+    listen [::]:80;
+    server_name %s;
+
+    # ACME HTTP-01 — must be reachable on :80 even with force_https on.
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/lib/auracp/acme/;
+        default_type "text/plain";
+        try_files $uri =404;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}`, ctx.Domain)
+	return Replace(in, phForceHttps, block)
 }

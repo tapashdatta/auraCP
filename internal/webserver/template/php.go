@@ -20,8 +20,9 @@ func Php() *Template {
 			processor.BotMap, // before server{} block
 			processor.ServerName,
 			processor.Root,
-			processor.SslListen,  // v0.2.56: conditional `listen 443 ssl;` block
-			processor.ForceHttps, // v0.2.57: conditional :80 → :443 301 redirect
+			processor.HttpListen,  // omit listen 80 from main block when force_https owns :80
+			processor.SslListen,   // v0.2.56: conditional `listen 443 ssl;` block
+			processor.ForceHttps,  // dedicated redirect server block, ACME-safe
 			processor.SslCertificate,
 			processor.SslCertificateKey,
 			processor.NginxAccessLog,
