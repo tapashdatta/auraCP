@@ -16,10 +16,22 @@
   /** @type {number} */
   let cursor = $state(0)
 
+  // Adaptive placement: open downward from a top-half anchor, upward from
+  // a bottom-half one (so the rail's bottom-left avatar menu rises instead
+  // of clipping off-screen); align to the anchor's near edge horizontally.
+  // .dropdown is position:fixed, so all offsets are viewport-relative.
   $effect(() => {
     if (open && anchor) {
       const r = anchor.getBoundingClientRect()
-      style = `top:${Math.round(r.bottom + 4)}px;right:${Math.round(window.innerWidth - r.right)}px;`
+      const vw = window.innerWidth
+      const vh = window.innerHeight
+      const vert = r.bottom > vh / 2
+        ? `bottom:${Math.round(vh - r.top + 4)}px;`
+        : `top:${Math.round(r.bottom + 4)}px;`
+      const horz = r.left < vw / 2
+        ? `left:${Math.round(r.left)}px;`
+        : `right:${Math.round(vw - r.right)}px;`
+      style = vert + horz
     }
   })
 

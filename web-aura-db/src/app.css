@@ -65,6 +65,7 @@
   /* Layout constants */
   --topnav-h:          48px;
   --statusbar-h:       24px;
+  --rail-w:            56px;
   --tree-w:            264px;
   --tree-row-h:        26px;
   --table-row-h:       28px;
@@ -209,23 +210,27 @@ summary:focus-visible,
    ============================================================ */
 .shell {
   display: grid;
-  grid-template-rows: var(--topnav-h) 1fr var(--statusbar-h);
+  grid-template-rows: 1fr var(--statusbar-h);
   height: 100vh;
   width: 100vw;
   overflow: hidden;
 }
 
+/* Studio shell: icon rail | context sidebar | main column. */
 .shell__body {
   display: grid;
-  grid-template-columns: var(--tree-w) 1fr;
+  grid-template-columns: var(--rail-w) var(--tree-w) 1fr;
   overflow: hidden;
+  min-height: 0;
 }
 
+/* Main column: breadcrumb topbar | workspace tab strip | route outlet. */
 .center-pane {
   display: grid;
-  grid-template-rows: var(--tab-h) 1fr;
+  grid-template-rows: var(--topnav-h) var(--tab-h) 1fr;
   overflow: hidden;
   border-left: 1px solid var(--border);
+  min-height: 0;
 }
 
 .route-outlet {
@@ -235,58 +240,169 @@ summary:focus-visible,
 }
 
 /* ============================================================
-   TopNav
+   Icon rail (primary nav) — vertical, prototype "Studio" layout
    ============================================================ */
-.topnav {
+.rail {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  height: var(--topnav-h);
-  padding: 0 12px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--border);
-  gap: 16px;
+  width: var(--rail-w);
+  padding: 12px 0;
+  gap: 4px;
+  background: var(--bg-elev);
+  border-right: 1px solid var(--border);
 }
-.topnav__brand {
-  font-weight: 600;
-  font-size: var(--fs-ui);
-  color: var(--text);
-  letter-spacing: 0.02em;
-}
-.topnav__nav {
+.rail__logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   display: flex;
-  gap: 0;
-  margin-left: 12px;
-}
-.topnav__btn {
-  height: 32px;
-  padding: 0 12px;
-  font-size: var(--fs-ui);
-  font-weight: 500;
-  color: var(--text-dim);
-  border-radius: 4px 4px 0 0;
-  display: inline-flex;
-  align-items: center;
-  border-bottom: 1px solid transparent;
-  transition: color var(--t-fast), border-color var(--t-fast);
-}
-.topnav__btn:hover { color: var(--text); }
-.topnav__btn--active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-.topnav__spacer { flex: 1; }
-.topnav__user {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: var(--surface-elev);
-  border: 1px solid var(--border);
-  color: var(--text);
-  font-size: var(--fs-meta);
-  font-weight: 600;
-  display: inline-flex;
   align-items: center;
   justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+}
+.rail__divider {
+  width: 24px;
+  height: 1px;
+  background: var(--border);
+  margin: 10px 0 6px;
+}
+.rail__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.rail__btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.rail__btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.rail__btn--active,
+.rail__btn--active:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.rail__spacer { flex: 1; }
+.rail__avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 11px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+}
+.rail__logo:focus-visible,
+.rail__btn:focus-visible,
+.rail__avatar:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Breadcrumb topbar — top of the main column
+   ============================================================ */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--topnav-h);
+  padding: 0 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.topbar__burger {
+  display: none; /* shown < 720px */
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-input);
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.topbar__burger:hover { background: var(--surface-hover); color: var(--text); }
+.topbar__navbtn {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-mute);
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.topbar__navbtn:hover { background: var(--surface-hover); color: var(--text); }
+.topbar__sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+}
+.topbar__crumbs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+.crumb {
+  font-size: var(--fs-ui);
+  color: var(--text-dim);
+  white-space: nowrap;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color var(--t-fast);
+}
+.crumb--link:hover { color: var(--accent); }
+.crumb--current {
+  color: var(--text);
+  font-weight: 600;
+}
+.crumb__sep {
+  color: var(--text-mute);
+  font-size: var(--fs-ui);
+}
+.topbar__spacer { flex: 1; }
+.topbar__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-elev);
+  border: 1px solid var(--border);
+  font-size: var(--fs-meta);
+  color: var(--text-dim);
+  text-transform: capitalize;
+}
+.topbar__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* Mobile drawer scrim (only mounted while .shell--tree-open). */
+.shell__scrim {
+  display: none;
 }
 
 /* ============================================================
@@ -677,10 +793,10 @@ summary:focus-visible,
    with a shadow; the dropdown now uses a slightly stronger border for
    separation. */
 .dropdown {
-  position: absolute;
+  position: fixed;
   background: var(--surface-elev);
   border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border-radius: var(--r-input);
   padding: 4px 0;
   z-index: 40;
   min-width: 160px;
@@ -1368,18 +1484,17 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
    columns. Above 720px nothing changes.
    ============================================================ */
 @media (max-width: 720px) {
-  :root {
-    --tree-w: 0px;
-  }
+  /* The 56px icon rail stays pinned; only the context sidebar collapses
+     into a slide-out drawer that overlays the main column. */
   .shell__body {
-    grid-template-columns: 1fr;
+    grid-template-columns: var(--rail-w) 1fr;
   }
   .tree {
     position: fixed;
-    left: 0;
-    top: var(--topnav-h);
+    left: var(--rail-w);
+    top: 0;
     bottom: var(--statusbar-h);
-    width: 280px;
+    width: 264px;
     z-index: 30;
     transform: translateX(-100%);
     transition: transform var(--t-norm);
@@ -1389,8 +1504,15 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
     transform: translateX(0);
   }
   .center-pane { border-left: 0; }
-  .topnav__nav { margin-left: 0; }
-  .topnav__btn { padding: 0 8px; font-size: var(--fs-body); }
+  .topbar__burger { display: flex; }
+  .shell__scrim {
+    display: block;
+    position: fixed;
+    inset: 0 0 var(--statusbar-h) var(--rail-w);
+    z-index: 29;
+    background: rgba(0, 0, 0, 0.4);
+    border: 0;
+  }
   .pane { padding: 12px; }
   .explain-inspector__body { grid-template-columns: 1fr; }
   .explain-inspector__right { border-top: 1px solid var(--border); }
