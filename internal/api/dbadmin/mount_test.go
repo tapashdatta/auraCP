@@ -38,6 +38,7 @@ func TestMount_RoutesUnderPrefix(t *testing.T) {
 	// Mount the engine.
 	cfg := defaultConfig()
 	cfg.AuditPath = filepath.Join(dir, "aura-db", "audit.ndjson")
+	cfg.SavedDBPath = filepath.Join(dir, "aura-db", "saved.db")
 	restore := SetSigningKeyPathForTest(filepath.Join(dir, "aura-db-audit.key"))
 	defer restore()
 	engine, closer, err := Mount(mux, st, box, func(r *http.Request) (api.IdentitySummary, bool) {

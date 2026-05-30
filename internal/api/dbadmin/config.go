@@ -61,6 +61,12 @@ type Config struct {
 	// to validate the bounded-close contract; ops can dial it up if a
 	// graceful drain needs more time on a busy node.
 	ShutdownTimeout time.Duration
+
+	// SavedDBPath is the SQLite file backing the saved-queries store
+	// (v0.3.2-A). When empty, defaultConfig() supplies the panel's
+	// /var/lib/auracp/aura-db/saved.db path so saved queries persist
+	// across panel restarts.
+	SavedDBPath string
 }
 
 // defaultConfig returns the integration-package defaults. Note that
@@ -69,7 +75,8 @@ type Config struct {
 // the engine (AuditPath) or where we want a clear panel-side opinion.
 func defaultConfig() Config {
 	return Config{
-		AuditPath: "/var/lib/auracp/aura-db/audit.ndjson",
+		AuditPath:   "/var/lib/auracp/aura-db/audit.ndjson",
+		SavedDBPath: "/var/lib/auracp/aura-db/saved.db",
 	}
 }
 
@@ -127,6 +134,9 @@ func LoadFromStore(st *store.Store) Config {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.SessionIdleMin = n
 		}
+	}
+	if v, ok := st.GetSetting("aura_db_saved_db_path"); ok && v != "" {
+		c.SavedDBPath = v
 	}
 	return c
 }

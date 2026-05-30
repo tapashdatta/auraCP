@@ -50,6 +50,11 @@ type StorageConfig struct {
 	DBPath        string `yaml:"db_path"`
 	AuditLogPath  string `yaml:"audit_log_path"`
 	HistoryDBPath string `yaml:"history_db_path"`
+	// SavedDBPath is the SQLite file for the saved-queries store.
+	// v0.3.2-A introduces this; when empty the bootstrap reuses
+	// HistoryDBPath (both stores cohabit one file without table
+	// collision).
+	SavedDBPath string `yaml:"saved_db_path"`
 }
 
 // KEKConfig points to the key encryption key file.
@@ -190,6 +195,12 @@ func DefaultConfig() Config {
 			DBPath:        "/var/lib/aura-db/aura.db",
 			AuditLogPath:  "/var/lib/aura-db/audit.log",
 			HistoryDBPath: "/var/lib/aura-db/history.db",
+			// SavedDBPath defaults to empty; Bootstrap reuses
+			// HistoryDBPath as the saved-queries DSN (both stores
+			// cohabit one SQLite file without table collision).
+			// Operators who want them split set SavedDBPath
+			// explicitly in their YAML.
+			SavedDBPath: "",
 		},
 		KEK: KEKConfig{File: DefaultKEKPath},
 		Session: SessionConfig{
@@ -355,6 +366,11 @@ func (c *Config) Validate() error {
 		if p != ":memory:" && !filepath.IsAbs(p) {
 			return fmt.Errorf("standalone: storage path %q must be absolute", p)
 		}
+	}
+	// SavedDBPath is optional (empty → reuse HistoryDBPath). When set,
+	// apply the same absolute-or-:memory: rule.
+	if c.Storage.SavedDBPath != "" && c.Storage.SavedDBPath != ":memory:" && !filepath.IsAbs(c.Storage.SavedDBPath) {
+		return fmt.Errorf("standalone: storage path %q must be absolute", c.Storage.SavedDBPath)
 	}
 	if c.KEK.File != "" && !filepath.IsAbs(c.KEK.File) {
 		return fmt.Errorf("standalone: kek.file %q must be absolute", c.KEK.File)

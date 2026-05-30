@@ -5,6 +5,7 @@ import (
 
 	"github.com/auracp/auracp/pkg/dbadmin"
 	"github.com/auracp/auracp/pkg/dbadmin/history"
+	"github.com/auracp/auracp/pkg/dbadmin/saved"
 	"github.com/gorilla/websocket"
 )
 
@@ -16,7 +17,7 @@ type server struct {
 
 	limiter        *limiter
 	upgrader       websocket.Upgrader
-	saved          *savedQueriesStore
+	saved          savedQueryStore
 	historyStore   history.Store
 	allowedOrigins []string
 	// allowLoopbackEmptyOrigin opts the embedder into accepting WS
@@ -89,6 +90,13 @@ type Options struct {
 	// CSRFHeaderName overrides the request header consulted by the
 	// CSRF gate. Empty falls back to DefaultCSRFHeaderName.
 	CSRFHeaderName string
+
+	// SavedStore is the durable saved-queries persistence backend.
+	// When nil, NewWithOptions falls back to the in-memory adapter
+	// (legacy, lost on process restart). v0.3.2-A introduces this
+	// hook so the standalone bootstrap and the panel mount can wire
+	// saved.Open(dsn) and have saved queries survive daemon restarts.
+	SavedStore saved.Store
 }
 
 // New constructs the HTTP wire surface for an engine. The returned
@@ -114,10 +122,16 @@ func NewWithOptions(e *dbadmin.Engine, opts Options) http.Handler {
 	if headerName == "" {
 		headerName = DefaultCSRFHeaderName
 	}
+	var savedAdapter savedQueryStore
+	if opts.SavedStore != nil {
+		savedAdapter = savedStoreAdapter{store: opts.SavedStore}
+	} else {
+		savedAdapter = newSavedQueriesStore()
+	}
 	s := &server{
 		engine:                   e,
 		limiter:                  newLimiter(),
-		saved:                    newSavedQueriesStore(),
+		saved:                    savedAdapter,
 		allowedOrigins:           opts.AllowedOrigins,
 		allowLoopbackEmptyOrigin: opts.AllowLoopbackEmptyOrigin,
 		csrfDisabled:             opts.CSRFDisabled,

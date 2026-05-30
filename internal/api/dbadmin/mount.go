@@ -3,14 +3,19 @@ package dbadmin
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/auracp/auracp/internal/secret"
 	"github.com/auracp/auracp/internal/store"
 	"github.com/auracp/auracp/pkg/dbadmin"
 	"github.com/auracp/auracp/pkg/dbadmin/httpapi"
+	"github.com/auracp/auracp/pkg/dbadmin/saved"
 )
 
 // Panel CSRF identity. Must mirror internal/api/middleware.go's
@@ -98,6 +103,32 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 		return nil, nil, err
 	}
 
+	// v0.3.2-A: durable saved-queries store. Path comes from the
+	// panel's typed Config (defaultConfig supplies the canonical
+	// /var/lib/auracp/aura-db/saved.db). The store is owned by the
+	// mountCloser so shutdown closes it cleanly. We MkdirAll the
+	// parent the same way the audit sink does so a first-boot panel
+	// without the /var/lib/auracp/aura-db directory still comes up.
+	savedPath := cfg.SavedDBPath
+	if savedPath == "" {
+		savedPath = "/var/lib/auracp/aura-db/saved.db"
+	}
+	if savedPath != ":memory:" && !isMemoryFileDSN(savedPath) {
+		if err := os.MkdirAll(filepath.Dir(savedPath), 0o750); err != nil {
+			_ = engine.Shutdown(context.Background())
+			_ = auditImpl.Close()
+			stepUp.stop()
+			return nil, nil, fmt.Errorf("dbadmin: create saved store parent dir: %w", err)
+		}
+	}
+	savedStore, err := saved.Open(context.Background(), savedPath)
+	if err != nil {
+		_ = engine.Shutdown(context.Background())
+		_ = auditImpl.Close()
+		stepUp.stop()
+		return nil, nil, fmt.Errorf("dbadmin: open saved store: %w", err)
+	}
+
 	// Mount under /api/dbadmin/. The engine's handler emits routes
 	// relative to its mount point (StripPrefix peels the panel prefix
 	// before dispatch). Same-origin only: AllowedOrigins is left nil so
@@ -111,6 +142,7 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 	handler := httpapi.NewWithOptions(engine, httpapi.Options{
 		CSRFCookieName: PanelCSRFCookieName,
 		CSRFHeaderName: PanelCSRFHeaderName,
+		SavedStore:     savedStore,
 	})
 	// FIX-INT-9: wrap with the request-id middleware so every request
 	// flowing into /api/dbadmin/* gets a correlation id available to
@@ -148,8 +180,23 @@ func Mount(mux *http.ServeMux, st *store.Store, sec *secret.Box, currentFn Curre
 		audit:           auditImpl,
 		stepUp:          stepUp,
 		engine:          engine,
+		saved:           savedStore,
 		shutdownTimeout: timeout,
 	}, nil
+}
+
+// isMemoryFileDSN sniffs the modernc.org/sqlite "file::memory:?…"
+// shared-cache URI form so tests can pin the saved store to RAM by
+// using a "file::memory:?cache=shared" DSN. Used by Mount to decide
+// whether to MkdirAll the parent directory.
+func isMemoryFileDSN(dsn string) bool {
+	if strings.HasPrefix(dsn, "file::memory:") {
+		return true
+	}
+	if strings.HasPrefix(dsn, "file:") && strings.Contains(dsn, "mode=memory") {
+		return true
+	}
+	return false
 }
 
 // readyzHandler answers /api/dbadmin/readyz. Ready means: (1) the
@@ -208,6 +255,7 @@ type mountCloser struct {
 	audit           *panelAudit
 	stepUp          *stepUpStore
 	engine          *dbadmin.Engine
+	saved           saved.Store
 	shutdownTimeout time.Duration
 }
 
@@ -258,6 +306,9 @@ func (c *mountCloser) Close() error {
 	defer cancel()
 	_ = c.engine.Shutdown(ctx)
 	c.stepUp.stop()
+	if c.saved != nil {
+		_ = c.saved.Close()
+	}
 	return c.audit.Close()
 }
 

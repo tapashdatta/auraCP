@@ -74,7 +74,12 @@ func runServe(g globalFlags, args []string) error {
 	}
 	defer removePIDFile(pidPath)
 
-	handler := httpapi.New(app.Engine)
+	// v0.3.2-A: wire the durable saved-queries store so SQL Editor
+	// saves survive daemon restarts. Bootstrap opened it at the path
+	// declared in cfg.Storage.SavedDBPath (or HistoryDBPath as fallback).
+	handler := httpapi.NewWithOptions(app.Engine, httpapi.Options{
+		SavedStore: app.Saved,
+	})
 	handler = withRequestID(handler)
 	handler = withAccessLog(handler, app.Logger)
 

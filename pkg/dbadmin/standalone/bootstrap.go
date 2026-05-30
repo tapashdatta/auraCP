@@ -12,6 +12,7 @@ import (
 
 	"github.com/auracp/auracp/pkg/dbadmin"
 	"github.com/auracp/auracp/pkg/dbadmin/history"
+	"github.com/auracp/auracp/pkg/dbadmin/saved"
 )
 
 // Standalone is the fully wired engine + dependencies. Returned by
@@ -23,6 +24,7 @@ type Standalone struct {
 	Conns     *Connections
 	Audit     *FileAuditSink
 	History   history.Store
+	Saved     saved.Store
 	Store     *Store
 	KEK       *KEK
 	Config    Config
@@ -43,6 +45,9 @@ func (s *Standalone) Close() error {
 	}
 	if s.History != nil {
 		report(s.History.Close())
+	}
+	if s.Saved != nil {
+		report(s.Saved.Close())
 	}
 	if s.Store != nil {
 		report(s.Store.Close())
@@ -132,6 +137,22 @@ func Bootstrap(ctx context.Context, cfg Config) (*Standalone, error) {
 	}
 	out.History = hist
 
+	// Saved queries (v0.3.2-A): durable per-(connection, owner)
+	// store. When SavedDBPath is empty the bootstrap shares the
+	// history DB path (single file holds both tables — they don't
+	// collide). The empty-DSN guard inside saved.Open rejects
+	// invalid configs explicitly.
+	savedPath := cfg.Storage.SavedDBPath
+	if savedPath == "" {
+		savedPath = cfg.Storage.HistoryDBPath
+	}
+	sav, err := saved.Open(ctx, savedPath)
+	if err != nil {
+		out.cleanupOnError()
+		return nil, fmt.Errorf("standalone: open saved: %w", err)
+	}
+	out.Saved = sav
+
 	// Store (users/sessions/conns/lockouts)
 	store, err := OpenStore(ctx, cfg.Storage.DBPath)
 	if err != nil {
@@ -169,6 +190,9 @@ func (s *Standalone) cleanupOnError() {
 	}
 	if s.History != nil {
 		_ = s.History.Close()
+	}
+	if s.Saved != nil {
+		_ = s.Saved.Close()
 	}
 	if s.Store != nil {
 		_ = s.Store.Close()

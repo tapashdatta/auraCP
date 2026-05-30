@@ -159,6 +159,7 @@ func mountForProbeWithEngine(t *testing.T) probeBundle {
 
 	cfg := defaultConfig()
 	cfg.AuditPath = filepath.Join(dir, "aura-db", "audit.ndjson")
+	cfg.SavedDBPath = filepath.Join(dir, "aura-db", "saved.db")
 
 	mux := http.NewServeMux()
 	engine, closer, err := Mount(mux, st, box, func(*http.Request) (api.IdentitySummary, bool) {

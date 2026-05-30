@@ -74,9 +74,13 @@ type patchHistoryRequest struct {
 }
 
 type savedQueryInput struct {
-	Name      string   `json:"name"`
-	Statement string   `json:"statement"`
-	Tags      []string `json:"tags,omitempty"`
+	Name        string   `json:"name"`
+	Statement   string   `json:"statement"`
+	Description string   `json:"description,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	// Starred is optional at create time. The UI seeds new rows
+	// unstarred; the toggle is a separate POST .../star endpoint.
+	Starred bool `json:"starred,omitempty"`
 }
 
 // classifyRequest drives /sql/classify and /connections/{id}/classify.
@@ -370,11 +374,14 @@ type forbiddenMatchDTO struct {
 }
 
 type savedQueryDTO struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Statement string    `json:"statement"`
-	Tags      []string  `json:"tags"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Statement   string    `json:"statement"`
+	Description string    `json:"description"`
+	Tags        []string  `json:"tags"`
+	Starred     bool      `json:"starred"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type importResponse struct {

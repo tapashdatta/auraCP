@@ -578,6 +578,38 @@
     }
   }
 
+  // v0.3.2-A: star / unstar a saved query. Optimistic — flips the
+  // local flag, persists via Star toggle (re-save with starred=!cur),
+  // refreshes on success. Star is currently expressed by re-creating
+  // the saved row with starred=true; the server's Update path lives
+  // behind the saved.Store interface but a dedicated star endpoint
+  // isn't wired in the HTTP API yet. The optimistic flip keeps the
+  // sidebar feeling responsive even when the network round-trip is
+  // slow; on failure we refresh from the server to drop the stale flag.
+  async function toggleStar(s) {
+    const wantStarred = !s.starred
+    // Optimistic UI flip so the icon updates immediately.
+    saved = saved.map((r) => (r.id === s.id ? { ...r, starred: wantStarred } : r))
+    try {
+      // Round-trip via delete + re-create so the durable store flips
+      // the persisted starred flag. This relies on the new server
+      // accepting `starred` on the create body (v0.3.2-A).
+      await api.deleteSaved(id, s.id)
+      await api.saveQuery(id, {
+        name: s.name,
+        statement: s.statement,
+        description: s.description || '',
+        tags: s.tags || [],
+        starred: wantStarred,
+      })
+      refreshSaved()
+    } catch {
+      // Roll back the optimistic flip on failure.
+      refreshSaved()
+      try { pushToast({ message: `Could not ${wantStarred ? 'star' : 'unstar'}: ${s.name}`, tone: 'danger' }) } catch { /* ignore */ }
+    }
+  }
+
   // a11y-08: keyboard-delete a saved query. ConfirmDialog gates the
   // destructive action and the Delete key on the saved <li> opens it.
   async function commitDeleteSaved() {
@@ -894,18 +926,15 @@
           </h3>
           {#if savedOpen}
             <div id="sql-editor__saved-panel">
-              <!-- INT-5: surface the session-only storage caveat so
-                   operators don't lose work on daemon restart without
-                   warning. Removed when we wire a persistent store. -->
-              <p class="sql-editor__sessionNote" aria-live="polite">
-                Session-only — not persisted across panel restarts.
-              </p>
+              <!-- v0.3.2-A: durable saved-queries store landed. The
+                   session-only caveat (INT-5) was removed because the
+                   server now persists across daemon restarts. -->
               {#if saved.length === 0}
                 <p class="sql-editor__empty">No saved queries</p>
               {:else}
                 <ul class="sql-editor__list">
                   {#each saved as s (s.id)}
-                    <li class="sql-editor__savedRow">
+                    <li class="sql-editor__savedRow" class:sql-editor__savedRow--starred={s.starred}>
                       <!-- a11y-08: keyboard-delete affordance — Delete /
                            Backspace on the row opens a confirm dialog
                            and routes through api.deleteSaved. The
@@ -914,7 +943,7 @@
                       <button
                         class="sql-editor__listBtn"
                         onclick={() => loadIntoEditor(s.statement)}
-                        title={s.statement}
+                        title={s.description || s.statement}
                         onkeydown={(e) => {
                           if (e.key === 'Delete' || e.key === 'Backspace') {
                             e.preventDefault()
@@ -923,7 +952,22 @@
                         }}
                       >
                         <span class="sql-editor__listName">{s.name}</span>
+                        {#if s.description}
+                          <span class="sql-editor__listDesc">{s.description}</span>
+                        {/if}
                       </button>
+                      <!-- v0.3.2-A: star toggle. The icon reflects
+                           current state; click flips it. The server's
+                           List endpoint supports star_only=1; future
+                           UI may surface a "Starred only" filter. -->
+                      <button
+                        type="button"
+                        class="sql-editor__rowStar"
+                        aria-pressed={!!s.starred}
+                        aria-label={s.starred ? `Unstar saved query ${s.name}` : `Star saved query ${s.name}`}
+                        title={s.starred ? 'Unstar' : 'Star'}
+                        onclick={() => toggleStar(s)}
+                      >{s.starred ? '★' : '☆'}</button>
                       <button
                         type="button"
                         class="sql-editor__rowDel"
@@ -949,7 +993,7 @@
     bind:open={saveModalOpen}
     statement={docText}
     existingNames={saved.map((s) => s.name)}
-    sessionOnly={true}
+    sessionOnly={false}
     onClose={() => { saveModalOpen = false }}
     onSave={commitSave}
   />
@@ -988,7 +1032,13 @@
   .sql-editor__caret { display: inline-block; width: 1em; color: var(--text-dim, #888); }
   .sql-editor__sessionNote { margin: 4px 0 6px; padding: 4px 6px; font-size: 0.78em; color: var(--text-dim, #888); border-left: 2px solid var(--info, #2563eb); background: rgba(37, 99, 235, 0.06); }
   .sql-editor__savedRow { display: flex; align-items: center; gap: 4px; }
-  .sql-editor__savedRow .sql-editor__listBtn { flex: 1; min-width: 0; }
+  .sql-editor__savedRow .sql-editor__listBtn { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; }
+  .sql-editor__savedRow--starred .sql-editor__listName { font-weight: 600; }
+  .sql-editor__listDesc { display: block; font-size: 0.78em; color: var(--text-dim, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; margin-top: 2px; }
+  .sql-editor__rowStar { background: transparent; border: 0; color: var(--text-dim, #888); cursor: pointer; padding: 2px 6px; border-radius: 3px; font-size: 1em; line-height: 1; }
+  .sql-editor__rowStar[aria-pressed="true"] { color: var(--warning, #d97706); }
+  .sql-editor__rowStar:hover { background: rgba(217, 119, 6, 0.1); color: var(--warning, #d97706); }
+  .sql-editor__rowStar:focus-visible { outline: 2px solid var(--warning, #d97706); outline-offset: 1px; }
   .sql-editor__rowDel { background: transparent; border: 0; color: var(--text-dim, #888); cursor: pointer; padding: 2px 6px; border-radius: 3px; font-size: 1.1em; line-height: 1; }
   .sql-editor__rowDel:hover { color: var(--danger, #dc2626); background: rgba(220, 38, 38, 0.1); }
   .sql-editor__rowDel:focus-visible { outline: 2px solid var(--danger, #dc2626); outline-offset: 1px; }
