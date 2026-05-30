@@ -2422,3 +2422,11 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
 }
 .export-menu__item:hover,
 .export-menu__item:focus { background: var(--surface-hover); outline: none; }
+
+/* DC-3 (PR #16.5): shared chevron SVG instead of the Unicode ▾ glyph.
+   Rotated 90° so the right-pointing M4 2.5l4 3.5-4 3.5V2.5z path
+   points down. inline-flex on the trigger so the SVG sits on the
+   text baseline. */
+.export-trigger { display: inline-flex; align-items: center; gap: 4px; }
+.export-trigger__caret { transform: rotate(90deg); transition: transform .12s ease; opacity: .8; }
+.export-trigger[aria-expanded="true"] .export-trigger__caret { transform: rotate(270deg); }

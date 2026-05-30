@@ -24,7 +24,17 @@ type sqlEncoder struct {
 	rowCount      int64
 	headerWritten bool
 	closed        bool
+	// truncated, when set via MarkTruncated, causes Close to emit the
+	// "-- truncated at N rows" comment BEFORE the "-- end" marker so a
+	// downstream reader scanning for "-- end" can rely on it as the
+	// terminal token (C10, PR #16.5).
+	truncated bool
 }
+
+// MarkTruncated records that the underlying source was capped before
+// EOF. Close emits the "-- truncated at N rows" line ahead of the
+// "-- end: N rows" line (C10, PR #16.5).
+func (e *sqlEncoder) MarkTruncated() { e.truncated = true }
 
 func newSQLEncoder(w io.Writer, opts Options) *sqlEncoder {
 	return &sqlEncoder{
@@ -75,6 +85,16 @@ func (e *sqlEncoder) WriteHeader(columns []string) error {
 	// rules are unambiguous across SQL_MODE settings.
 	if e.engine == dbadmin.EngineMariaDB {
 		if _, err := e.w.WriteString("SET sql_mode = CONCAT(@@sql_mode,',NO_BACKSLASH_ESCAPES');\n\n"); err != nil {
+			return err
+		}
+	}
+	// C8 (PR #16.5): Postgres portability — modern Postgres defaults to
+	// standard_conforming_strings = on, but a legacy 9.0-era replay
+	// target would mis-interpret backslash escapes inside our '...'
+	// literals (\x bytea casts in particular). Emit the pragma so the
+	// dump is unambiguous regardless of the target's session default.
+	if e.engine == dbadmin.EnginePostgres {
+		if _, err := e.w.WriteString("SET standard_conforming_strings = on;\n\n"); err != nil {
 			return err
 		}
 	}
@@ -155,8 +175,20 @@ func (e *sqlEncoder) Close() error {
 	}
 	e.closed = true
 	if e.headerWritten {
-		if _, err := fmt.Fprintf(e.w, "\n-- end: %d rows\n", e.rowCount); err != nil {
-			return err
+		// C10 (PR #16.5): emit the "-- truncated" marker BEFORE the
+		// terminal "-- end" line so consumers can rely on "-- end" as
+		// the final token of a complete dump.
+		if e.truncated {
+			if _, err := fmt.Fprintf(e.w, "\n-- truncated at %d rows\n", e.rowCount); err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(e.w, "-- end: %d rows\n", e.rowCount); err != nil {
+				return err
+			}
+		} else {
+			if _, err := fmt.Fprintf(e.w, "\n-- end: %d rows\n", e.rowCount); err != nil {
+				return err
+			}
 		}
 	}
 	return e.w.Flush()

@@ -247,9 +247,9 @@ export class AuraDBClient {
    *   includeHeader?: boolean,
    *   filename?: string,
    *   signal?: AbortSignal,
-   *   onProgress?: (bytes:number)=>void,
+   *   onProgress?: (bytes:number, info?:{rowsWritten?:number, elapsedMs:number})=>void,
    * }} opts
-   * @returns {Promise<{filename:string, bytes:number, rowCap:number|null, jobId:string|null, truncated:boolean, serverError:string}>}
+   * @returns {Promise<{filename:string, bytes:number, rows:number|null, rowCap:number|null, jobId:string|null, truncated:boolean, serverError:string}>}
    */
   async exportTable(connId, opts) {
     if (!connId || !opts || !opts.schema || !opts.table || !opts.format) {
@@ -268,6 +268,7 @@ export class AuraDBClient {
     if (typeof opts.includeHeader === 'boolean') body.includeHeader = opts.includeHeader
     if (opts.filename) body.filename = opts.filename
 
+    const startedAt = (typeof performance !== 'undefined' ? performance.now() : Date.now())
     const res = await fetch(`${BASE}/connections/${enc(connId)}/export`, {
       method: 'POST',
       headers: {
@@ -289,11 +290,22 @@ export class AuraDBClient {
       let env = /** @type {any} */ ({})
       try { env = await res.json() } catch { /* non-JSON */ }
       const e = (env && typeof env === 'object' && env.error && typeof env.error === 'object') ? env.error : env
+      // ux-5 (PR #16.5): surface Retry-After (seconds, RFC 7231) on
+      // 409 export-in-progress so the modal can render a countdown
+      // instead of the raw error text. We pass it via AuraDBError.detail
+      // so callers don't have to reach into res.headers.
+      let detail = e.details !== undefined ? e.details : (e.detail !== undefined ? e.detail : env.detail)
+      if (res.status === 409) {
+        const ra = parseRetryAfterSeconds(res.headers.get('retry-after'))
+        if (ra != null) {
+          detail = (detail && typeof detail === 'object') ? { ...detail, retryAfter: ra } : { retryAfter: ra }
+        }
+      }
       throw new AuraDBError(
         res.status,
         e.code || env.code || 'unknown',
         e.message || env.message || res.statusText || 'export failed',
-        e.details !== undefined ? e.details : (e.detail !== undefined ? e.detail : env.detail),
+        detail,
         e.request_id || env.request_id,
       )
     }
@@ -305,9 +317,20 @@ export class AuraDBClient {
     const jobId = res.headers.get('x-aura-export-jobid')
 
     // Read the stream so the UI can show byte progress; chunk into a Blob.
+    //
+    // ux-7 (PR #16.5): the progress callback now receives an info object
+    // with elapsedMs + a rowsWritten estimate. rowsWritten is not on the
+    // wire mid-stream (the server only knows the final count); we
+    // estimate it linearly from the average bytes-per-row across the
+    // life of the stream so the modal can show "N rows" mid-flight.
     /** @type {Uint8Array[]} */
     const chunks = []
     let bytes = 0
+    let rowsHint = 0
+    const tickProgress = () => {
+      const elapsedMs = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt
+      if (opts.onProgress) opts.onProgress(bytes, { rowsWritten: rowsHint || undefined, elapsedMs })
+    }
     if (res.body && typeof res.body.getReader === 'function') {
       const reader = res.body.getReader()
       // eslint-disable-next-line no-constant-condition
@@ -317,14 +340,26 @@ export class AuraDBClient {
         if (value) {
           chunks.push(value)
           bytes += value.byteLength
-          if (opts.onProgress) opts.onProgress(bytes)
+          // Rough mid-stream row estimate: count newline bytes in the
+          // chunk. CSV / NDJSON / SQL all delimit records by LF so the
+          // count is a reasonable lower bound (CSV uses CRLF so each row
+          // contributes one LF; SQL has one LF per INSERT). The exact
+          // value lands in the X-Aura-Export-Rows trailer after EOF.
+          for (let i = 0; i < value.length; i++) {
+            if (value[i] === 0x0A) rowsHint++
+          }
+          tickProgress()
         }
       }
     } else {
       const ab = await res.arrayBuffer()
       chunks.push(new Uint8Array(ab))
       bytes = ab.byteLength
-      if (opts.onProgress) opts.onProgress(bytes)
+      const u8 = new Uint8Array(ab)
+      for (let i = 0; i < u8.length; i++) {
+        if (u8[i] === 0x0A) rowsHint++
+      }
+      tickProgress()
     }
 
     const ct = res.headers.get('content-type') || 'application/octet-stream'
@@ -336,10 +371,99 @@ export class AuraDBClient {
     // fully consumed — so reading them here is well-defined. The values
     // are surfaced to callers so the UI can render a "file may be
     // incomplete" warning even when the HTTP status was 200.
+    //
+    // ux-7 (PR #16.5): also read X-Aura-Export-Rows for the authoritative
+    // row count once the body is drained (rowsHint above is a heuristic).
     const truncated = (res.headers.get('x-truncated') || '').toLowerCase() === 'true'
     const serverError = res.headers.get('x-export-error') || ''
-    return { filename, bytes, rowCap, jobId, truncated, serverError }
+    const rowsHdr = res.headers.get('x-aura-export-rows')
+    const rows = rowsHdr != null && rowsHdr !== '' ? Number(rowsHdr) : null
+    return { filename, bytes, rows, rowCap, jobId, truncated, serverError }
   }
+
+  /**
+   * Pre-flight row count for the export modal (DC-5 + ux-6, PR #16.5).
+   * Calls the rows endpoint with limit=0 + total=1; the server's Count()
+   * is bounded by the same query path the export will use.
+   *
+   * @param {string} connId
+   * @param {{schema:string, table:string, filter?:Array<{column:string, op:string, value?:any}>, signal?:AbortSignal}} opts
+   * @returns {Promise<{total:number|null}>}
+   */
+  async countRowsPreflight(connId, opts) {
+    const qs = new URLSearchParams()
+    qs.set('limit', '0')
+    qs.set('total', '1')
+    if (opts.filter) {
+      for (const p of opts.filter) {
+        if (!p || !p.column || !p.op) continue
+        qs.append('filter', `${p.column}:${p.op}:${p.value == null ? '' : String(p.value)}`)
+      }
+    }
+    const path = `/connections/${enc(connId)}/schemas/${enc(opts.schema)}/tables/${enc(opts.table)}/rows?${qs.toString()}`
+    try {
+      const r = await request(path, { signal: opts.signal })
+      const total = (r && typeof r.total === 'number') ? r.total : null
+      return { total }
+    } catch {
+      // Count() can fail (driver lacks support, permission, etc.).
+      // The modal degrades gracefully — no banner, no warning — so the
+      // pre-flight failure is silent. The real export still runs.
+      return { total: null }
+    }
+  }
+}
+
+/**
+ * sanitizeExportFilename mirrors SanitizeFilename in
+ * pkg/dbadmin/export/encoder.go so the modal's preview matches what
+ * the server will actually emit (ux-9, PR #16.5). Drops path
+ * separators / quotes / control chars; collapses whitespace runs to
+ * underscores; trims surrounding `._-`; falls back to "export" on
+ * empty.
+ *
+ * @param {string} name
+ * @returns {string}
+ */
+export function sanitizeExportFilename(name) {
+  if (typeof name !== 'string' || name === '') return 'export'
+  const maxLen = 200
+  let out = ''
+  let prevSpace = false
+  for (let i = 0; i < name.length && out.length < maxLen; i++) {
+    const ch = name[i]
+    const code = ch.charCodeAt(0)
+    if (ch === '/' || ch === '\\' || code === 0 || ch === '"' || ch === "'") continue
+    if (code < 0x20) continue
+    if (ch === ' ' || ch === '\t') {
+      if (!prevSpace) { out += '_'; prevSpace = true }
+    } else {
+      out += ch
+      prevSpace = false
+    }
+  }
+  out = out.replace(/^[._-]+|[._-]+$/g, '')
+  return out || 'export'
+}
+
+/**
+ * parseRetryAfterSeconds parses an RFC 7231 Retry-After header. Returns
+ * the wait in seconds (integer), or null when the header is missing /
+ * unparseable. The server emits the delta-seconds form ("5"); we also
+ * accept HTTP-date form for robustness.
+ *
+ * @param {string|null} v
+ * @returns {number|null}
+ */
+function parseRetryAfterSeconds(v) {
+  if (!v) return null
+  const n = Number(v)
+  if (Number.isFinite(n) && n >= 0) return Math.ceil(n)
+  const date = Date.parse(v)
+  if (!Number.isNaN(date)) {
+    return Math.max(0, Math.ceil((date - Date.now()) / 1000))
+  }
+  return null
 }
 
 /**

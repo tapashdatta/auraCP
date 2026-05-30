@@ -154,17 +154,36 @@ func writeNDJSONValue(w *bufio.Writer, v any) error {
 		_, err := w.WriteString(strconv.FormatFloat(x, 'g', -1, 64))
 		return err
 	case []byte:
-		// Bytes → base64-encoded JSON string. JSON columns also surface
-		// as []byte from the driver; we cannot distinguish reliably, so
-		// we err on the safe side and base64-encode unconditionally.
-		// Callers that want raw-JSON pass-through should declare the
-		// column as a string in the projection.
+		// SEC-6 (PR #16.5): JSON / JSONB columns surface as []byte from
+		// the MariaDB + Postgres drivers. The previous behaviour base64-
+		// encoded all []byte unconditionally, which left operators
+		// staring at a Base64 blob when they expected the nested object.
+		// Heuristic: if the byte slice is valid JSON (starts with a
+		// JSON-structural byte and parses cleanly with json.Valid) we
+		// emit it as-is so jq / NDJSON consumers see the nested value.
+		// Binary payloads (images, BSON, packed-row blobs) do not parse
+		// as JSON and fall through to the base64 path, preserving the
+		// safe round-trip for non-JSON bytes.
+		if looksLikeJSON(x) && json.Valid(x) {
+			_, err := w.Write(x)
+			return err
+		}
 		enc := base64.StdEncoding.EncodeToString(x)
 		b, err := json.Marshal(enc)
 		if err != nil {
 			return err
 		}
 		_, err = w.Write(b)
+		return err
+	case json.RawMessage:
+		// Driver-typed JSON column (some drivers return json.RawMessage
+		// when the table column is declared JSON / JSONB). Pass through
+		// directly without re-encoding so jq sees the nested object.
+		if len(x) == 0 {
+			_, err := w.WriteString("null")
+			return err
+		}
+		_, err := w.Write(x)
 		return err
 	case time.Time:
 		b, err := json.Marshal(x.UTC().Format(time.RFC3339Nano))
@@ -187,4 +206,23 @@ func writeNDJSONValue(w *bufio.Writer, v any) error {
 // isFiniteFloat reports whether f is a finite (non-NaN, non-Inf) float.
 func isFiniteFloat(f float64) bool {
 	return !math.IsNaN(f) && !math.IsInf(f, 0)
+}
+
+// looksLikeJSON reports whether the byte slice's first non-whitespace
+// rune is a JSON-structural byte ({, [, ", t, f, n, -, 0..9). Cheaper
+// than json.Valid for the common case where the answer is "no"; we use
+// it as a guard before paying the json.Valid scan (SEC-6, PR #16.5).
+func looksLikeJSON(b []byte) bool {
+	for _, c := range b {
+		switch c {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '{', '[', '"', 't', 'f', 'n', '-',
+			'0', '1', '2', '3', '4', '5', '6', '7', '8', '9':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
 }

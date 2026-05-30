@@ -17,7 +17,25 @@
   import { buildPKKey } from '../lib/rowgrid/pkKey.js'
   import { keyToAction } from '../lib/rowgrid/keyboard.js'
   import { toastBus, dismissToast } from '../lib/rowgrid/toasts.svelte.js'
-  import ExportModal from '../lib/components/ExportModal.svelte'
+  import { icons } from '../lib/icons.js'
+
+  // ux-8 (PR #16.5): ExportModal is dynamic-imported on first open so
+  // it doesn't ship in the main grid chunk (saves ~3 KB gzipped on
+  // first paint). The component reference is held in a $state cell
+  // and rendered only after it resolves.
+  /** @type {any} */
+  let ExportModalComponent = $state(null)
+  let exportModalLoading = $state(false)
+  async function ensureExportModal() {
+    if (ExportModalComponent || exportModalLoading) return
+    exportModalLoading = true
+    try {
+      const mod = await import('../lib/components/ExportModal.svelte')
+      ExportModalComponent = mod.default
+    } finally {
+      exportModalLoading = false
+    }
+  }
 
   // Svelte action for autofocus + select-all on edit-input mount. Avoids
   // the autofocus attribute (which Svelte's a11y rules flag) while keeping
@@ -316,7 +334,10 @@
   function openExportModal(fmt) {
     exportFormat = fmt
     exportMenuOpen = false
-    exportOpen = true
+    // ux-8 (PR #16.5): lazy-load the modal component on first open.
+    // The render block ({#if ExportModalComponent && exportOpen})
+    // mounts the dialog as soon as the import resolves.
+    ensureExportModal().then(() => { exportOpen = true })
   }
 
   // Build the filter / sort payload the export endpoint expects from
@@ -416,13 +437,20 @@
       <div class="rg-toolbar__export rg-toolbar__export--pos">
         <button
           bind:this={exportBtn}
-          class="btn btn--sm"
+          class="btn btn--sm export-trigger"
           aria-haspopup="menu"
           aria-expanded={exportMenuOpen}
           aria-controls="export-menu"
-          onclick={() => { exportMenuOpen = !exportMenuOpen }}
+          onclick={() => { exportMenuOpen = !exportMenuOpen; if (exportMenuOpen) void ensureExportModal() }}
           title="Export"
-        >Export ▾</button>
+        >
+          Export
+          <!-- DC-3 (PR #16.5): shared chevron SVG instead of the
+               Unicode ▾ glyph (inconsistent baseline across OS fonts). -->
+          <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true" class="export-trigger__caret">
+            <path d={icons.chevron} fill="currentColor" />
+          </svg>
+        </button>
         {#if exportMenuOpen}
           <ul
             id="export-menu"
@@ -664,8 +692,11 @@
       {#if grid.rows.loading}<span class="spinner" aria-label="loading"></span>{/if}
     </div>
 
-    {#if id && schema && table}
-      <ExportModal
+    {#if id && schema && table && ExportModalComponent}
+      <!-- ux-8 (PR #16.5): only mounted after the dynamic-import of
+           ExportModal resolves. The exportOpen state is bound across
+           the boundary so the toolbar's open intent flows through. -->
+      <ExportModalComponent
         bind:open={exportOpen}
         connId={id}
         schema={schema}

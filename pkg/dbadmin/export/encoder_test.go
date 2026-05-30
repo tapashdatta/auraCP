@@ -3,6 +3,7 @@ package export
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -234,6 +235,133 @@ func TestCSVCell_FormulaInjectionGuard(t *testing.T) {
 		got := csvCell(c.in)
 		if got != c.want {
 			t.Errorf("csvCell(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// C6 (PR #16.5): CSV float convention — NaN / +Inf / -Inf must render
+// as "" / "Infinity" / "-Infinity" rather than the literal "NaN" /
+// "+Inf" / "-Inf" that strconv.FormatFloat emits.
+func TestCSVCell_NonFiniteFloats(t *testing.T) {
+	cases := []struct {
+		in   any
+		want string
+	}{
+		{math.NaN(), ""},
+		{math.Inf(1), "Infinity"},
+		{math.Inf(-1), "-Infinity"},
+		{1.5, "1.5"},
+		{float32(math.NaN()), ""},
+		{float32(math.Inf(1)), "Infinity"},
+		{float32(math.Inf(-1)), "-Infinity"},
+	}
+	for _, c := range cases {
+		got := csvCellRaw(c.in)
+		if got != c.want {
+			t.Errorf("csvCellRaw(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// C8 (PR #16.5): Postgres SQL preamble must include
+// standard_conforming_strings = on for legacy-target portability.
+func TestSQLEncoder_PostgresStandardConformingStrings(t *testing.T) {
+	var buf bytes.Buffer
+	enc, _ := NewEncoder(&buf, FormatSQL, Options{
+		Engine:     dbadmin.EnginePostgres,
+		SchemaName: "public",
+		TableName:  "t",
+		NowFunc:    func() string { return "2030-01-01T00:00:00Z" },
+	})
+	_ = enc.WriteHeader([]string{"id"})
+	_ = enc.Close()
+	if !strings.Contains(buf.String(), "SET standard_conforming_strings = on;") {
+		t.Errorf("missing standard_conforming_strings pragma in: %q", buf.String())
+	}
+}
+
+// C10 (PR #16.5): SQL trailer order — "-- truncated" precedes
+// "-- end" so consumers can rely on "-- end" as the terminal token.
+func TestSQLEncoder_TruncationMarkerOrder(t *testing.T) {
+	var buf bytes.Buffer
+	enc, _ := NewEncoder(&buf, FormatSQL, Options{
+		Engine:     dbadmin.EngineMariaDB,
+		SchemaName: "s",
+		TableName:  "t",
+		NowFunc:    func() string { return "2030-01-01T00:00:00Z" },
+	})
+	_ = enc.WriteHeader([]string{"id"})
+	_ = enc.WriteRow([]any{int64(1)})
+	// Mark truncated before Close (mirrors the handler flow).
+	if mt, ok := enc.(interface{ MarkTruncated() }); ok {
+		mt.MarkTruncated()
+	} else {
+		t.Fatal("sqlEncoder does not expose MarkTruncated")
+	}
+	_ = enc.Close()
+	out := buf.String()
+	ti := strings.Index(out, "-- truncated at")
+	ei := strings.Index(out, "-- end:")
+	if ti < 0 || ei < 0 {
+		t.Fatalf("missing markers in: %q", out)
+	}
+	if ti > ei {
+		t.Errorf("expected -- truncated BEFORE -- end; got truncated@%d, end@%d in:\n%s", ti, ei, out)
+	}
+}
+
+// SEC-6 (PR #16.5): JSON columns surfaced as []byte should pass through
+// as nested JSON when the byte slice is valid JSON. Non-JSON []byte
+// still falls through to the base64 path.
+func TestNDJSONEncoder_JSONColumnPassthrough(t *testing.T) {
+	var buf bytes.Buffer
+	enc, _ := NewEncoder(&buf, FormatNDJSON, Options{})
+	_ = enc.WriteHeader([]string{"j", "b"})
+	_ = enc.WriteRow([]any{
+		[]byte(`{"hello":"world","n":3}`), // valid JSON → passthrough.
+		[]byte{0xCA, 0xFE, 0xBA, 0xBE},    // not JSON → base64.
+	})
+	_ = enc.Close()
+	line := strings.TrimRight(buf.String(), "\n")
+	if !strings.Contains(line, `"j":{"hello":"world","n":3}`) {
+		t.Errorf("expected JSON passthrough for column j; got: %q", line)
+	}
+	// Base64 of {0xCA, 0xFE, 0xBA, 0xBE} = "yv66vg==".
+	if !strings.Contains(line, `"b":"yv66vg=="`) {
+		t.Errorf("expected base64 fallback for column b; got: %q", line)
+	}
+}
+
+func TestNDJSONEncoder_RawMessagePassthrough(t *testing.T) {
+	var buf bytes.Buffer
+	enc, _ := NewEncoder(&buf, FormatNDJSON, Options{})
+	_ = enc.WriteHeader([]string{"j"})
+	_ = enc.WriteRow([]any{json.RawMessage(`{"k":1}`)})
+	_ = enc.Close()
+	line := strings.TrimRight(buf.String(), "\n")
+	if !strings.Contains(line, `"j":{"k":1}`) {
+		t.Errorf("expected json.RawMessage passthrough; got: %q", line)
+	}
+}
+
+func TestLooksLikeJSON(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{`{"a":1}`, true},
+		{`  [1,2]`, true},
+		{`"str"`, true},
+		{`true`, true},
+		{`null`, true},
+		{`-3.14`, true},
+		{``, false},
+		{`hello`, false},
+		{"\xCA\xFE", false},
+	}
+	for _, c := range cases {
+		if got := looksLikeJSON([]byte(c.in)); got != c.want {
+			t.Errorf("looksLikeJSON(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 }

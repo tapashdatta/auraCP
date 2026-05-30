@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"time"
 )
@@ -20,12 +21,16 @@ type csvEncoder struct {
 	closed        bool
 }
 
+// newCSVEncoder constructs a csvEncoder. opts.IncludeHeader controls
+// whether WriteHeader emits a header row (default true; the caller sets
+// it explicitly today).
+//
+// C13 (PR #16.5): the previous dead `if !opts.IncludeHeader {}` branch
+// was a leftover from earlier plumbing; the IncludeHeader gate now lives
+// in WriteHeader itself.
 func newCSVEncoder(w io.Writer, opts Options) *csvEncoder {
 	cw := csv.NewWriter(w)
 	cw.UseCRLF = true
-	if !opts.IncludeHeader {
-		// Header still emitted unless explicitly disabled; default true.
-	}
 	return &csvEncoder{w: cw, opts: opts}
 }
 
@@ -129,9 +134,9 @@ func csvCellRaw(v any) string {
 	case uint64:
 		return strconv.FormatUint(x, 10)
 	case float32:
-		return strconv.FormatFloat(float64(x), 'g', -1, 32)
+		return csvFloat(float64(x), 32)
 	case float64:
-		return strconv.FormatFloat(x, 'g', -1, 64)
+		return csvFloat(x, 64)
 	case []byte:
 		return base64.StdEncoding.EncodeToString(x)
 	case time.Time:
@@ -139,6 +144,32 @@ func csvCellRaw(v any) string {
 	default:
 		return fmt.Sprintf("%v", v)
 	}
+}
+
+// csvFloat formats a float for CSV output.
+//
+// C6 (PR #16.5): NaN / +Inf / -Inf are not valid CSV cell values — most
+// spreadsheet tools either render them literally as the meaningless
+// strings "NaN" / "+Inf" or refuse to import the cell. The export
+// convention is:
+//   - NaN → empty cell (matches NULL handling).
+//   - +Inf / -Inf → the quoted string "Infinity" / "-Infinity" so
+//     readers see a value rather than a missing cell, while staying
+//     within the RFC 4180 "any text" cell contract.
+//
+// Finite floats fall through to FormatFloat with 'g' precision -1 to
+// keep round-trip identity with the driver-returned value.
+func csvFloat(f float64, bits int) string {
+	if math.IsNaN(f) {
+		return ""
+	}
+	if math.IsInf(f, 1) {
+		return "Infinity"
+	}
+	if math.IsInf(f, -1) {
+		return "-Infinity"
+	}
+	return strconv.FormatFloat(f, 'g', -1, bits)
 }
 
 // csvSanitizeFormula prefixes cells that begin with a formula-trigger

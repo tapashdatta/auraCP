@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { request, AuraDBError, AuraDBClient } from './api.js'
+import { request, AuraDBError, AuraDBClient, sanitizeExportFilename } from './api.js'
 
 const ENV = { code: 'precondition_failed', message: 'something broke', detail: { field: 'x' }, request_id: 'req_abc' }
 
@@ -253,5 +253,78 @@ describe('AuraDBClient.exportTable (PR #16)', () => {
     const c = new AuraDBClient()
     const r = await c.exportTable('c1', { schema: 's', table: 't', format: 'csv' })
     expect(r.filename).toBe('naïve.csv')
+  })
+
+  // PR #16.5 additions ----------------------------------------------------
+
+  it('surfaces Retry-After seconds on 409 export-in-progress (ux-5)', async () => {
+    globalThis.fetch = vi.fn(async () => new Response(
+      JSON.stringify({ error: { code: 'conflict', message: 'busy' } }),
+      { status: 409, headers: { 'content-type': 'application/json', 'retry-after': '7' } },
+    ))
+    const c = new AuraDBClient()
+    let caught
+    try { await c.exportTable('c1', { schema: 's', table: 't', format: 'csv' }) }
+    catch (e) { caught = e }
+    expect(caught).toBeInstanceOf(AuraDBError)
+    expect(caught.status).toBe(409)
+    // Retry-After bubbles via .detail.retryAfter for the modal countdown.
+    expect(caught.detail?.retryAfter).toBe(7)
+  })
+
+  it('surfaces X-Aura-Export-Rows in the result (ux-7)', async () => {
+    globalThis.fetch = vi.fn(async () => mkResp('a,b\r\n1,2\r\n', {
+      'content-disposition': `attachment; filename="x.csv"`,
+      'x-aura-export-rows': '42',
+    }))
+    const c = new AuraDBClient()
+    const r = await c.exportTable('c1', { schema: 's', table: 't', format: 'csv' })
+    expect(r.rows).toBe(42)
+  })
+
+  it('countRowsPreflight queries rows endpoint with limit=0 + total=1 (DC-5 / ux-6)', async () => {
+    /** @type {any} */
+    let captured = null
+    globalThis.fetch = vi.fn(async (url) => {
+      captured = url
+      return new Response(JSON.stringify({ total: 17 }), {
+        status: 200, headers: { 'content-type': 'application/json' },
+      })
+    })
+    const c = new AuraDBClient()
+    const r = await c.countRowsPreflight('c1', { schema: 'public', table: 'users' })
+    expect(r.total).toBe(17)
+    expect(captured).toContain('/rows?')
+    expect(captured).toContain('limit=0')
+    expect(captured).toContain('total=1')
+  })
+
+  it('countRowsPreflight returns total:null on backend failure (degrade gracefully)', async () => {
+    globalThis.fetch = vi.fn(async () => new Response('err', { status: 500 }))
+    const c = new AuraDBClient()
+    const r = await c.countRowsPreflight('c1', { schema: 's', table: 't' })
+    expect(r.total).toBeNull()
+  })
+
+  it('exports sanitizeExportFilename mirroring server SanitizeFilename (ux-9)', () => {
+    expect(sanitizeExportFilename('users.csv')).toBe('users.csv')
+    expect(sanitizeExportFilename('my table 2030.csv')).toBe('my_table_2030.csv')
+    expect(sanitizeExportFilename('../../etc/passwd')).toBe('etcpasswd')
+    expect(sanitizeExportFilename('weird "name".csv')).toBe('weird_name.csv')
+    expect(sanitizeExportFilename('')).toBe('export')
+    expect(sanitizeExportFilename('   ')).toBe('export')
+    expect(sanitizeExportFilename('a'.repeat(300)).length).toBe(200)
+  })
+
+  it('emits a limit field when provided (DC-10)', async () => {
+    /** @type {any} */
+    let body = null
+    globalThis.fetch = vi.fn(async (_, init) => {
+      body = JSON.parse(init.body)
+      return mkResp('a,b\r\n1,2\r\n', { 'content-disposition': 'attachment; filename="x.csv"' })
+    })
+    const c = new AuraDBClient()
+    await c.exportTable('c1', { schema: 's', table: 't', format: 'csv', limit: 250 })
+    expect(body.limit).toBe(250)
   })
 })
