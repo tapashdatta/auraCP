@@ -1,7 +1,11 @@
 <script>
   /** @type {{ engine?: string, size?: number }} */
-  let { engine = 'postgres', size = 12 } = $props()
-  const fillMap = {
+  let { engine = 'postgres', size = 16 } = $props()
+
+  // Prototype style: one clean database-cylinder line icon, color-coded by
+  // engine (the topbar badge / connection name carries the exact engine).
+  // Replaces the old lettered "Pg"/"My" box.
+  const colorMap = {
     postgres: 'var(--engine-pg)',
     mysql:    'var(--engine-mysql)',
     sqlite:   'var(--engine-sqlite)',
@@ -9,30 +13,22 @@
     oracle:   'var(--engine-oracle)',
     mariadb:  'var(--engine-mysql)',
   }
-  // FIX (PR #11 dc-2): mysql/mssql/maria all begin with "M" and were
-  // indistinguishable at 12px. Map engines to a stable two-character
-  // glyph instead of falling back to the first letter — Postgres "Pg",
-  // MySQL "My", MariaDB "Ma", SQL Server "Ms", SQLite "Sl", Oracle "Or".
-  const glyphMap = {
-    postgres: 'Pg',
-    mysql:    'My',
-    sqlite:   'Sl',
-    mssql:    'Ms',
-    oracle:   'Or',
-    mariadb:  'Ma',
-  }
-  const fill = $derived(fillMap[engine] || 'var(--text-mute)')
-  const glyph = $derived(glyphMap[engine] || ((engine[0] || '?').toUpperCase()))
+  const stroke = $derived(colorMap[engine] || 'var(--text-dim)')
 </script>
 
-<!-- FIX (PR #11 dc-12): use a CSS class instead of a raw #fff fill so the
-     glyph foreground tracks the theme token (--engine-glyph-fg). -->
-<svg width={size} height={size} viewBox="0 0 14 12" class="engine-glyph tree-row__glyph" aria-hidden="true">
-  <rect x="0" y="0" width="14" height="12" rx="2" fill={fill} />
-  <text class="engine-glyph__text" x="7" y="8.5" text-anchor="middle" font-family="IBM Plex Sans, sans-serif" font-size="7" font-weight="600">{glyph}</text>
+<svg
+  width={size}
+  height={size}
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke={stroke}
+  stroke-width="1.7"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+  class="tree-row__glyph"
+  aria-hidden="true"
+>
+  <ellipse cx="12" cy="5" rx="7" ry="2.5" />
+  <path d="M5 5v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V5" />
+  <path d="M5 11v6c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-6" />
 </svg>
-
-<style>
-  .engine-glyph__text { fill: var(--engine-glyph-fg, #ffffff); }
-  :global(:root[data-theme="light"]) .engine-glyph__text { fill: #ffffff; }
-</style>

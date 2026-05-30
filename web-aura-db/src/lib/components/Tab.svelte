@@ -1,5 +1,5 @@
 <script>
-  import { icons } from '../icons.js'
+  import Icon from './Icon.svelte'
 
   /** @type {{
    *   id: string,
@@ -58,8 +58,6 @@
     onclick={close}
     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); close(e) } }}
   >
-    <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-      <path d={icons.x} stroke="currentColor" stroke-width="1.5" stroke-linecap="round" fill="none" />
-    </svg>
+    <Icon name="x" size={13} />
   </button>
 </div>

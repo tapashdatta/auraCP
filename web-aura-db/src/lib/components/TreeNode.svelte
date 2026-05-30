@@ -1,7 +1,7 @@
 <script>
   import EngineGlyph from './EngineGlyph.svelte'
   import StatusDot from './StatusDot.svelte'
-  import { icons } from '../icons.js'
+  import Icon from './Icon.svelte'
   import { t } from '../strings.js'
 
   /** @typedef {{
@@ -53,16 +53,20 @@
 >
   {#if canExpand}
     <span class="tree-row__chev {expanded ? 'tree-row__chev--open' : ''}">
-      <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true">
-        <path d={icons.chevron} fill="currentColor" />
-      </svg>
+      <Icon name="chevR" size={14} />
     </span>
   {:else}
     <span class="tree-row__chev"></span>
   {/if}
 
   {#if node.kind === 'connection'}
-    <EngineGlyph engine={node.engine || 'postgres'} />
+    <EngineGlyph engine={node.engine || 'postgres'} size={16} />
+  {:else if node.kind === 'table'}
+    <span class="tree-row__glyph tree-row__glyph--obj"><Icon name="table" size={15} /></span>
+  {:else if node.kind === 'view'}
+    <span class="tree-row__glyph tree-row__glyph--obj"><Icon name="view" size={15} /></span>
+  {:else if node.kind === 'function'}
+    <span class="tree-row__glyph tree-row__glyph--obj"><Icon name="terminal" size={15} /></span>
   {/if}
 
   <span class="tree-row__label">{node.label}</span>
@@ -71,7 +75,9 @@
     <span class="tree-row__meta">{t('tree.readonly')}</span>
   {/if}
 
-  {#if node.status && node.kind === 'connection'}
+  {#if selected && node.kind === 'connection'}
+    <span class="tree-row__check"><Icon name="check" size={14} /></span>
+  {:else if node.status && node.kind === 'connection'}
     <StatusDot state={node.status} />
   {/if}
 </div>

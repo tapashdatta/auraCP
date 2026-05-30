@@ -71,9 +71,9 @@
   --table-row-h:       28px;
   --tab-h:             34px;
 
-  /* Soft rounded corners (prototype radius scale) */
-  --r-input:           5px;
-  --r-pill:            6px;
+  /* Soft rounded corners (prototype radius scale: badge 5 / control 7 / card 10) */
+  --r-input:           7px;
+  --r-pill:            5px;
   --r-modal:           10px;
 
   /* Motion — short, ease-out, never animates color cross-fades */
@@ -460,12 +460,13 @@ summary:focus-visible,
 }
 .tree-row:hover { background: var(--surface-hover); }
 .tree-row--selected {
-  background: var(--surface-active);
+  background: var(--accent-bg);
+  color: var(--accent);
   border-left-color: var(--accent);
 }
 .tree-row__chev {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -473,7 +474,22 @@ summary:focus-visible,
   flex-shrink: 0;
 }
 .tree-row__chev--open { transform: rotate(90deg); }
-.tree-row__glyph { flex-shrink: 0; margin-right: 6px; }
+.tree-row__glyph {
+  flex-shrink: 0;
+  margin-right: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+/* Schema-object glyphs (table/view/function) read muted; the engine
+   cylinder keeps its own engine color. */
+.tree-row__glyph--obj { color: var(--text-mute); }
+.tree-row__check {
+  flex-shrink: 0;
+  margin-left: 6px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
 .tree-row__label {
   flex: 1;
   overflow: hidden;
@@ -505,11 +521,12 @@ summary:focus-visible,
   display: inline-flex;
   align-items: center;
   height: 100%;
-  padding: 0 12px;
-  border-right: 1px solid var(--border);
-  font-size: var(--fs-body);
+  padding: 0 14px;
+  font-size: var(--fs-ui);
+  font-weight: 500;
   color: var(--text-dim);
-  border-bottom: 1px solid transparent;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
   border-radius: 0;
   cursor: pointer;
   white-space: nowrap;
@@ -527,7 +544,6 @@ summary:focus-visible,
 .tab:hover { color: var(--text); }
 .tab--active {
   color: var(--text);
-  background: var(--surface);
   border-bottom-color: var(--accent);
 }
 /* FIX (PR #11 a11y-13 / dc-3): close button is now visible by default
@@ -584,23 +600,27 @@ summary:focus-visible,
    Buttons (flat 28px, sharp 4px corners)
    ============================================================ */
 .btn {
-  height: 28px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0 12px;
-  font-size: var(--fs-body);
+  font-size: var(--fs-ui);
   font-weight: 500;
   color: var(--text);
   background: var(--surface-elev);
-  border: 1px solid var(--border-strong);
-  border-radius: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-input);
   transition: background var(--t-fast), border-color var(--t-fast), color var(--t-fast);
   gap: 6px;
 }
 .btn:hover:not(:disabled) {
   background: var(--surface-hover);
-  border-color: var(--text-mute);
+  border-color: var(--border-strong);
+}
+.btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 1px;
 }
 .btn:disabled {
   color: var(--text-disabled);
@@ -614,22 +634,17 @@ summary:focus-visible,
    accent is already darker so plain white sits on var(--accent). The
    dead `:root[data-theme="light"] .btn--primary { color: #fff }`
    override (dc-11) is removed — the base rule already sets color:#fff. */
+/* Solid accent primary (prototype .btn-primary). The blue accent clears
+   the 3:1 UI-component contrast floor against white; in light theme the
+   accent is already the deeper #2563eb. */
 .btn--primary {
   color: #ffffff;
-  background: var(--accent-dim);
-  border-color: var(--accent-dim);
-}
-:root[data-theme="light"] .btn--primary {
   background: var(--accent);
-  border-color: var(--accent);
+  border-color: transparent;
 }
 .btn--primary:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
-}
-:root[data-theme="light"] .btn--primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  border-color: transparent;
 }
 .btn--ghost {
   background: transparent;
@@ -649,17 +664,17 @@ summary:focus-visible,
 .btn--danger:hover:not(:disabled) {
   background: var(--danger-bg);
 }
-.btn--sm { height: 24px; padding: 0 8px; font-size: var(--fs-meta); }
+.btn--sm { height: 26px; padding: 0 9px; font-size: var(--fs-body); border-radius: var(--r-pill); }
 
 /* ============================================================
    Inputs
    ============================================================ */
-.field { display: flex; flex-direction: column; gap: 4px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
 .field__label {
-  font-size: var(--fs-meta);
+  font-size: var(--fs-body);
+  font-weight: 500;
   color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.01em;
 }
 .field__error {
   font-size: var(--fs-meta);
@@ -667,19 +682,20 @@ summary:focus-visible,
   margin-top: 2px;
 }
 .input, .select {
-  height: 28px;
-  padding: 0 8px;
+  height: 32px;
+  padding: 0 10px;
   background: var(--surface-elev);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   border-radius: var(--r-input);
   color: var(--text);
-  font-size: var(--fs-body);
-  transition: border-color var(--t-fast);
+  font-size: var(--fs-ui);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
   outline: none;
   width: 100%;
 }
 .input:focus, .select:focus {
-  border-color: var(--border-focus);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-bg);
 }
 .input::placeholder { color: var(--text-mute); }
 .input--mono { font-family: var(--font-mono); }
@@ -695,20 +711,26 @@ summary:focus-visible,
 .pill {
   display: inline-flex;
   align-items: center;
-  padding: 1px 6px;
+  gap: 5px;
+  height: 20px;
+  padding: 0 7px;
   font-size: var(--fs-meta);
   font-weight: 500;
+  letter-spacing: 0.01em;
   border-radius: var(--r-pill);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--border);
   color: var(--text-dim);
-  background: transparent;
-  line-height: 1.3;
+  background: var(--surface-elev);
+  line-height: 1;
 }
-.pill--accent  { color: var(--accent); border-color: var(--accent-dim); background: var(--accent-bg); }
-.pill--success { color: var(--success); border-color: var(--success); background: var(--success-bg); }
-.pill--warning { color: var(--warning); border-color: var(--warning); background: var(--warning-bg); }
-.pill--danger  { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
-.pill--info    { color: var(--info); border-color: var(--info); background: var(--info-bg); }
+/* The accent/semantic variants carry a soft tint + transparent border
+   (prototype .badge-*). A `.dot` inside inherits currentColor. */
+.pill .dot { width: 6px; height: 6px; background: currentColor; }
+.pill--accent  { color: var(--accent);  background: var(--accent-bg);  border-color: transparent; }
+.pill--success { color: var(--success); background: var(--success-bg); border-color: transparent; }
+.pill--warning { color: var(--warning); background: var(--warning-bg); border-color: transparent; }
+.pill--danger  { color: var(--danger);  background: var(--danger-bg);  border-color: transparent; }
+.pill--info    { color: var(--info);    background: var(--info-bg);    border-color: transparent; }
 
 /* ============================================================
    Status dot
@@ -2561,5 +2583,5 @@ table.data td.num { font-family: var(--font-mono); font-variant-numeric: tabular
    points down. inline-flex on the trigger so the SVG sits on the
    text baseline. */
 .export-trigger { display: inline-flex; align-items: center; gap: 4px; }
-.export-trigger__caret { transform: rotate(90deg); transition: transform .12s ease; opacity: .8; }
+.export-trigger__caret { display: inline-flex; transform: rotate(90deg); transition: transform .12s ease; opacity: .8; }
 .export-trigger[aria-expanded="true"] .export-trigger__caret { transform: rotate(270deg); }

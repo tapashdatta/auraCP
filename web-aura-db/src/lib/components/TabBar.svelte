@@ -2,7 +2,7 @@
   import Tab from './Tab.svelte'
   import { workspaces, activateTab, closeTab, openTab } from '../workspaces.svelte.js'
   import { navigate, routeState } from '../router.svelte.js'
-  import { icons } from '../icons.js'
+  import Icon from './Icon.svelte'
 
   function onActivate(tab) {
     activateTab(tab.id)
@@ -35,8 +35,6 @@
     />
   {/each}
   <button type="button" class="tabbar__new" onclick={newTab} aria-label="Open new workspace">
-    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-      <path d={icons.plus} stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-    </svg>
+    <Icon name="plus" size={15} />
   </button>
 </div>

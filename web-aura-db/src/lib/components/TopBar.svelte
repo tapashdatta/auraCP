@@ -3,7 +3,7 @@
   import { connections } from '../connections.svelte.js'
   import { toggleTree } from '../ui.svelte.js'
   import { t } from '../strings.js'
-  import RailIcon from './RailIcon.svelte'
+  import Icon from './Icon.svelte'
 
   // The connection the current route is scoped to: prefer the :id route
   // param, fall back to the tree's selection.
@@ -46,14 +46,14 @@
     onclick={toggleTree}
     aria-label="Toggle connections"
   >
-    <RailIcon name="menu" size={18} />
+    <Icon name="menu" size={18} />
   </button>
 
   <button type="button" class="topbar__navbtn" onclick={() => history.back()} aria-label="Back">
-    <RailIcon name="chevL" size={16} />
+    <Icon name="chevL" size={16} />
   </button>
   <button type="button" class="topbar__navbtn" onclick={() => history.forward()} aria-label="Forward">
-    <RailIcon name="chevR" size={16} />
+    <Icon name="chevR" size={16} />
   </button>
 
   <div class="topbar__sep"></div>

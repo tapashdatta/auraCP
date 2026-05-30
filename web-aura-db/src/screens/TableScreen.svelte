@@ -17,7 +17,7 @@
   import { buildPKKey } from '../lib/rowgrid/pkKey.js'
   import { keyToAction } from '../lib/rowgrid/keyboard.js'
   import { toastBus, dismissToast } from '../lib/rowgrid/toasts.svelte.js'
-  import { icons } from '../lib/icons.js'
+  import Icon from '../lib/components/Icon.svelte'
 
   // ux-8 (PR #16.5): ExportModal is dynamic-imported on first open so
   // it doesn't ship in the main grid chunk (saves ~3 KB gzipped on
@@ -481,9 +481,7 @@
           Export
           <!-- DC-3 (PR #16.5): shared chevron SVG instead of the
                Unicode ▾ glyph (inconsistent baseline across OS fonts). -->
-          <svg width="10" height="10" viewBox="0 0 12 12" aria-hidden="true" class="export-trigger__caret">
-            <path d={icons.chevron} fill="currentColor" />
-          </svg>
+          <span class="export-trigger__caret"><Icon name="chevR" size={12} /></span>
         </button>
         {#if exportMenuOpen}
           <ul

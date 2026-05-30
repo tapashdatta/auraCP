@@ -4,7 +4,7 @@
   import { t } from '../strings.js'
   import { signOut } from '../signout.js'
   import DropdownMenu from './DropdownMenu.svelte'
-  import RailIcon from './RailIcon.svelte'
+  import Icon from './Icon.svelte'
 
   // Same nav buckets as the former top nav, now presented as the
   // prototype's vertical icon rail. `match` lists the route names that
@@ -56,7 +56,7 @@
         aria-label={item.label}
         onclick={() => navigate(item.path)}
       >
-        <RailIcon name={item.icon} />
+        <Icon name={item.icon} size={20} />
       </button>
     {/each}
   </div>
@@ -70,7 +70,7 @@
     aria-label={themeLabel}
     onclick={toggleTheme}
   >
-    <RailIcon name={theme.value === 'dark' ? 'sun' : 'moon'} />
+    <Icon name={theme.value === 'dark' ? 'sun' : 'moon'} size={20} />
   </button>
 
   <button
